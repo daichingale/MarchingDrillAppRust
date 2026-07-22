@@ -1,0 +1,10 @@
+[package]
+name = "drill-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+drill-core = { path = "../drill-core" }
+eframe = { version = "0.35.0", default-features = false, features = ["wgpu", "wayland", "x11"] }
+rfd = "0.17.2"

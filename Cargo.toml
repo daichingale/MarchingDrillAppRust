@@ -1,0 +1,18 @@
+[workspace]
+members = ["crates/drill-core", "crates/drill-app"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
