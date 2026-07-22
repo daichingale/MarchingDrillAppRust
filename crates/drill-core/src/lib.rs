@@ -243,6 +243,8 @@ pub struct Document {
     pub grid: GridConfig,
     #[serde(default)]
     pub tempo: tempo::TempoMap,
+    #[serde(default)]
+    pub audio: Option<audio::AudioTrack>,
     pub performers: Vec<Performer>,
     pub sets: Vec<Set>,
 }
@@ -278,6 +280,7 @@ impl Document {
             title: "新しいドリル".into(),
             grid: GridConfig::default(),
             tempo: tempo::TempoMap::constant(120.0),
+            audio: None,
             performers,
             sets: vec![
                 Set {

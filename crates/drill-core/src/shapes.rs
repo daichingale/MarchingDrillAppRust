@@ -206,9 +206,21 @@ mod tests {
         // Top-left corner.
         assert_eq!(pts[0], tl);
         // Top-right corner (row 0, last col).
-        assert_eq!(pts[3], Point { x: 1.0 + 3.0 * 2.0, y: 2.0 });
+        assert_eq!(
+            pts[3],
+            Point {
+                x: 1.0 + 3.0 * 2.0,
+                y: 2.0
+            }
+        );
         // Bottom-left corner (last row, col 0).
-        assert_eq!(pts[8], Point { x: 1.0, y: 2.0 + 2.0 * 5.0 });
+        assert_eq!(
+            pts[8],
+            Point {
+                x: 1.0,
+                y: 2.0 + 2.0 * 5.0
+            }
+        );
         // Bottom-right corner.
         assert_eq!(pts[11], Point { x: 7.0, y: 12.0 });
     }
@@ -241,7 +253,13 @@ mod tests {
             assert!((r - 7.0).abs() < 1e-3, "radius {r}");
         }
         // First point is at the top (−y).
-        assert!(close(pts[0], Point { x: center.x, y: center.y - 7.0 }));
+        assert!(close(
+            pts[0],
+            Point {
+                x: center.x,
+                y: center.y - 7.0
+            }
+        ));
         // Going clockwise means the second point moves to +x (screen right).
         assert!(pts[1].x > center.x);
     }

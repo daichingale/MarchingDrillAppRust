@@ -99,9 +99,7 @@ pub fn field_svg(doc: &Document, set_index: usize, width_px: f32, height_px: f32
     let off_y = (h - field_h) / 2.0;
 
     // Field (x, depth y) -> pixel (px, py). Front sideline (y=0) at the bottom.
-    let map = |fx: f32, fy: f32| -> (f32, f32) {
-        (off_x + fx * scale, off_y + (gh - fy) * scale)
-    };
+    let map = |fx: f32, fy: f32| -> (f32, f32) { (off_x + fx * scale, off_y + (gh - fy) * scale) };
 
     let mut body = String::with_capacity(2048);
 
@@ -249,7 +247,11 @@ fn print_style() -> &'static str {
 pub fn coordinate_sheet_html(doc: &Document) -> String {
     let mut out = String::with_capacity(4096);
     out.push_str("<!DOCTYPE html><html lang=\"ja\"><head><meta charset=\"utf-8\">");
-    let _ = write!(out, "<title>{} — 座標シート</title>", html_escape(&doc.title));
+    let _ = write!(
+        out,
+        "<title>{} — 座標シート</title>",
+        html_escape(&doc.title)
+    );
     out.push_str(print_style());
     out.push_str("</head><body>");
     let _ = write!(out, "<h1>{}</h1>", html_escape(&doc.title));
@@ -284,7 +286,11 @@ pub fn coordinate_sheet_html(doc: &Document) -> String {
 pub fn drill_book_html(doc: &Document) -> String {
     let mut out = String::with_capacity(4096);
     out.push_str("<!DOCTYPE html><html lang=\"ja\"><head><meta charset=\"utf-8\">");
-    let _ = write!(out, "<title>{} — ドットブック</title>", html_escape(&doc.title));
+    let _ = write!(
+        out,
+        "<title>{} — ドットブック</title>",
+        html_escape(&doc.title)
+    );
     out.push_str(print_style());
     out.push_str("</head><body>");
     for (i, performer) in doc.performers.iter().enumerate() {

@@ -92,7 +92,10 @@ impl Camera {
         };
         let view = self.view_matrix();
         let proj = self.perspective_matrix(aspect);
-        let clip = mat4_mul_vec4(&proj, &mat4_mul_vec4(&view, &[world[0], world[1], world[2], 1.0]));
+        let clip = mat4_mul_vec4(
+            &proj,
+            &mat4_mul_vec4(&view, &[world[0], world[1], world[2], 1.0]),
+        );
 
         let w = clip[3];
         if w <= f32::EPSILON {
@@ -243,7 +246,10 @@ mod tests {
 
     #[test]
     fn field_to_world_swaps_depth_axis() {
-        assert_eq!(field_to_world(Point { x: 3.0, y: 7.0 }, 2.0), [3.0, 2.0, 7.0]);
+        assert_eq!(
+            field_to_world(Point { x: 3.0, y: 7.0 }, 2.0),
+            [3.0, 2.0, 7.0]
+        );
     }
 
     #[test]
@@ -339,7 +345,12 @@ mod tests {
         // Distinct field x -> distinct, well-separated screen x. (This preset
         // faces the field from behind, so larger field x maps to smaller
         // screen x; the mapping is finite and strictly ordered either way.)
-        assert!((a[0] - b[0]).abs() > 1.0, "not separated: {} vs {}", a[0], b[0]);
+        assert!(
+            (a[0] - b[0]).abs() > 1.0,
+            "not separated: {} vs {}",
+            a[0],
+            b[0]
+        );
         assert!(b[0] < a[0], "expected {} < {}", b[0], a[0]);
     }
 

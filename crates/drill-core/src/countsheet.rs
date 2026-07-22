@@ -58,8 +58,9 @@ pub fn count_sheet(doc: &Document, beats_per_measure: u16) -> Vec<SetTiming> {
     let mut start_count: u32 = 0;
     let mut timings = Vec::with_capacity(doc.sets.len());
     for (index, set) in doc.sets.iter().enumerate() {
-        let (start_measure, start_beat) =
-            doc.tempo.measure_beat(start_count as f32, beats_per_measure);
+        let (start_measure, start_beat) = doc
+            .tempo
+            .measure_beat(start_count as f32, beats_per_measure);
         let start_seconds = doc.tempo.seconds_at(start_count as f32);
         timings.push(SetTiming {
             index,

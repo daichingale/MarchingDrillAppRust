@@ -1,6 +1,7 @@
 use drill_core::{
     Document, GridConfig, GridLine, GridStyle, History, MoveCommand, Point, Set, Unit,
-    analyze_transition, coordinates, evenly_spaced_arc, evenly_spaced_line, pathing, shapes,
+    analyze_transition, audio::AudioTrack, camera::Camera, continuity, coordinates, countsheet,
+    editing, evenly_spaced_arc, evenly_spaced_line, pathing, shapes, svg,
 };
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 use std::collections::BTreeSet;
@@ -55,8 +56,17 @@ fn install_fonts(context: &egui::Context) {
     });
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ViewMode {
+    Field2D,
+    Stadium3D,
+}
+
 struct DrillApp {
     document: Document,
+    view_mode: ViewMode,
+    camera: Camera,
+    beats_per_measure: u16,
     current_set: usize,
     count_position: f32,
     playing: bool,
@@ -83,8 +93,12 @@ impl Default for DrillApp {
     fn default() -> Self {
         let document = Document::demo(8, 10);
         let playback_end = document.timeline_counts();
+        let camera = Camera::press_box(&document.grid);
         Self {
             frame_positions: Vec::with_capacity(document.performers.len()),
+            view_mode: ViewMode::Field2D,
+            camera,
+            beats_per_measure: 4,
             document,
             current_set: 0,
             count_position: 0.0,
@@ -262,6 +276,131 @@ impl DrillApp {
         self.status = "移動距離を最小化するよう次セットを再割り当てしました".into();
     }
 
+    /// Read-only 3D stadium visualization of the current frame. Editing stays in 2D.
+    fn draw_stadium(
+        &mut self,
+        ui: &egui::Ui,
+        response: &egui::Response,
+        painter: &egui::Painter,
+        rect: Rect,
+    ) {
+        if response.dragged() {
+            let d = response.drag_delta();
+            self.camera.yaw += d.x * 0.008;
+            self.camera.pitch = (self.camera.pitch + d.y * 0.008).clamp(0.03, 1.54);
+        }
+        if response.hovered() {
+            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+            if scroll != 0.0 {
+                self.camera.distance =
+                    (self.camera.distance * (1.0 - scroll * 0.0015)).clamp(8.0, 2000.0);
+            }
+        }
+        painter.rect_filled(rect, 4.0, Color32::from_rgb(16, 20, 28));
+        let grid = &self.document.grid;
+        let vw = rect.width();
+        let vh = rect.height();
+        let origin = rect.left_top().to_vec2();
+        let proj = |world: [f32; 3]| {
+            self.camera
+                .project(world, vw, vh)
+                .map(|[x, y]| Pos2::new(x, y) + origin)
+        };
+        let field = |p: Point| proj(drill_core::camera::field_to_world(p, 0.0));
+
+        let corners = [
+            Point { x: 0.0, y: 0.0 },
+            Point {
+                x: grid.width,
+                y: 0.0,
+            },
+            Point {
+                x: grid.width,
+                y: grid.height,
+            },
+            Point {
+                x: 0.0,
+                y: grid.height,
+            },
+        ];
+        if let Some(poly) = corners
+            .iter()
+            .map(|&c| field(c))
+            .collect::<Option<Vec<_>>>()
+        {
+            painter.add(egui::Shape::convex_polygon(
+                poly,
+                Color32::from_rgb(25, 71, 45),
+                Stroke::new(2.0, Color32::from_gray(210)),
+            ));
+        }
+        let mut unit = 0.0;
+        while unit <= grid.width + 0.001 {
+            let major = (unit / (grid.major_line_interval * 2.0)).fract().abs() < 0.001;
+            if let (Some(a), Some(b)) = (
+                field(Point { x: unit, y: 0.0 }),
+                field(Point {
+                    x: unit,
+                    y: grid.height,
+                }),
+            ) {
+                painter.line_segment(
+                    [a, b],
+                    Stroke::new(
+                        if major { 1.5 } else { 0.5 },
+                        Color32::from_white_alpha(if major { 120 } else { 45 }),
+                    ),
+                );
+            }
+            unit += grid.major_line_interval.max(0.25);
+        }
+        for hash in &grid.hashes {
+            if let (Some(a), Some(b)) = (
+                field(Point {
+                    x: 0.0,
+                    y: hash.position,
+                }),
+                field(Point {
+                    x: grid.width,
+                    y: hash.position,
+                }),
+            ) {
+                painter.line_segment(
+                    [a, b],
+                    Stroke::new(hash.weight.clamp(0.25, 4.0), Color32::from_white_alpha(110)),
+                );
+            }
+        }
+
+        let eye = self.camera.position();
+        let depth = |i: usize| {
+            let w = drill_core::camera::field_to_world(self.frame_positions[i], 0.0);
+            let (dx, dy, dz) = (w[0] - eye[0], w[1] - eye[1], w[2] - eye[2]);
+            dx * dx + dy * dy + dz * dz
+        };
+        let mut order: Vec<usize> = (0..self.frame_positions.len()).collect();
+        order.sort_by(|&a, &b| depth(b).total_cmp(&depth(a)));
+        let focal = vh / (2.0 * (self.camera.fov_y_rad * 0.5).tan());
+        for i in order {
+            let world = drill_core::camera::field_to_world(self.frame_positions[i], 0.0);
+            let Some(pos) = proj(world) else { continue };
+            let dist = depth(i).sqrt().max(0.001);
+            let radius = (0.6 * focal / dist).clamp(1.5, 22.0);
+            let color = self.document.performers[i].color;
+            painter.circle_filled(pos, radius, Color32::from_rgb(color[0], color[1], color[2]));
+            if self.selected.contains(&i) {
+                painter.circle_stroke(pos, radius + 3.0, Stroke::new(2.0, Color32::WHITE));
+            }
+        }
+        painter.text(
+            rect.left_top() + Vec2::new(12.0, 12.0),
+            egui::Align2::LEFT_TOP,
+            "3Dビュー: ドラッグで回転・ホイールでズーム（編集は2Dで）",
+            egui::FontId::proportional(12.0),
+            Color32::from_white_alpha(170),
+        );
+    }
+
     fn save_dialog(&mut self) {
         let path = self.current_path.clone().or_else(|| {
             rfd::FileDialog::new()
@@ -290,6 +429,7 @@ impl DrillApp {
             Ok(document) => {
                 self.document = document;
                 self.tempo_bpm = self.document.tempo.bpm_at(0.0);
+                self.camera = Camera::press_box(&self.document.grid);
                 self.current_path = Some(path.clone());
                 self.current_set = 0;
                 self.count_position = 0.0;
@@ -565,6 +705,20 @@ impl eframe::App for DrillApp {
             }
             ui.separator();
             ui.label(format!("演者 {}人", self.document.performers.len()));
+            ui.separator();
+            ui.selectable_value(&mut self.view_mode, ViewMode::Field2D, "2D");
+            ui.selectable_value(&mut self.view_mode, ViewMode::Stadium3D, "3D");
+            if self.view_mode == ViewMode::Stadium3D {
+                if ui.small_button("観客席").clicked() {
+                    self.camera = Camera::audience_view(&self.document.grid);
+                }
+                if ui.small_button("プレス").clicked() {
+                    self.camera = Camera::press_box(&self.document.grid);
+                }
+                if ui.small_button("真上").clicked() {
+                    self.camera = Camera::overhead(&self.document.grid);
+                }
+            }
         });
         if self.show_guidance {
             egui::Frame::new()
@@ -713,6 +867,13 @@ impl eframe::App for DrillApp {
                                 .strong(),
                             );
                             ui.small(coordinates::readable(pos, &self.document.grid));
+                            let segments =
+                                continuity::performer_continuity(&self.document, first);
+                            if let Some(seg) =
+                                segments.iter().find(|s| s.from_set == self.current_set)
+                            {
+                                ui.small(format!("→ 次: {}", seg.description));
+                            }
                         }
                         if let Some((min, max)) = self.selection_bounds() {
                             ui.label(egui::RichText::new("フォーメーション").strong());
@@ -805,6 +966,28 @@ impl eframe::App for DrillApp {
                                 }
                                 if ui.small_button("－ 10%").clicked() {
                                     self.transform_selection(0.9, 0.0);
+                                }
+                            });
+                            ui.label(egui::RichText::new("整列・分配・反転").strong());
+                            ui.horizontal_wrapped(|ui| {
+                                let pts = self.selected_points();
+                                if ui.small_button("横整列").clicked() {
+                                    self.commit_layout(editing::align_horizontal(&pts));
+                                }
+                                if ui.small_button("縦整列").clicked() {
+                                    self.commit_layout(editing::align_vertical(&pts));
+                                }
+                                if ui.small_button("横等間隔").clicked() {
+                                    self.commit_layout(editing::distribute_horizontal(&pts));
+                                }
+                                if ui.small_button("縦等間隔").clicked() {
+                                    self.commit_layout(editing::distribute_vertical(&pts));
+                                }
+                                if ui.small_button("左右反転").clicked() {
+                                    self.commit_layout(editing::flip_horizontal(&pts));
+                                }
+                                if ui.small_button("前後反転").clicked() {
+                                    self.commit_layout(editing::flip_vertical(&pts));
                                 }
                             });
                         }
@@ -1019,6 +1202,107 @@ impl eframe::App for DrillApp {
                                 format!("{}_dotbook.txt", self.document.performers[index].label);
                             self.export_text(&name, "テキスト", "txt", sheet);
                         }
+                        ui.separator();
+                        ui.small("印刷用（ブラウザでPDF化できます）");
+                        if ui.button("現在セットのフィールド図 (SVG)").clicked() {
+                            let svg = svg::set_svg(&self.document, self.current_set);
+                            let name = format!("set{}.svg", self.current_set + 1);
+                            self.export_text(&name, "SVG", "svg", svg);
+                        }
+                        if ui.button("座標シート (HTML)").clicked() {
+                            let html = svg::coordinate_sheet_html(&self.document);
+                            self.export_text("coordinate_sheet.html", "HTML", "html", html);
+                        }
+                        if ui.button("ドリルブック全員 (HTML)").clicked() {
+                            let html = svg::drill_book_html(&self.document);
+                            self.export_text("drill_book.html", "HTML", "html", html);
+                        }
+                        if ui.button("カウントシート (TXT)").clicked() {
+                            let text = countsheet::count_sheet_text(
+                                &self.document,
+                                self.beats_per_measure,
+                            );
+                            self.export_text("count_sheet.txt", "テキスト", "txt", text);
+                        }
+                        let first = self.selected.iter().next().copied();
+                        if ui
+                            .add_enabled(
+                                first.is_some(),
+                                egui::Button::new("選択演者のコンティニュイティ (TXT)"),
+                            )
+                            .clicked()
+                            && let Some(index) = first
+                        {
+                            let text = continuity::continuity_text(&self.document, index);
+                            let name = format!(
+                                "{}_continuity.txt",
+                                self.document.performers[index].label
+                            );
+                            self.export_text(&name, "テキスト", "txt", text);
+                        }
+                    });
+                    ui.separator();
+                    ui.collapsing("8. 音源 / カウント", |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("拍子(分子)");
+                            ui.add(
+                                egui::DragValue::new(&mut self.beats_per_measure).range(1..=16),
+                            );
+                        });
+                        if self.document.audio.is_some() {
+                            let track = self.document.audio.as_mut().unwrap();
+                            ui.small(format!("♪ {}", track.path));
+                            let mut changed = false;
+                            ui.horizontal(|ui| {
+                                ui.label("開始オフセット");
+                                changed |= ui
+                                    .add(
+                                        egui::DragValue::new(&mut track.offset_seconds)
+                                            .speed(0.05)
+                                            .suffix(" s"),
+                                    )
+                                    .changed();
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("長さ");
+                                changed |= ui
+                                    .add(
+                                        egui::DragValue::new(&mut track.duration_seconds)
+                                            .range(0.0..=100_000.0)
+                                            .suffix(" s"),
+                                    )
+                                    .changed();
+                            });
+                            if changed {
+                                self.dirty = true;
+                            }
+                            if ui.button("音源を外す").clicked() {
+                                self.document.audio = None;
+                                self.dirty = true;
+                            }
+                        } else if ui.button("参照音源を選択").clicked()
+                            && let Some(path) = rfd::FileDialog::new()
+                                .add_filter("音声", &["wav", "mp3", "ogg", "flac"])
+                                .pick_file()
+                        {
+                            self.document.audio = Some(AudioTrack {
+                                path: path.display().to_string(),
+                                duration_seconds: 0.0,
+                                offset_seconds: 0.0,
+                            });
+                            self.dirty = true;
+                        }
+                        if let Some(track) = &self.document.audio {
+                            let global = self
+                                .document
+                                .global_count(self.current_set, self.count_position);
+                            let time = drill_core::audio::count_to_audio_time(
+                                track,
+                                &self.document.tempo,
+                                global,
+                            );
+                            ui.small(format!("音源位置: {time:.2} 秒"));
+                        }
                     });
                     ui.separator();
                     ui.small(&self.status);
@@ -1028,6 +1312,9 @@ impl eframe::App for DrillApp {
             let available = ui.available_size();
             let (response, painter) = ui.allocate_painter(available, Sense::click_and_drag());
             let rect = response.rect.shrink(18.0);
+            if self.view_mode == ViewMode::Stadium3D {
+                self.draw_stadium(ui, &response, &painter, rect);
+            } else {
             draw_field(&painter, rect, &self.document.grid);
             if self.selected.is_empty() {
                 let card = Rect::from_min_size(
@@ -1199,6 +1486,7 @@ impl eframe::App for DrillApp {
                         }
                     }
                 }
+            }
             }
         });
     }

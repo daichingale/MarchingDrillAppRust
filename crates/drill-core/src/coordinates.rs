@@ -61,7 +61,11 @@ pub fn side_to_side(point: Point, grid: &GridConfig) -> String {
     let d_line = (yard_line - center).abs();
     let steps = round_quarter((d_point - d_line) / step);
 
-    let side = if point.x < center { "サイド1" } else { "サイド2" };
+    let side = if point.x < center {
+        "サイド1"
+    } else {
+        "サイド2"
+    };
     let on_fifty = (yard_line - center).abs() < 1e-4;
 
     if steps.abs() < 1e-4 {
@@ -153,8 +157,7 @@ pub fn performer_sheet(doc: &Document, performer_index: usize) -> String {
 /// CSV of every coordinate: header plus one row per (performer, set).
 /// Columns: `performer,label,set,counts,x,y,side_to_side,front_to_back`.
 pub fn coordinates_csv(doc: &Document) -> String {
-    let mut out =
-        String::from("performer,label,set,counts,x,y,side_to_side,front_to_back");
+    let mut out = String::from("performer,label,set,counts,x,y,side_to_side,front_to_back");
     for (i, performer) in doc.performers.iter().enumerate() {
         for set in &doc.sets {
             let p = set.positions.get(i).copied().unwrap_or_default();
@@ -270,7 +273,13 @@ mod tests {
     fn quarter_step_rounding() {
         // 0.15625 yd past the 45 = 0.25 step exactly.
         assert_eq!(
-            side_to_side(Point { x: 45.15625, y: 25.0 }, &grid()),
+            side_to_side(
+                Point {
+                    x: 45.15625,
+                    y: 25.0
+                },
+                &grid()
+            ),
             "サイド1 45ヤードラインの内側に0.25歩"
         );
     }
