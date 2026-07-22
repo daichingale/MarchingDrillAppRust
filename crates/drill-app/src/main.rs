@@ -1,6 +1,6 @@
 use drill_core::{
     Document, GridConfig, GridLine, GridStyle, History, MoveCommand, Point, Set, Unit,
-    analyze_transition, evenly_spaced_arc, evenly_spaced_line,
+    analyze_transition, coordinates, evenly_spaced_arc, evenly_spaced_line, pathing, shapes,
 };
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 use std::collections::BTreeSet;
@@ -220,6 +220,48 @@ impl DrillApp {
         Ok(())
     }
 
+    fn export_text(&mut self, default_name: &str, filter_name: &str, ext: &str, contents: String) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter(filter_name, &[ext])
+            .set_file_name(default_name)
+            .save_file()
+        {
+            match std::fs::write(&path, contents) {
+                Ok(()) => self.status = format!("書き出しました: {}", path.display()),
+                Err(error) => self.status = format!("書き出しエラー: {error}"),
+            }
+        }
+    }
+
+    /// Reassign the next set's dots to the current performers so total travel is
+    /// minimized, keeping the target formation shape but reducing crossings.
+    fn auto_assign_next(&mut self) {
+        let next_index = self.current_set + 1;
+        let Some(next) = self.document.sets.get(next_index) else {
+            self.status = "次のセットがありません".into();
+            return;
+        };
+        let from = &self.document.sets[self.current_set].positions;
+        let before = next.positions.clone();
+        let assignment = pathing::optimal_assignment(from, &before);
+        let after = assignment.iter().map(|&j| before[j]).collect::<Vec<_>>();
+        if after == before {
+            self.status = "割り当ては既に最適です".into();
+            return;
+        }
+        let indices = (0..before.len()).collect::<Vec<_>>();
+        let command = MoveCommand {
+            set_index: next_index,
+            performer_indices: indices,
+            before,
+            after,
+        };
+        command.apply(&mut self.document, true);
+        self.history.push(command);
+        self.dirty = true;
+        self.status = "移動距離を最小化するよう次セットを再割り当てしました".into();
+    }
+
     fn save_dialog(&mut self) {
         let path = self.current_path.clone().or_else(|| {
             rfd::FileDialog::new()
@@ -247,6 +289,7 @@ impl DrillApp {
         match result {
             Ok(document) => {
                 self.document = document;
+                self.tempo_bpm = self.document.tempo.bpm_at(0.0);
                 self.current_path = Some(path.clone());
                 self.current_set = 0;
                 self.count_position = 0.0;
@@ -294,7 +337,8 @@ impl eframe::App for DrillApp {
             let global = self
                 .document
                 .global_count(self.current_set, self.count_position);
-            let next = global + dt * (self.tempo_bpm / 60.0) * self.speed;
+            let bpm = self.document.tempo.bpm_at(global);
+            let next = global + dt * (bpm / 60.0) * self.speed;
             if next >= self.playback_end as f32 {
                 if self.loop_playback {
                     self.seek_global(self.playback_start as f32);
@@ -507,11 +551,18 @@ impl eframe::App for DrillApp {
                 self.dirty = true;
             }
             ui.add(egui::Slider::new(&mut self.speed, 0.25..=4.0).text("速度"));
-            ui.add(
-                egui::DragValue::new(&mut self.tempo_bpm)
-                    .range(20.0..=300.0)
-                    .suffix(" BPM"),
-            );
+            if ui
+                .add(
+                    egui::DragValue::new(&mut self.tempo_bpm)
+                        .range(20.0..=300.0)
+                        .suffix(" BPM"),
+                )
+                .on_hover_text("基準テンポ（Count 0）。テンポマップで途中変化も設定できます")
+                .changed()
+            {
+                self.document.tempo.set(0.0, self.tempo_bpm);
+                self.dirty = true;
+            }
             ui.separator();
             ui.label(format!("演者 {}人", self.document.performers.len()));
         });
@@ -652,6 +703,17 @@ impl eframe::App for DrillApp {
                     if !self.selected.is_empty() {
                         ui.separator();
                         ui.heading(format!("3. 選択中: {}人", self.selected.len()));
+                        if let Some(&first) = self.selected.iter().next() {
+                            let pos = self.document.sets[self.current_set].positions[first];
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{} の座標",
+                                    self.document.performers[first].label
+                                ))
+                                .strong(),
+                            );
+                            ui.small(coordinates::readable(pos, &self.document.grid));
+                        }
                         if let Some((min, max)) = self.selection_bounds() {
                             ui.label(egui::RichText::new("フォーメーション").strong());
                             ui.horizontal_wrapped(|ui| {
@@ -690,6 +752,42 @@ impl eframe::App for DrillApp {
                                         radius,
                                         std::f32::consts::PI,
                                         std::f32::consts::TAU,
+                                        self.selected.len(),
+                                    ));
+                                }
+                                if ui.small_button("円").clicked() {
+                                    let center = Point {
+                                        x: (min.x + max.x) * 0.5,
+                                        y: (min.y + max.y) * 0.5,
+                                    };
+                                    let radius =
+                                        ((max.x - min.x) * 0.5).max((max.y - min.y) * 0.5).max(2.5);
+                                    self.commit_layout(shapes::circle(
+                                        center,
+                                        radius,
+                                        self.selected.len(),
+                                    ));
+                                }
+                                if ui.small_button("ブロック").clicked() {
+                                    let n = self.selected.len();
+                                    let cols = (n as f32).sqrt().ceil() as usize;
+                                    let rows = n.div_ceil(cols.max(1));
+                                    let mut pts = shapes::block_fit(min, max, cols, rows);
+                                    pts.truncate(n);
+                                    self.commit_layout(pts);
+                                }
+                                if ui.small_button("螺旋").clicked() {
+                                    let center = Point {
+                                        x: (min.x + max.x) * 0.5,
+                                        y: (min.y + max.y) * 0.5,
+                                    };
+                                    let radius =
+                                        ((max.x - min.x) * 0.5).max((max.y - min.y) * 0.5).max(3.0);
+                                    self.commit_layout(shapes::spiral(
+                                        center,
+                                        radius * 0.15,
+                                        radius,
+                                        2.0,
                                         self.selected.len(),
                                     ));
                                 }
@@ -733,6 +831,15 @@ impl eframe::App for DrillApp {
                         stride_color,
                         format!("● 過大歩幅: {}人", analysis.excessive_strides),
                     );
+                    let stats = pathing::transition_stats(&self.document, self.current_set);
+                    let unit_label = match self.document.grid.unit {
+                        Unit::Yards => "yd",
+                        Unit::Meters => "m",
+                    };
+                    ui.small(format!(
+                        "最大歩幅 {:.2}/count ・ 総移動 {:.0}{}",
+                        stats.max_step, stats.total_distance, unit_label
+                    ));
                     ui.separator();
                     ui.collapsing("5. グリッドデザイナー", |ui| {
                         let grid_before = self.document.grid.clone();
@@ -823,6 +930,94 @@ impl eframe::App for DrillApp {
                         }
                         if self.document.grid != grid_before {
                             self.dirty = true;
+                        }
+                    });
+                    ui.separator();
+                    ui.collapsing("6. テンポマップ", |ui| {
+                        ui.small("カウント位置ごとにBPMを変化させられます");
+                        let total = self.document.timeline_counts() as f32;
+                        let events = self.document.tempo.events().to_vec();
+                        let mut edit: Option<(f32, f32, f32)> = None;
+                        let mut remove: Option<f32> = None;
+                        let removable = events.len() > 1;
+                        for ev in &events {
+                            ui.horizontal(|ui| {
+                                let mut count = ev.count;
+                                let mut bpm = ev.bpm;
+                                ui.label("Count");
+                                let c = ui.add(
+                                    egui::DragValue::new(&mut count).range(0.0..=total.max(0.0)),
+                                );
+                                let b = ui.add(
+                                    egui::DragValue::new(&mut bpm)
+                                        .range(20.0..=300.0)
+                                        .suffix(" BPM"),
+                                );
+                                if c.changed() || b.changed() {
+                                    edit = Some((ev.count, count, bpm));
+                                }
+                                if removable && ui.small_button("×").clicked() {
+                                    remove = Some(ev.count);
+                                }
+                            });
+                        }
+                        if let Some((old_count, new_count, new_bpm)) = edit {
+                            if (new_count - old_count).abs() > f32::EPSILON {
+                                self.document.tempo.remove(old_count);
+                            }
+                            self.document.tempo.set(new_count, new_bpm);
+                            self.tempo_bpm = self.document.tempo.bpm_at(0.0);
+                            self.dirty = true;
+                        }
+                        if let Some(count) = remove {
+                            self.document.tempo.remove(count);
+                            self.tempo_bpm = self.document.tempo.bpm_at(0.0);
+                            self.dirty = true;
+                        }
+                        if ui.button("＋ 現在位置にテンポ変化を追加").clicked() {
+                            let global = self
+                                .document
+                                .global_count(self.current_set, self.count_position)
+                                .round();
+                            self.document.tempo.set(global, self.tempo_bpm);
+                            self.dirty = true;
+                        }
+                        let global = self
+                            .document
+                            .global_count(self.current_set, self.count_position);
+                        ui.small(format!(
+                            "現在位置 {:.2} 秒 ・ 曲全体 {:.1} 秒",
+                            self.document.tempo.seconds_at(global),
+                            self.document.tempo.seconds_at(total)
+                        ));
+                    });
+                    ui.separator();
+                    ui.collapsing("7. 書き出し / 最適化", |ui| {
+                        ui.small("ドリルブックやコーチ用データを出力します");
+                        if ui
+                            .button("↺ 次セットを自動割り当て（移動最小化）")
+                            .on_hover_text("演者の担当ドットを入れ替え、隊形はそのままに総移動距離を最小化します")
+                            .clicked()
+                        {
+                            self.auto_assign_next();
+                        }
+                        if ui.button("座標CSVを書き出し").clicked() {
+                            let csv = coordinates::coordinates_csv(&self.document);
+                            self.export_text("drill_coordinates.csv", "CSV", "csv", csv);
+                        }
+                        let first = self.selected.iter().next().copied();
+                        if ui
+                            .add_enabled(
+                                first.is_some(),
+                                egui::Button::new("選択演者のドリルシート"),
+                            )
+                            .clicked()
+                            && let Some(index) = first
+                        {
+                            let sheet = coordinates::performer_sheet(&self.document, index);
+                            let name =
+                                format!("{}_dotbook.txt", self.document.performers[index].label);
+                            self.export_text(&name, "テキスト", "txt", sheet);
                         }
                     });
                     ui.separator();

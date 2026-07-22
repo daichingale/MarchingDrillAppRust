@@ -235,6 +235,8 @@ pub struct Document {
     pub title: String,
     #[serde(default)]
     pub grid: GridConfig,
+    #[serde(default)]
+    pub tempo: tempo::TempoMap,
     pub performers: Vec<Performer>,
     pub sets: Vec<Set>,
 }
@@ -269,6 +271,7 @@ impl Document {
             schema_version: 1,
             title: "新しいドリル".into(),
             grid: GridConfig::default(),
+            tempo: tempo::TempoMap::constant(120.0),
             performers,
             sets: vec![
                 Set {
