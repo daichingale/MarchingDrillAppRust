@@ -3,9 +3,15 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+pub mod audio;
+pub mod camera;
+pub mod continuity;
 pub mod coordinates;
+pub mod countsheet;
+pub mod editing;
 pub mod pathing;
 pub mod shapes;
+pub mod svg;
 pub mod tempo;
 
 pub type PerformerId = u32;
