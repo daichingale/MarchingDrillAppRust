@@ -1,3 +1,7 @@
+use drill_core::playback::{AdvanceResult, PlaybackRange, advance as advance_playback};
+use drill_core::video::{
+    EncoderBackend, ExportPreset, RateControl, VideoCodec, VideoContainer, VideoExportConfig,
+};
 use drill_core::{
     Document, GridConfig, GridLine, GridStyle, History, MoveCommand, Point, Set, Unit,
     analyze_transition, audio::AudioTrack, camera::Camera, continuity, coordinates, countsheet,
@@ -87,6 +91,10 @@ struct DrillApp {
     status: String,
     last_autosave: Instant,
     show_guidance: bool,
+    video_export: VideoExportConfig,
+    video_preset: ExportPreset,
+    video_advanced: bool,
+    ffmpeg_status: String,
 }
 
 impl Default for DrillApp {
@@ -119,6 +127,10 @@ impl Default for DrillApp {
             status: "準備完了".into(),
             last_autosave: Instant::now(),
             show_guidance: true,
+            video_export: VideoExportConfig::default(),
+            video_preset: ExportPreset::Standard,
+            video_advanced: false,
+            ffmpeg_status: "FFmpeg未検出".into(),
         }
     }
 }
@@ -477,17 +489,21 @@ impl eframe::App for DrillApp {
             let global = self
                 .document
                 .global_count(self.current_set, self.count_position);
-            let bpm = self.document.tempo.bpm_at(global);
-            let next = global + dt * (bpm / 60.0) * self.speed;
-            if next >= self.playback_end as f32 {
-                if self.loop_playback {
-                    self.seek_global(self.playback_start as f32);
-                } else {
-                    self.seek_global(self.playback_end as f32);
-                    self.playing = false;
-                }
-            } else {
-                self.seek_global(next);
+            let result = advance_playback(
+                global,
+                dt,
+                self.speed,
+                PlaybackRange::new(
+                    self.playback_start as f32,
+                    self.playback_end as f32,
+                    self.document.timeline_counts() as f32,
+                ),
+                self.loop_playback,
+                &self.document.tempo,
+            );
+            self.seek_global(result.count());
+            if matches!(result, AdvanceResult::Stopped(_)) {
+                self.playing = false;
             }
             ui.ctx().request_repaint_after(Duration::from_millis(16));
         }
@@ -1177,6 +1193,88 @@ impl eframe::App for DrillApp {
                     ui.separator();
                     ui.collapsing("7. 書き出し / 最適化", |ui| {
                         ui.small("ドリルブックやコーチ用データを出力します");
+                        ui.collapsing("動画エンコード", |ui| {
+                            ui.label(egui::RichText::new("簡単設定").strong());
+                            ui.horizontal_wrapped(|ui| {
+                                for (preset, label) in [
+                                    (ExportPreset::Fast, "高速720p"),
+                                    (ExportPreset::Standard, "標準1080p60"),
+                                    (ExportPreset::HighQuality, "高画質"),
+                                    (ExportPreset::Youtube4k, "YouTube 4K"),
+                                ] {
+                                    if ui.selectable_value(&mut self.video_preset, preset, label).clicked() {
+                                        self.video_export = VideoExportConfig::preset(preset);
+                                    }
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.add(egui::DragValue::new(&mut self.video_export.width).range(320..=7680).suffix(" W"));
+                                ui.add(egui::DragValue::new(&mut self.video_export.height).range(240..=4320).suffix(" H"));
+                                ui.add(egui::DragValue::new(&mut self.video_export.fps).range(1..=240).suffix(" fps"));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("品質");
+                                ui.add(egui::Slider::new(&mut self.video_export.quality, 0..=35));
+                                ui.checkbox(&mut self.video_export.audio_enabled, "音声を含める");
+                            });
+                            ui.checkbox(&mut self.video_advanced, "詳細設定を表示");
+                            if self.video_advanced {
+                                egui::ComboBox::from_label("コンテナ")
+                                    .selected_text(format!("{:?}", self.video_export.container))
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(&mut self.video_export.container, VideoContainer::Mp4, "MP4");
+                                        ui.selectable_value(&mut self.video_export.container, VideoContainer::Mov, "MOV");
+                                        ui.selectable_value(&mut self.video_export.container, VideoContainer::WebM, "WebM");
+                                    });
+                                egui::ComboBox::from_label("映像コーデック")
+                                    .selected_text(format!("{:?}", self.video_export.codec))
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(&mut self.video_export.codec, VideoCodec::H264, "H.264");
+                                        ui.selectable_value(&mut self.video_export.codec, VideoCodec::H265, "H.265");
+                                        ui.selectable_value(&mut self.video_export.codec, VideoCodec::Av1, "AV1");
+                                        ui.selectable_value(&mut self.video_export.codec, VideoCodec::Vp9, "VP9");
+                                    });
+                                egui::ComboBox::from_label("エンコーダー")
+                                    .selected_text(format!("{:?}", self.video_export.backend))
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(&mut self.video_export.backend, EncoderBackend::Auto, "自動");
+                                        ui.selectable_value(&mut self.video_export.backend, EncoderBackend::Software, "CPU");
+                                        ui.selectable_value(&mut self.video_export.backend, EncoderBackend::Nvidia, "NVIDIA");
+                                        ui.selectable_value(&mut self.video_export.backend, EncoderBackend::Intel, "Intel");
+                                        ui.selectable_value(&mut self.video_export.backend, EncoderBackend::Amd, "AMD");
+                                    });
+                                ui.horizontal(|ui| {
+                                    ui.selectable_value(&mut self.video_export.rate_control, RateControl::ConstantQuality, "固定品質");
+                                    ui.selectable_value(&mut self.video_export.rate_control, RateControl::Bitrate, "ビットレート");
+                                });
+                                if self.video_export.rate_control == RateControl::Bitrate {
+                                    ui.add(egui::DragValue::new(&mut self.video_export.bitrate_kbps).range(500..=200_000).suffix(" kbps"));
+                                }
+                                ui.add(egui::DragValue::new(&mut self.video_export.audio_bitrate_kbps).range(64..=512).suffix(" kbps audio"));
+                                ui.checkbox(&mut self.video_export.faststart, "Web再生を高速化 (faststart)");
+                            }
+                            let duration = self.document.tempo.seconds_at(self.playback_end as f32)
+                                - self.document.tempo.seconds_at(self.playback_start as f32);
+                            ui.small(format!(
+                                "{}フレーム・推定 {:.1} MB",
+                                self.video_export.frame_count(duration),
+                                self.video_export.estimated_megabytes(duration)
+                            ));
+                            match self.video_export.validate() {
+                                Ok(()) => { ui.colored_label(Color32::from_rgb(99, 210, 151), "設定は有効です"); }
+                                Err(error) => { ui.colored_label(Color32::from_rgb(255, 92, 92), error); }
+                            }
+                            if ui.button("FFmpegを検出").clicked() {
+                                self.ffmpeg_status = match std::process::Command::new("ffmpeg").arg("-version").output() {
+                                    Ok(output) if output.status.success() => "FFmpeg利用可能".into(),
+                                    Ok(output) => format!("FFmpegエラー: {}", output.status),
+                                    Err(_) => "FFmpegが見つかりません。製品版では同梱します".into(),
+                                };
+                            }
+                            ui.small(&self.ffmpeg_status);
+                            ui.add_enabled(false, egui::Button::new("動画を書き出す（オフラインレンダラー接続後）"));
+                        });
+                        ui.separator();
                         if ui
                             .button("↺ 次セットを自動割り当て（移動最小化）")
                             .on_hover_text("演者の担当ドットを入れ替え、隊形はそのままに総移動距離を最小化します")
@@ -1273,6 +1371,24 @@ impl eframe::App for DrillApp {
                                     )
                                     .changed();
                             });
+                            ui.horizontal(|ui| {
+                                ui.label("音量");
+                                changed |= ui.add(egui::Slider::new(&mut track.gain_db, -48.0..=12.0).suffix(" dB")).changed();
+                                changed |= ui.checkbox(&mut track.muted, "ミュート").changed();
+                            });
+                            ui.label("非破壊トリム / フェード");
+                            ui.horizontal(|ui| {
+                                changed |= ui.add(egui::DragValue::new(&mut track.trim_start_seconds).range(0.0..=track.duration_seconds).suffix(" in")).changed();
+                                changed |= ui.add(egui::DragValue::new(&mut track.trim_end_seconds).range(0.0..=track.duration_seconds).suffix(" out")).changed();
+                            });
+                            ui.horizontal(|ui| {
+                                changed |= ui.add(egui::DragValue::new(&mut track.fade_in_seconds).range(0.0..=30.0).suffix(" fade-in")).changed();
+                                changed |= ui.add(egui::DragValue::new(&mut track.fade_out_seconds).range(0.0..=30.0).suffix(" fade-out")).changed();
+                            });
+                            match track.validate() {
+                                Ok(()) => { ui.small(format!("使用範囲 {:.2} 秒・ゲイン ×{:.2}", track.effective_duration(), track.gain_linear())); }
+                                Err(error) => { ui.colored_label(Color32::from_rgb(255, 92, 92), error); }
+                            }
                             if changed {
                                 self.dirty = true;
                             }
@@ -1289,6 +1405,12 @@ impl eframe::App for DrillApp {
                                 path: path.display().to_string(),
                                 duration_seconds: 0.0,
                                 offset_seconds: 0.0,
+                                gain_db: 0.0,
+                                muted: false,
+                                trim_start_seconds: 0.0,
+                                trim_end_seconds: 0.0,
+                                fade_in_seconds: 0.0,
+                                fade_out_seconds: 0.0,
                             });
                             self.dirty = true;
                         }

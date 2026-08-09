@@ -10,9 +10,11 @@ pub mod coordinates;
 pub mod countsheet;
 pub mod editing;
 pub mod pathing;
+pub mod playback;
 pub mod shapes;
 pub mod svg;
 pub mod tempo;
+pub mod video;
 
 pub type PerformerId = u32;
 
@@ -298,6 +300,12 @@ impl Document {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        if self.schema_version != 1 {
+            return Err(format!(
+                "未対応のファイルバージョンです: {}",
+                self.schema_version
+            ));
+        }
         if self.sets.is_empty() {
             return Err("セットがありません".into());
         }
@@ -490,6 +498,23 @@ mod tests {
         let loaded = Document::from_json(&doc.to_json().unwrap()).unwrap();
         assert_eq!(loaded.performers.len(), 16);
         assert!(loaded.validate().is_ok());
+    }
+
+    #[test]
+    fn malformed_and_future_documents_are_rejected() {
+        assert!(Document::from_json("{not json").is_err());
+        let mut document = Document::demo(2, 2);
+        document.schema_version = u16::MAX;
+        let error = Document::from_json(&document.to_json().unwrap()).unwrap_err();
+        assert!(error.contains("未対応"));
+    }
+
+    #[test]
+    fn mismatched_set_size_is_rejected() {
+        let mut document = Document::demo(2, 2);
+        document.sets[1].positions.pop();
+        let error = Document::from_json(&document.to_json().unwrap()).unwrap_err();
+        assert!(error.contains("演者数"));
     }
 
     #[test]

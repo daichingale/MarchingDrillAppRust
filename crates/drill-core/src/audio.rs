@@ -29,6 +29,54 @@ pub struct AudioTrack {
     /// Playback position (seconds into the file) aligned to global count 0.
     /// Positive = show starts inside the file; negative = count 0 precedes it.
     pub offset_seconds: f32,
+    #[serde(default)]
+    pub gain_db: f32,
+    #[serde(default)]
+    pub muted: bool,
+    #[serde(default)]
+    pub trim_start_seconds: f32,
+    /// Zero means the physical end of the source file.
+    #[serde(default)]
+    pub trim_end_seconds: f32,
+    #[serde(default)]
+    pub fade_in_seconds: f32,
+    #[serde(default)]
+    pub fade_out_seconds: f32,
+}
+
+impl AudioTrack {
+    pub fn gain_linear(&self) -> f32 {
+        if self.muted {
+            0.0
+        } else {
+            10.0_f32.powf(self.gain_db.clamp(-96.0, 24.0) / 20.0)
+        }
+    }
+
+    pub fn effective_duration(&self) -> f32 {
+        let end = if self.trim_end_seconds > 0.0 {
+            self.trim_end_seconds.min(self.duration_seconds)
+        } else {
+            self.duration_seconds
+        };
+        (end - self.trim_start_seconds.max(0.0)).max(0.0)
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.duration_seconds < 0.0 || !self.duration_seconds.is_finite() {
+            return Err("音源の長さが不正です".into());
+        }
+        if self.trim_start_seconds < 0.0 || self.trim_start_seconds > self.duration_seconds {
+            return Err("トリム開始位置が音源範囲外です".into());
+        }
+        if self.trim_end_seconds > 0.0 && self.trim_end_seconds < self.trim_start_seconds {
+            return Err("トリム終了位置が開始位置より前です".into());
+        }
+        if !(self.fade_in_seconds >= 0.0 && self.fade_out_seconds >= 0.0) {
+            return Err("フェード時間は0以上にしてください".into());
+        }
+        Ok(())
+    }
 }
 
 /// Playback position (seconds into the file) for a given global count.
@@ -102,6 +150,12 @@ mod tests {
             path: "ref.wav".into(),
             duration_seconds: duration,
             offset_seconds: offset,
+            gain_db: 0.0,
+            muted: false,
+            trim_start_seconds: 0.0,
+            trim_end_seconds: 0.0,
+            fade_in_seconds: 0.0,
+            fade_out_seconds: 0.0,
         }
     }
 
@@ -184,5 +238,18 @@ mod tests {
         assert!(approx(back.offset_seconds, 1.5));
         assert!(approx(back.duration_seconds, 42.0));
         assert_eq!(back.path, "ref.wav");
+    }
+
+    #[test]
+    fn non_destructive_adjustments_are_validated() {
+        let mut track = make_track(0.0, 10.0);
+        track.trim_start_seconds = 2.0;
+        track.trim_end_seconds = 8.0;
+        track.gain_db = -6.0;
+        assert!(track.validate().is_ok());
+        assert!((track.effective_duration() - 6.0).abs() < 1e-3);
+        assert!((track.gain_linear() - 0.501).abs() < 0.01);
+        track.muted = true;
+        assert_eq!(track.gain_linear(), 0.0);
     }
 }
