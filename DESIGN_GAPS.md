@@ -1,7 +1,17 @@
 # DrillForge 不足機能の設計
 
+> [!IMPORTANT]
+> **2026-08-10 再監査:** 本文は設計開始時のスナップショットであり、記載された
+> 行番号・行数・テスト数・「現状」は現在値ではない。解消済みの欠陥を未修正と誤読しないこと。
+> 現行実装との照合結果と、今も残る内部／外部ゲートは
+> [`docs/IMPLEMENTATION_EVIDENCE.md`](docs/IMPLEMENTATION_EVIDENCE.md) を正とする。
+> 本文は欠陥の由来と設計判断を残す履歴資料として保持している。
+
 `ARCHITECTURE.md` / `PRODUCT_QUALITY.md` / `MEDIA_PIPELINE.md` が「何を目指すか」を定義しているのに対し、
 この文書は **現在のコードに実際に欠けているもの** と、それを埋めるための具体的な型・境界・実装順を定義する。
+
+> **本書は「何が欠けているか」の一覧である。** 各領域の具体的な設計は `docs/design/` の22本に展開済み。
+> クレート構成・文書間の裁定・実装順は [docs/design/90-integration-roadmap.md](docs/design/90-integration-roadmap.md) を正とする。
 
 現状: `drill-core` 12モジュール約3,700行 + `drill-app` 1,837行、テスト124件パス。
 2Dの編集・補間・保存・解析・書き出しモデルは揃っている。欠けているのは大きく3種類。
@@ -23,8 +33,35 @@
 | 3 | [main.rs:1011](crates/drill-app/src/main.rs:1011) | `analyze_transition` は O(n²)。毎フレーム無条件呼び出し。1,000人で約50万回/フレーム、16.6ms予算を確実に超える。 |
 | 4 | [main.rs:1033](crates/drill-app/src/main.rs:1033) | `transition_stats` → `transition_moves` が毎フレーム `Vec` を確保。「フレーム内ヒープ確保ゼロ」に違反。 |
 | 5 | [lib.rs:434](crates/drill-core/src/lib.rs:434) | `History::push` の `Vec::remove(0)` が O(n)。`VecDeque` にする。 |
+| 6 | [svg.rs:103](crates/drill-core/src/svg.rs:103) vs [main.rs:1471](crates/drill-app/src/main.rs:1471) | **画面とSVG書き出しでフィールドが上下反転している。** SVGは `off_y + (gh - fy) * scale` でy反転（フロントサイドライン=下）、画面は `rect.top() + y / height * h` で反転なし（y=0が上）。同じドリルが別物として出力される。 |
+| 7 | [svg.rs:96](crates/drill-core/src/svg.rs:96) vs [main.rs:1470](crates/drill-app/src/main.rs:1470) | SVGは `scale = min(w/gw, h/gh)` でアスペクト比を保持、画面はrectへx/y独立に引き伸ばし。図の比率が一致しない。 |
+| 8 | [shapes.rs:135](crates/drill-core/src/shapes.rs:135) | `bezier` が `t = i/(count-1)` のパラメータ等分で、**弧長等分になっていない**。曲線上の演者間隔が不均等になる。同ファイルの `polyline` は弧長等分で実装されており、図形の種類によって挙動が食い違う。`spiral` も同様。 |
+
+| 9 | [main.rs:242](crates/drill-app/src/main.rs:242) | **保存が原子的でない。** `std::fs::write` は既存ファイルを切り詰めてから書くため、書き込み中のクラッシュ・電源断・ディスク満杯で**利用者のドリルが破壊される**。temp へ書いて `ReplaceFileW` で置換する必要がある（[41-persistence-recovery.md](docs/design/41-persistence-recovery.md)）。 |
+| 10 | [main.rs:240](crates/drill-app/src/main.rs:240) | バックアップの `fs::copy` が OneDrive の Files On-Demand プレースホルダを実体化させ、保存のたびにネットワーク待ちで UI が固まりうる。**本リポジトリ自体が OneDrive 配下にある**ため実害が出る構成。 |
+
+| 11 | [lib.rs:388](crates/drill-core/src/lib.rs:388) | `out.reserve(from.len().saturating_sub(out.capacity()))` の計算が誤り。`clear()` 直後は `len()==0` なので `reserve(n)` は「容量 ≥ n」の意味。容量50・演者100人だと `reserve(50)` となり既存容量で充足扱いになり、`extend` で再確保が起きる。**確保ゼロを狙った箇所が狙った場面でだけ機能しない。** 正しくは `out.reserve(from.len())`。既存テストは容量ちょうどを渡すため原理的に検出できない。 |
+| 12 | [lib.rs:385](crates/drill-core/src/lib.rs:385) | `self.sets.len() - 1` は `sets` が空だと usize アンダーフローでパニック。`validate()` は読込時しか守らず、最後のセットを削除した直後のメモリ上の文書を防げない。 |
+| 13 | [main.rs:1268](crates/drill-app/src/main.rs:1268) | `Command::new("ffmpeg")` の裸名指定。Windows の探索順はアプリのディレクトリとカレントディレクトリを PATH より先に見るため、悪意ある `ffmpeg.exe` が同居するフォルダでの起動が成立しうる。絶対パス限定・`.exe` 限定・`env_clear` ＋ allow-list とする（[51-security.md](docs/design/51-security.md)）。同じ箇所の UI 文言「製品版では同梱します」も、libx264 の GPL 伝播と矛盾するため要修正。 |
+| 14 | `.gitignore` の `*.drill.json` | v1 フィクスチャをコミットできず、**スキーマ移行の回帰テストが成立しない**。 |
+| 15 | `.gitattributes` 不在 | Windows チェックアウトで LF→CRLF 変換が起き、バイト比較のゴールデンテストが全て落ちる。本リポジトリで実際に `LF will be replaced by CRLF` の警告が出ることを確認済み。 |
+| 16 | [drill-app/Cargo.toml:9](crates/drill-app/Cargo.toml:9) | `eframe` に `default-features = false` を指定した結果 **accesskit のプラットフォームアダプタが無効**。`Cargo.lock` に `accesskit_winit` が存在せず、egui がアクセシビリティノードを作っても Windows UI Automation へ渡らない。**スクリーンリーダーから一切見えない**。`PRODUCT_QUALITY.md` のアクセシビリティ要求に対する直接の違反。 |
 
 3と4は「1,000人・60fps」の性能ゲートを今この瞬間破っているので、ベンチではなく実アプリで測り直す必要がある。
+6・7は `PRODUCT_QUALITY.md` の「座標表、ドリルブック、SVG/PDF出力は同じドキュメント座標を参照する」に対する直接の違反であり、
+出力を信用できないという意味で販売上のリスクが高い。いずれも `docs/design/20-display-list.md` の `FieldMap` 一本化で構造的に解消する。
+**9 は利用者の制作物を失わせる唯一の経路であり、全項目中で最優先。**
+
+## 0-b. 出荷前に必ず塞ぐ法務・コンプライアンス
+
+| # | 内容 |
+|---|---|
+| L1 | [main.rs:38](crates/drill-app/src/main.rs:38) が `include_bytes!` で `NotoSansJP.ttf`（9.6MB）を**実行ファイルへ直接埋め込んでいる**。`assets/OFL-NotoSansJP.txt` はリポジトリにあるが配布バイナリには付いてこない。OFL 1.1 は埋め込み配布でもライセンス文と著作権表示の添付を求めるため、アバウト画面等での表示が要る。 |
+| L2 | `Cargo.toml` が `MIT OR Apache-2.0` を宣言しているのに、リポジトリルートに LICENSE ファイルが存在しない。 |
+| L3 | libx264 は GPL。FFmpeg を同梱する場合はビルド構成でライセンスが伝播する。現状は外部プロセス呼び出しのみで未リンクだが、同梱に踏み切る際は判断が要る（[53-productization.md](docs/design/53-productization.md) / [31-video-export.md](docs/design/31-video-export.md)）。 |
+6・7は `PRODUCT_QUALITY.md` の「座標表、ドリルブック、SVG/PDF出力は同じドキュメント座標を参照する」に対する直接の違反であり、
+出力を信用できないという意味で最も販売上のリスクが高い。いずれも `docs/design/20-display-list.md` の
+`FieldMap` 一本化で構造的に解消する。
 
 ---
 
@@ -424,7 +461,7 @@ pub struct ExportJob {
 
 # C. 品質ゲート未達
 
-## C-1. `main.rs` 1,837行 / 30フィールドの god struct の分解
+## C-1. `main.rs` 1,837行 / 28フィールドの god struct の分解
 
 `ARCHITECTURE.md` は「`drill-app` は表示と入力の変換に限定」と書いているが、
 現状の `main.rs` には自動割り当て、レイアウト確定、選択境界計算、3D描画が同居している。
