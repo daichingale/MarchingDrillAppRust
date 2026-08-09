@@ -7,7 +7,7 @@
 //! and stays in effect until the next change. Time for a span of `N` counts at
 //! `B` BPM is `N * 60 / B` seconds.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::cmp::Ordering;
 
 /// Fallback tempo used for an empty map or a guarded (non-finite/≤0) BPM.
@@ -30,9 +30,28 @@ pub struct TempoChange {
 /// `count`, and each `count` is unique. The first event's BPM covers all counts
 /// from 0 up to the second event. An empty map behaves as a constant
 /// [`DEFAULT_BPM`].
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct TempoMap {
     events: Vec<TempoChange>,
+    /// Elapsed seconds at the effective start of each event. This derived
+    /// cache is deliberately omitted from the persistent representation.
+    #[serde(skip)]
+    prefix_seconds: Vec<f64>,
+}
+
+impl<'de> Deserialize<'de> for TempoMap {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct WireTempoMap {
+            events: Vec<TempoChange>,
+        }
+
+        let wire = WireTempoMap::deserialize(deserializer)?;
+        Ok(Self::from_changes(wire.events))
+    }
 }
 
 impl Default for TempoMap {
@@ -47,16 +66,42 @@ impl TempoMap {
     pub fn constant(bpm: f32) -> Self {
         Self {
             events: vec![TempoChange { count: 0.0, bpm }],
+            prefix_seconds: vec![0.0],
         }
     }
 
     /// Build from arbitrary changes; they are sorted and deduplicated (a later
     /// duplicate count wins). An empty input yields an empty map.
     pub fn from_changes(changes: impl IntoIterator<Item = TempoChange>) -> Self {
-        let mut map = Self { events: Vec::new() };
-        for change in changes {
-            map.set(change.count, change.bpm);
+        let mut indexed = changes
+            .into_iter()
+            .enumerate()
+            .map(|(ordinal, mut change)| {
+                change.count = change.count.max(0.0);
+                (ordinal, change)
+            })
+            .collect::<Vec<_>>();
+        indexed.sort_by(|a, b| {
+            a.1.count
+                .partial_cmp(&b.1.count)
+                .unwrap_or(Ordering::Equal)
+                .then_with(|| a.0.cmp(&b.0))
+        });
+        let mut events: Vec<TempoChange> = Vec::with_capacity(indexed.len());
+        for (_, change) in indexed {
+            if let Some(last) = events.last_mut()
+                && last.count == change.count
+            {
+                *last = change;
+            } else {
+                events.push(change);
+            }
         }
+        let mut map = Self {
+            events,
+            prefix_seconds: Vec::new(),
+        };
+        map.rebuild_prefix();
         map
     }
 
@@ -83,12 +128,14 @@ impl TempoMap {
                     .sort_by(|a, b| a.count.partial_cmp(&b.count).unwrap_or(Ordering::Equal));
             }
         }
+        self.rebuild_prefix();
         self
     }
 
     /// Remove the change anchored exactly at `count`, if any.
     pub fn remove(&mut self, count: f32) {
         self.events.retain(|e| e.count != count.max(0.0));
+        self.rebuild_prefix();
     }
 
     /// The active BPM at `global_count`. Counts before the first change use the
@@ -113,60 +160,43 @@ impl TempoMap {
     /// integrating across each piecewise-constant BPM segment. Counts ≤ 0 map
     /// to 0 seconds.
     pub fn seconds_at(&self, global_count: f32) -> f32 {
-        let target = global_count.max(0.0);
-        if self.events.is_empty() {
-            return target * 60.0 / DEFAULT_BPM;
-        }
-        let mut seconds = 0.0;
-        for i in 0..self.events.len() {
-            let start = if i == 0 {
-                0.0
-            } else {
-                segment_start(self.events[i].count)
-            };
-            if target <= start {
-                break;
-            }
-            let end = self
-                .events
-                .get(i + 1)
-                .map_or(f32::INFINITY, |e| segment_start(e.count));
-            let span = (target.min(end) - start).max(0.0);
-            seconds += span * 60.0 / sanitize_bpm(self.events[i].bpm);
-            if target <= end {
-                break;
-            }
-        }
-        seconds
+        self.seconds_at_f64(f64::from(global_count)) as f32
+    }
+
+    /// Sample-accurate count-to-time conversion using a cached prefix sum and
+    /// binary search. The persistent tempo events remain `f32` for schema
+    /// compatibility, while all timeline arithmetic is performed in `f64`.
+    pub fn seconds_at_f64(&self, global_count: f64) -> f64 {
+        let target = finite_non_negative_f64(global_count);
+        let Some(index) = self.event_index_at_count(target) else {
+            return target * 60.0 / f64::from(DEFAULT_BPM);
+        };
+        let start = effective_start(&self.events, index);
+        self.prefix_seconds[index]
+            + (target - start) * 60.0 / f64::from(sanitize_bpm(self.events[index].bpm))
     }
 
     /// Inverse of [`seconds_at`](Self::seconds_at): the global count reached
     /// after `seconds` of real time from count 0. Seconds ≤ 0 map to count 0.
     pub fn count_at(&self, seconds: f32) -> f32 {
-        let target = seconds.max(0.0);
+        self.count_at_f64(f64::from(seconds)) as f32
+    }
+
+    /// Inverse of [`seconds_at_f64`](Self::seconds_at_f64), also O(log n).
+    pub fn count_at_f64(&self, seconds: f64) -> f64 {
+        let target = finite_non_negative_f64(seconds);
         if self.events.is_empty() {
-            return target * DEFAULT_BPM / 60.0;
+            return target * f64::from(DEFAULT_BPM) / 60.0;
         }
-        let mut elapsed = 0.0;
-        for i in 0..self.events.len() {
-            let start = if i == 0 {
-                0.0
-            } else {
-                segment_start(self.events[i].count)
-            };
-            let end = self
-                .events
-                .get(i + 1)
-                .map_or(f32::INFINITY, |e| segment_start(e.count));
-            let bpm = sanitize_bpm(self.events[i].bpm);
-            let seg_seconds = (end - start) * 60.0 / bpm;
-            if target <= elapsed + seg_seconds {
-                return start + (target - elapsed) * bpm / 60.0;
-            }
-            elapsed += seg_seconds;
-        }
-        // Unreachable: the final segment extends to infinity.
-        self.events.last().map_or(0.0, |e| e.count)
+        let index = self
+            .prefix_seconds
+            .partition_point(|&start_seconds| start_seconds <= target)
+            .saturating_sub(1);
+        let start = effective_start(&self.events, index);
+        start
+            + (target - self.prefix_seconds[index])
+                * f64::from(sanitize_bpm(self.events[index].bpm))
+                / 60.0
     }
 
     /// Musical position for `global_count`, assuming counts map 1:1 to beats
@@ -179,6 +209,50 @@ impl TempoMap {
         let measure = (count / per_measure).floor();
         let beat = count - measure * per_measure + 1.0;
         (measure as u32 + 1, beat)
+    }
+
+    fn event_index_at_count(&self, target: f64) -> Option<usize> {
+        if self.events.is_empty() {
+            return None;
+        }
+        Some(
+            self.events
+                .partition_point(|event| f64::from(segment_start(event.count)) <= target)
+                .saturating_sub(1),
+        )
+    }
+
+    fn rebuild_prefix(&mut self) {
+        self.prefix_seconds.clear();
+        self.prefix_seconds.reserve(self.events.len());
+        if self.events.is_empty() {
+            return;
+        }
+        self.prefix_seconds.push(0.0);
+        for index in 1..self.events.len() {
+            let previous_start = effective_start(&self.events, index - 1);
+            let start = effective_start(&self.events, index);
+            let elapsed = (start - previous_start) * 60.0
+                / f64::from(sanitize_bpm(self.events[index - 1].bpm));
+            self.prefix_seconds
+                .push(self.prefix_seconds[index - 1] + elapsed);
+        }
+    }
+}
+
+fn effective_start(events: &[TempoChange], index: usize) -> f64 {
+    if index == 0 {
+        0.0
+    } else {
+        f64::from(segment_start(events[index].count))
+    }
+}
+
+fn finite_non_negative_f64(value: f64) -> f64 {
+    if value.is_finite() {
+        value.max(0.0)
+    } else {
+        0.0
     }
 }
 
@@ -326,5 +400,27 @@ mod tests {
         let json = serde_json::to_string(&map).unwrap();
         let back: TempoMap = serde_json::from_str(&json).unwrap();
         assert_eq!(back.events(), map.events());
+        assert!(approx(back.seconds_at(32.0), map.seconds_at(32.0)));
+    }
+
+    #[test]
+    fn f64_mapping_stays_within_half_a_sample_over_two_hours() {
+        let mut map = TempoMap::constant(137.0);
+        for count in (64..16_000).step_by(64) {
+            map.set(count as f32, 80.0 + (count % 113) as f32);
+        }
+        let count = map.count_at_f64(2.0 * 60.0 * 60.0);
+        let seconds = map.seconds_at_f64(count);
+        assert!((seconds - 7_200.0).abs() <= 0.5 / 48_000.0);
+    }
+
+    #[test]
+    fn f64_boundary_uses_new_tempo() {
+        let mut map = TempoMap::constant(120.0);
+        map.set(16.0, 60.0);
+        let boundary = map.seconds_at_f64(16.0);
+        let sample = 1.0 / 48_000.0;
+        assert!(map.count_at_f64(boundary - sample) < 16.0);
+        assert!(map.count_at_f64(boundary + sample) > 16.0);
     }
 }

@@ -1,3 +1,16 @@
 /target
-*.drill.json
+/dist
+/artifacts
+/fuzz/artifacts
+/fuzz/target
 
+# Files the app writes while editing. These are never fixtures.
+*.autosave.drill.json
+*.backup.drill.json
+crash-*.drill.json
+
+# Scratch drill documents anywhere in the tree.
+*.drill.json
+# ...except committed test fixtures, which the schema-migration regression
+# tests need. Without this negation the v1 baseline cannot be committed.
+!**/fixtures/**/*.drill.json

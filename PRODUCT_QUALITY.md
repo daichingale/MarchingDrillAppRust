@@ -20,12 +20,20 @@ DrillForgeは「Pywareのコピー」ではなく、マーチング制作で必�
 - 2時間連続再生で常駐メモリの継続増加がない。
 - 保存、自動保存、解析は描画スレッドを長時間停止させない。
 
-2026-08-09の開発機ベースライン:
+2026-08-09の開発機ベースライン（release profile、ゲートは各bench内で自動判定）:
 
-- 1,000人 × 60,000フレーム補間: 9.24ms（合計）
-- 1,000人ドキュメント × 100回JSON変換: 28.75ms（合計）
+- 1,000人 × 60,000フレーム補間: 10.41ms（合計）、定常時allocation 0
+- 1,000人の補間 + DisplayList構築: 16.6ms/フレーム未満、定常時allocation 0
+- 1,000人 × 16カウント swept clinic: 89.1µs/解析（2msゲート）
+- 1,000人ドキュメント × 100回JSON変換: 37.61ms（合計）
+- 2時間・48kHz音声hot path: 675,000ブロック、allocation 0、PCM常駐量不変
+- 1,000人ドキュメントで10,000編集 + 全Undo + 全Redo: 4.63ms（合計）
 
-再計測は `cargo bench -p drill-core --bench core_performance` で行う。
+再計測は次の3コマンドで行う。壁時計に加え、計数アロケータで定常時の再確保ゼロを検証する。
+
+- `cargo bench -p drill-core --bench core_performance`
+- `cargo bench -p drill-render --bench display_list`
+- `cargo bench -p drill-audio --bench audio_performance`
 
 ### Reliability
 

@@ -1,22 +1,48 @@
 //! UI-independent marching drill document model.
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 
 pub mod audio;
 pub mod camera;
+pub mod clinic;
+pub mod constraint_solver;
 pub mod continuity;
 pub mod coordinates;
 pub mod countsheet;
 pub mod editing;
+pub mod error;
+pub mod ids;
 pub mod pathing;
 pub mod playback;
+pub mod production;
+pub mod roster;
+pub mod route_suggestions;
 pub mod shapes;
+pub mod snapshot;
+pub mod stadium;
 pub mod svg;
 pub mod tempo;
+pub mod transition;
+pub mod underlay;
 pub mod video;
+pub mod visibility;
 
-pub type PerformerId = u32;
+pub use error::{DrillError, Locale};
+pub use ids::{CameraId, IdAllocator, PerformerId, SectionId, SetId, SubsetId};
+pub use production::SetAnnotation;
+pub use roster::{OptionalColor, PerformerKind, PerformerMetadata, Section, Subset, Symbol};
+pub use transition::{
+    ArcTable, ChordPoint, Easing, Gate, PathVia, Route, RouteShape, RouteTable, SetCounts,
+    TransitionPlan, eval as eval_transition,
+};
+
+pub const SCHEMA_VERSION: u16 = 4;
+pub const MAX_PERFORMERS: usize = 4_000;
+pub const MAX_SETS: usize = 256;
+pub const MAX_SUBSETS: usize = 4_000;
+pub const MAX_TEXT_BYTES: usize = 64 * 1024;
+pub const MAX_PROJECT_JSON_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Unit {
@@ -52,6 +78,8 @@ pub struct GridConfig {
     pub show_step_grid: bool,
     pub snap_enabled: bool,
     pub hashes: Vec<GridLine>,
+    #[serde(default)]
+    pub coordinate_notation: coordinates::CoordinateNotation,
 }
 
 impl Default for GridConfig {
@@ -81,11 +109,23 @@ impl Default for GridConfig {
                     weight: 1.0,
                 },
             ],
+            coordinate_notation: coordinates::CoordinateNotation::default(),
         }
     }
 }
 
 impl GridConfig {
+    /// Creates the standard football grid with localized built-in line names.
+    /// `Default` remains Japanese for file/UI compatibility.
+    pub fn default_for_locale(locale: Locale) -> Self {
+        let mut grid = Self::default();
+        if locale == Locale::En {
+            grid.hashes[0].label = "Front hash".into();
+            grid.hashes[1].label = "Back hash".into();
+        }
+        grid
+    }
+
     pub fn indoor() -> Self {
         Self {
             width: 90.0,
@@ -189,55 +229,71 @@ pub fn analyze_transition(
     collision_distance: f32,
     max_step_per_count: f32,
 ) -> TransitionAnalysis {
-    let Some(from) = document.sets.get(set_index) else {
-        return TransitionAnalysis::default();
-    };
-    let Some(to) = document.sets.get(set_index + 1) else {
-        return TransitionAnalysis::default();
-    };
-    let mut collisions = 0;
-    for i in 0..to.positions.len() {
-        for j in (i + 1)..to.positions.len() {
-            let dx = to.positions[i].x - to.positions[j].x;
-            let dy = to.positions[i].y - to.positions[j].y;
-            if dx * dx + dy * dy < collision_distance * collision_distance {
-                collisions += 1;
-            }
-        }
-    }
-    let counts = f32::from(from.counts.max(1));
-    let excessive_strides = from
-        .positions
-        .iter()
-        .zip(&to.positions)
-        .filter(|(a, b)| {
-            let dx = a.x - b.x;
-            let dy = a.y - b.y;
-            (dx * dx + dy * dy).sqrt() / counts > max_step_per_count
-        })
-        .count();
+    let mut scratch = clinic::ScanScratch::default();
+    let report = clinic::scan_transition(
+        document,
+        set_index,
+        clinic::ClinicParams {
+            style: clinic::StepStyle::Custom {
+                units_per_step: max_step_per_count,
+            },
+            collision_radius: collision_distance,
+            danger_radius: collision_distance,
+            crowded_radius: collision_distance,
+            aggressive_above: 1.0,
+            impossible_above: f32::MAX,
+            ..clinic::ClinicParams::default()
+        },
+        &mut scratch,
+    );
     TransitionAnalysis {
-        collisions,
-        excessive_strides,
+        collisions: report.collisions.len(),
+        excessive_strides: report
+            .strides
+            .iter()
+            .filter(|stride| stride.rating > clinic::StrideRating::Comfortable)
+            .count(),
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Performer {
     pub id: PerformerId,
     pub label: String,
-    pub color: [u8; 3],
+    pub section: SectionId,
+    #[serde(default)]
+    pub symbol: Symbol,
+    #[serde(default)]
+    pub color: OptionalColor,
+    #[serde(default = "default_height_m")]
+    pub height_m: f32,
+    #[serde(default)]
+    pub kind: PerformerKind,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+fn default_height_m() -> f32 {
+    1.7
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Set {
+    pub id: SetId,
     pub name: String,
+    #[serde(default)]
+    pub annotation: SetAnnotation,
     pub counts: u16,
+    #[serde(default)]
+    pub hold: u16,
+    #[serde(default, skip_serializing_if = "RouteTable::is_trivial")]
+    pub routes: RouteTable,
+    /// Editable source geometry when this formation was generated by the designer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape: Option<shapes::ShapeSpec>,
     /// Dense and index-aligned with `Document::performers` for cache-friendly playback.
     pub positions: Vec<Point>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Document {
     pub schema_version: u16,
     pub title: String,
@@ -247,6 +303,15 @@ pub struct Document {
     pub tempo: tempo::TempoMap,
     #[serde(default)]
     pub audio: Option<audio::AudioTrack>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub underlay: Option<underlay::ImageUnderlay>,
+    #[serde(default)]
+    pub camera_program: camera::CameraProgram,
+    #[serde(default)]
+    pub sections: Vec<Section>,
+    /// Reusable overlapping selections; independent from exclusive sections.
+    #[serde(default)]
+    pub subsets: Vec<Subset>,
     pub performers: Vec<Performer>,
     pub sets: Vec<Set>,
 }
@@ -256,9 +321,13 @@ impl Document {
         let count = rows * columns;
         let performers = (0..count)
             .map(|i| Performer {
-                id: i as PerformerId,
+                id: PerformerId::new(i as u32 + 1).expect("demo performer id is non-zero"),
                 label: format!("{}{}", (b'A' + (i / 10).min(25) as u8) as char, i % 10 + 1),
-                color: [245, 197, 66],
+                section: SectionId::new(1).expect("demo section id is non-zero"),
+                symbol: Symbol::Circle,
+                color: Some([245, 197, 66]).into(),
+                height_m: default_height_m(),
+                kind: PerformerKind::Wind,
             })
             .collect::<Vec<_>>();
         let block = (0..count)
@@ -278,48 +347,144 @@ impl Document {
             })
             .collect();
         Self {
-            schema_version: 1,
+            schema_version: SCHEMA_VERSION,
             title: "新しいドリル".into(),
             grid: GridConfig::default(),
             tempo: tempo::TempoMap::constant(120.0),
             audio: None,
+            underlay: None,
+            camera_program: camera::CameraProgram::default_for_grid(&GridConfig::default()),
+            sections: vec![Section {
+                id: SectionId::new(1).expect("demo section id is non-zero"),
+                name: "Ensemble".into(),
+                short: "Ens".into(),
+                color: [245, 197, 66],
+                order: 0,
+            }],
+            subsets: Vec::new(),
             performers,
             sets: vec![
                 Set {
+                    id: SetId::new(1).expect("demo set id is non-zero"),
                     name: "セット 1".into(),
+                    annotation: SetAnnotation::default(),
                     counts: 16,
+                    hold: 0,
+                    routes: RouteTable::default(),
+                    shape: None,
                     positions: block,
                 },
                 Set {
+                    id: SetId::new(2).expect("demo set id is non-zero"),
                     name: "セット 2".into(),
+                    annotation: SetAnnotation::default(),
                     counts: 16,
+                    hold: 0,
+                    routes: RouteTable::default(),
+                    shape: None,
                     positions: arc,
                 },
             ],
         }
     }
 
-    pub fn validate(&self) -> Result<(), String> {
-        if self.schema_version != 1 {
-            return Err(format!(
-                "未対応のファイルバージョンです: {}",
-                self.schema_version
-            ));
+    pub fn validate(&self) -> Result<(), DrillError> {
+        if self.schema_version != SCHEMA_VERSION {
+            return Err(DrillError::UnsupportedSchema {
+                found: self.schema_version,
+                supported: SCHEMA_VERSION,
+            });
         }
         if self.sets.is_empty() {
-            return Err("セットがありません".into());
+            return Err(DrillError::EmptySets);
         }
-        if self.grid.width <= 0.0 || self.grid.height <= 0.0 {
-            return Err("グリッド寸法は正数である必要があります".into());
+        if self.performers.len() > MAX_PERFORMERS {
+            return Err(DrillError::LimitExceeded {
+                field: "performers",
+                limit: MAX_PERFORMERS,
+            });
+        }
+        if self.sets.len() > MAX_SETS {
+            return Err(DrillError::LimitExceeded {
+                field: "sets",
+                limit: MAX_SETS,
+            });
+        }
+        if self.subsets.len() > MAX_SUBSETS {
+            return Err(DrillError::LimitExceeded {
+                field: "subsets",
+                limit: MAX_SUBSETS,
+            });
+        }
+        if self.title.len() > MAX_TEXT_BYTES {
+            return Err(DrillError::LimitExceeded {
+                field: "title",
+                limit: MAX_TEXT_BYTES,
+            });
+        }
+        if !self.grid.width.is_finite()
+            || !self.grid.height.is_finite()
+            || self.grid.width <= 0.0
+            || self.grid.height <= 0.0
+            || !self.grid.coordinate_notation.validate()
+        {
+            return Err(DrillError::InvalidGrid);
+        }
+        if let coordinates::FrontBackReference::FixedLabel(label) =
+            &self.grid.coordinate_notation.front_back
+        {
+            let normalized = label.to_lowercase();
+            let canonical = normalized.contains("sideline")
+                || normalized.contains("サイドライン")
+                || (normalized.contains("front") && normalized.contains("hash"))
+                || (normalized.contains("back") && normalized.contains("hash"))
+                || normalized.contains("フロントハッシュ")
+                || normalized.contains("バックハッシュ");
+            if !canonical
+                && !self
+                    .grid
+                    .hashes
+                    .iter()
+                    .any(|line| line.label.eq_ignore_ascii_case(label))
+            {
+                return Err(DrillError::InvalidGrid);
+            }
         }
         let expected = self.performers.len();
-        if let Some((i, _)) = self
+        for set in &self.sets {
+            if !set.annotation.validate() || set.name.len() > MAX_TEXT_BYTES {
+                return Err(DrillError::InvalidEdit);
+            }
+            if let Some(shape) = &set.shape {
+                shape.validate()?;
+            }
+            set.routes.validate(
+                &self.performers,
+                SetCounts {
+                    moves: set.counts,
+                    hold: set.hold,
+                },
+            )?;
+        }
+        if let Some((i, set)) = self
             .sets
             .iter()
             .enumerate()
             .find(|(_, s)| s.positions.len() != expected)
         {
-            return Err(format!("セット {} の演者数が一致しません", i + 1));
+            return Err(DrillError::SetSizeMismatch {
+                set_index: i,
+                expected,
+                found: set.positions.len(),
+            });
+        }
+        if self
+            .sets
+            .iter()
+            .flat_map(|set| &set.positions)
+            .any(|point| !point.x.is_finite() || !point.y.is_finite())
+        {
+            return Err(DrillError::InvalidNumber { field: "positions" });
         }
         let unique = self
             .performers
@@ -327,7 +492,60 @@ impl Document {
             .map(|p| p.id)
             .collect::<BTreeSet<_>>();
         if unique.len() != expected {
-            return Err("演者IDが重複しています".into());
+            return Err(DrillError::DuplicatePerformerId);
+        }
+        let section_ids = self
+            .sections
+            .iter()
+            .map(|section| section.id)
+            .collect::<BTreeSet<_>>();
+        if section_ids.len() != self.sections.len()
+            || self.sections.iter().any(|section| {
+                section.name.len() > MAX_TEXT_BYTES || section.short.len() > MAX_TEXT_BYTES
+            })
+        {
+            return Err(DrillError::InvalidEdit);
+        }
+        self.camera_program
+            .validate(self.timeline_counts() as f32)?;
+        if self.performers.iter().any(|performer| {
+            !section_ids.contains(&performer.section)
+                || !performer.height_m.is_finite()
+                || !(0.2..=3.0).contains(&performer.height_m)
+        }) {
+            return Err(DrillError::InvalidEdit);
+        }
+        let unique_sets = self.sets.iter().map(|set| set.id).collect::<BTreeSet<_>>();
+        if unique_sets.len() != self.sets.len() {
+            return Err(DrillError::DuplicateSetId);
+        }
+        let subset_ids = self
+            .subsets
+            .iter()
+            .map(|subset| subset.id)
+            .collect::<BTreeSet<_>>();
+        let performer_ids = self
+            .performers
+            .iter()
+            .map(|performer| performer.id)
+            .collect::<BTreeSet<_>>();
+        if subset_ids.len() != self.subsets.len() {
+            return Err(DrillError::DuplicateSubsetId);
+        }
+        if self.subsets.iter().any(|subset| {
+            subset.name.is_empty()
+                || subset.name.len() > MAX_TEXT_BYTES
+                || subset.members.windows(2).any(|pair| pair[0] >= pair[1])
+                || subset.members.iter().any(|id| !performer_ids.contains(id))
+        }) {
+            return Err(DrillError::InvalidEdit);
+        }
+        if self
+            .underlay
+            .as_ref()
+            .is_some_and(|value| !value.validate())
+        {
+            return Err(DrillError::InvalidEdit);
         }
         Ok(())
     }
@@ -350,7 +568,7 @@ impl Document {
         self.sets
             .iter()
             .take(self.sets.len().saturating_sub(1))
-            .map(|set| u32::from(set.counts))
+            .map(|set| u32::from(set.counts) + u32::from(set.hold))
             .sum()
     }
 
@@ -359,7 +577,7 @@ impl Document {
             .sets
             .iter()
             .take(set_index)
-            .map(|set| u32::from(set.counts))
+            .map(|set| u32::from(set.counts) + u32::from(set.hold))
             .sum::<u32>();
         prior as f32 + local_count
     }
@@ -372,7 +590,7 @@ impl Document {
             .enumerate()
             .take(self.sets.len().saturating_sub(1))
         {
-            let counts = f32::from(set.counts);
+            let counts = f32::from(set.counts) + f32::from(set.hold);
             if remaining < counts {
                 return (index, remaining);
             }
@@ -382,24 +600,814 @@ impl Document {
     }
 
     pub fn positions_at(&self, set_index: usize, progress: f32, out: &mut Vec<Point>) {
-        let from = &self.sets[set_index.min(self.sets.len() - 1)].positions;
-        let to = self.sets.get(set_index + 1).map_or(from, |s| &s.positions);
+        let moves = self
+            .sets
+            .get(set_index)
+            .map_or(0.0, |set| f32::from(set.counts));
+        self.positions_at_count(set_index, progress.clamp(0.0, 1.0) * moves, out);
+    }
+
+    /// Evaluates a transition directly in set-local counts. During the
+    /// ensemble hold all performers remain exactly on the destination dots.
+    pub fn positions_at_count(&self, set_index: usize, local_count: f32, out: &mut Vec<Point>) {
+        let Some(last_index) = self.sets.len().checked_sub(1) else {
+            out.clear();
+            return;
+        };
+        let index = set_index.min(last_index);
+        let from_set = &self.sets[index];
+        let to = self
+            .sets
+            .get(index + 1)
+            .map_or(&from_set.positions, |s| &s.positions);
         out.clear();
-        out.reserve(from.len().saturating_sub(out.capacity()));
+        out.reserve(from_set.positions.len().saturating_sub(out.capacity()));
+        if index == last_index || local_count >= f32::from(from_set.counts) {
+            out.extend_from_slice(to);
+            return;
+        }
         out.extend(
-            from.iter()
+            from_set
+                .positions
+                .iter()
                 .zip(to)
-                .map(|(&a, &b)| a.lerp(b, progress.clamp(0.0, 1.0))),
+                .zip(&self.performers)
+                .map(|((&a, &b), p)| {
+                    transition::evaluate(
+                        from_set.routes.route_for(p.id),
+                        a,
+                        b,
+                        local_count,
+                        from_set.counts,
+                    )
+                }),
         );
+    }
+
+    /// Field-unit length of the selected performer's authored route.
+    pub fn route_length(&self, set_index: usize, performer_index: usize) -> f32 {
+        let Some(from) = self.sets.get(set_index) else {
+            return 0.0;
+        };
+        let Some(to) = self.sets.get(set_index + 1) else {
+            return 0.0;
+        };
+        let (Some(&start), Some(&end), Some(performer)) = (
+            from.positions.get(performer_index),
+            to.positions.get(performer_index),
+            self.performers.get(performer_index),
+        ) else {
+            return 0.0;
+        };
+        transition::route_length(from.routes.route_for(performer.id), start, end)
     }
 
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string_pretty(self)
     }
-    pub fn from_json(json: &str) -> Result<Self, String> {
-        let doc: Self = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    pub fn from_json(json: &str) -> Result<Self, DrillError> {
+        if json.len() > MAX_PROJECT_JSON_BYTES {
+            return Err(DrillError::LimitExceeded {
+                field: "project bytes",
+                limit: MAX_PROJECT_JSON_BYTES,
+            });
+        }
+        let mut value: serde_json::Value =
+            serde_json::from_str(json).map_err(|e| DrillError::InvalidJson(e.to_string()))?;
+        let version = value
+            .get("schema_version")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        match version {
+            1 => {
+                value["schema_version"] = serde_json::Value::from(SCHEMA_VERSION);
+                if let Some(performers) = value
+                    .get_mut("performers")
+                    .and_then(serde_json::Value::as_array_mut)
+                {
+                    for performer in performers {
+                        if let Some(raw) = performer.get("id").and_then(serde_json::Value::as_u64) {
+                            performer["id"] = serde_json::Value::from(raw.saturating_add(1));
+                        }
+                    }
+                }
+            }
+            2 | 3 => value["schema_version"] = serde_json::Value::from(SCHEMA_VERSION),
+            v if v == u64::from(SCHEMA_VERSION) => {}
+            v => {
+                return Err(DrillError::UnsupportedSchema {
+                    found: u16::try_from(v).unwrap_or(u16::MAX),
+                    supported: SCHEMA_VERSION,
+                });
+            }
+        }
+        if let Some(sets) = value
+            .get_mut("sets")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            let mut used = sets
+                .iter()
+                .filter_map(|set| set.get("id")?.as_u64())
+                .collect::<BTreeSet<_>>();
+            let mut candidate = 1_u64;
+            for set in sets {
+                if set.get("id").is_none() {
+                    while used.contains(&candidate) {
+                        candidate = candidate.saturating_add(1);
+                    }
+                    set["id"] = serde_json::Value::from(candidate);
+                    used.insert(candidate);
+                }
+            }
+        }
+        let needs_default_section = value
+            .get("sections")
+            .and_then(serde_json::Value::as_array)
+            .is_none_or(Vec::is_empty);
+        if needs_default_section {
+            value["sections"] = serde_json::json!([{
+                "id": 1,
+                "name": "Ensemble",
+                "short": "Ens",
+                "color": [128, 128, 128],
+                "order": 0
+            }]);
+        }
+        let default_section = value["sections"]
+            .as_array()
+            .and_then(|sections| sections.first())
+            .and_then(|section| section.get("id"))
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(1);
+        if let Some(performers) = value
+            .get_mut("performers")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            for performer in performers {
+                if performer.get("section").is_none() {
+                    performer["section"] = serde_json::Value::from(default_section);
+                }
+            }
+        }
+        let mut doc: Self =
+            serde_json::from_value(value).map_err(|e| DrillError::InvalidJson(e.to_string()))?;
+        if doc.camera_program.tracks.is_empty() {
+            doc.camera_program = camera::CameraProgram::default_for_grid(&doc.grid);
+        }
         doc.validate()?;
         Ok(doc)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Edit {
+    /// Atomically replaces the complete document. Intended for import and
+    /// migration transactions that must be undone as one user action.
+    ReplaceDocument {
+        document: Box<Document>,
+    },
+    MovePerformers {
+        set_id: SetId,
+        performer_ids: Vec<PerformerId>,
+        positions: Vec<Point>,
+    },
+    SetCounts {
+        set_id: SetId,
+        counts: SetCounts,
+    },
+    SetRoutes {
+        set_id: SetId,
+        routes: RouteTable,
+    },
+    SetShape {
+        set_id: SetId,
+        shape: Option<shapes::ShapeSpec>,
+    },
+    SetAnnotation {
+        set_id: SetId,
+        annotation: SetAnnotation,
+    },
+    ReplaceGrid {
+        grid: GridConfig,
+        scale_positions: bool,
+    },
+    SetTempoMap {
+        tempo: tempo::TempoMap,
+    },
+    SetAudioTrack {
+        audio: Option<audio::AudioTrack>,
+    },
+    SetImageUnderlay {
+        underlay: Option<underlay::ImageUnderlay>,
+    },
+    RenameDocument {
+        title: String,
+    },
+    AddSyncAnchor {
+        id: Option<audio::AnchorId>,
+        anchor: audio::SyncAnchor,
+    },
+    MoveSyncAnchor {
+        id: audio::AnchorId,
+        anchor: audio::SyncAnchor,
+    },
+    RemoveSyncAnchor {
+        id: audio::AnchorId,
+    },
+    AddSection {
+        section: Section,
+        at: Option<usize>,
+    },
+    RenameSection {
+        id: SectionId,
+        name: String,
+        short: String,
+    },
+    RemoveSection {
+        id: SectionId,
+        reassign_to: SectionId,
+    },
+    RestoreSection {
+        at: usize,
+        section: Section,
+        assignments: Vec<PerformerId>,
+        reassign_to: SectionId,
+    },
+    AssignPerformersToSection {
+        assignments: Vec<(PerformerId, SectionId)>,
+    },
+    AddSubset {
+        subset: Subset,
+        at: Option<usize>,
+    },
+    RenameSubset {
+        id: SubsetId,
+        name: String,
+    },
+    SetSubsetMembers {
+        id: SubsetId,
+        members: Vec<PerformerId>,
+    },
+    RemoveSubset {
+        id: SubsetId,
+    },
+    SetPerformerMetadata {
+        performer: PerformerId,
+        metadata: PerformerMetadata,
+    },
+    InsertCameraKeyframe {
+        camera_id: CameraId,
+        keyframe: camera::CameraKeyframe,
+    },
+    RemoveCameraKeyframe {
+        camera_id: CameraId,
+        count: f32,
+    },
+    InsertCameraCut {
+        cut: camera::CameraCut,
+    },
+    RemoveCameraCut {
+        count: f32,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum EditCoalesceKey {
+    MovePerformers(SetId),
+    Routes(SetId),
+    Shape(SetId),
+    Annotation(SetId),
+    MoveSyncAnchor(audio::AnchorId),
+    DocumentTitle,
+    Grid,
+    Tempo,
+    Audio,
+    Underlay,
+    Section(SectionId),
+    Subset(SubsetId),
+    PerformerMetadata(PerformerId),
+    Camera(CameraId),
+}
+
+impl Edit {
+    /// Stable key a drag controller can use to collapse many transient edits
+    /// into one history entry without relying on a mutable vector index.
+    pub fn coalesce_key(&self) -> Option<EditCoalesceKey> {
+        match self {
+            Self::ReplaceDocument { .. } => None,
+            Self::MovePerformers { set_id, .. } => Some(EditCoalesceKey::MovePerformers(*set_id)),
+            Self::SetRoutes { set_id, .. } => Some(EditCoalesceKey::Routes(*set_id)),
+            Self::SetShape { set_id, .. } => Some(EditCoalesceKey::Shape(*set_id)),
+            Self::SetAnnotation { set_id, .. } => Some(EditCoalesceKey::Annotation(*set_id)),
+            Self::SetCounts { .. } => None,
+            Self::MoveSyncAnchor { id, .. } => Some(EditCoalesceKey::MoveSyncAnchor(*id)),
+            Self::RenameDocument { .. } => Some(EditCoalesceKey::DocumentTitle),
+            Self::ReplaceGrid { .. } => Some(EditCoalesceKey::Grid),
+            Self::SetTempoMap { .. } => Some(EditCoalesceKey::Tempo),
+            Self::SetAudioTrack { .. } => Some(EditCoalesceKey::Audio),
+            Self::SetImageUnderlay { .. } => Some(EditCoalesceKey::Underlay),
+            Self::RenameSection { id, .. } => Some(EditCoalesceKey::Section(*id)),
+            Self::RenameSubset { id, .. } | Self::SetSubsetMembers { id, .. } => {
+                Some(EditCoalesceKey::Subset(*id))
+            }
+            Self::SetPerformerMetadata { performer, .. } => {
+                Some(EditCoalesceKey::PerformerMetadata(*performer))
+            }
+            Self::InsertCameraKeyframe { camera_id, .. }
+            | Self::RemoveCameraKeyframe { camera_id, .. } => {
+                Some(EditCoalesceKey::Camera(*camera_id))
+            }
+            Self::AddSyncAnchor { .. }
+            | Self::RemoveSyncAnchor { .. }
+            | Self::AddSection { .. }
+            | Self::RemoveSection { .. }
+            | Self::RestoreSection { .. }
+            | Self::AssignPerformersToSection { .. }
+            | Self::AddSubset { .. }
+            | Self::RemoveSubset { .. }
+            | Self::InsertCameraCut { .. }
+            | Self::RemoveCameraCut { .. } => None,
+        }
+    }
+
+    /// Applies this edit atomically and returns the inverse operation.
+    pub fn apply(self, document: &mut Document) -> Result<Self, DrillError> {
+        match self {
+            Self::ReplaceDocument { document: next } => {
+                next.validate()?;
+                let previous = std::mem::replace(document, *next);
+                Ok(Self::ReplaceDocument {
+                    document: Box::new(previous),
+                })
+            }
+            Self::MovePerformers {
+                set_id,
+                performer_ids,
+                positions,
+            } => {
+                if performer_ids.len() != positions.len() {
+                    return Err(DrillError::InvalidEdit);
+                }
+                let set_index = document
+                    .sets
+                    .iter()
+                    .position(|set| set.id == set_id)
+                    .ok_or(DrillError::MissingSet)?;
+                let indices = performer_ids
+                    .iter()
+                    .map(|id| {
+                        document
+                            .performers
+                            .iter()
+                            .position(|performer| performer.id == *id)
+                            .ok_or(DrillError::MissingPerformer)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let set = &mut document.sets[set_index];
+                let mut inverse_positions = Vec::with_capacity(indices.len());
+                for &index in &indices {
+                    inverse_positions.push(
+                        set.positions
+                            .get(index)
+                            .copied()
+                            .ok_or(DrillError::InvalidEdit)?,
+                    );
+                }
+                for (&index, position) in indices.iter().zip(positions) {
+                    set.positions[index] = position;
+                }
+                Ok(Self::MovePerformers {
+                    set_id,
+                    performer_ids,
+                    positions: inverse_positions,
+                })
+            }
+            Self::SetCounts { set_id, counts } => {
+                if counts.total() > transition::MAX_SET_COUNTS {
+                    return Err(DrillError::InvalidTransition);
+                }
+                let set = document
+                    .sets
+                    .iter_mut()
+                    .find(|s| s.id == set_id)
+                    .ok_or(DrillError::MissingSet)?;
+                let previous = SetCounts {
+                    moves: set.counts,
+                    hold: set.hold,
+                };
+                set.routes.validate(&document.performers, counts)?;
+                set.counts = counts.moves;
+                set.hold = counts.hold;
+                Ok(Self::SetCounts {
+                    set_id,
+                    counts: previous,
+                })
+            }
+            Self::SetRoutes { set_id, routes } => {
+                let set = document
+                    .sets
+                    .iter_mut()
+                    .find(|s| s.id == set_id)
+                    .ok_or(DrillError::MissingSet)?;
+                routes.validate(
+                    &document.performers,
+                    SetCounts {
+                        moves: set.counts,
+                        hold: set.hold,
+                    },
+                )?;
+                let previous = std::mem::replace(&mut set.routes, routes);
+                Ok(Self::SetRoutes {
+                    set_id,
+                    routes: previous,
+                })
+            }
+            Self::SetShape { set_id, shape } => {
+                if let Some(spec) = &shape {
+                    spec.validate()?;
+                }
+                let set = document
+                    .sets
+                    .iter_mut()
+                    .find(|s| s.id == set_id)
+                    .ok_or(DrillError::MissingSet)?;
+                let previous = std::mem::replace(&mut set.shape, shape);
+                Ok(Self::SetShape {
+                    set_id,
+                    shape: previous,
+                })
+            }
+            Self::SetAnnotation { set_id, annotation } => {
+                if !annotation.validate() {
+                    return Err(DrillError::InvalidEdit);
+                }
+                let set = document
+                    .sets
+                    .iter_mut()
+                    .find(|s| s.id == set_id)
+                    .ok_or(DrillError::MissingSet)?;
+                let previous = std::mem::replace(&mut set.annotation, annotation);
+                Ok(Self::SetAnnotation {
+                    set_id,
+                    annotation: previous,
+                })
+            }
+            Self::ReplaceGrid {
+                grid,
+                scale_positions,
+            } => {
+                if !grid.width.is_finite()
+                    || !grid.height.is_finite()
+                    || grid.width <= 0.0
+                    || grid.height <= 0.0
+                {
+                    return Err(DrillError::InvalidGrid);
+                }
+                let previous = document.grid.clone();
+                document.replace_grid(grid, scale_positions);
+                Ok(Self::ReplaceGrid {
+                    grid: previous,
+                    scale_positions,
+                })
+            }
+            Self::SetTempoMap { tempo } => {
+                if tempo.events().iter().any(|event| {
+                    !event.count.is_finite() || !event.bpm.is_finite() || event.bpm <= 0.0
+                }) {
+                    return Err(DrillError::InvalidNumber { field: "tempo" });
+                }
+                let previous = std::mem::replace(&mut document.tempo, tempo);
+                Ok(Self::SetTempoMap { tempo: previous })
+            }
+            Self::SetAudioTrack { audio } => {
+                if audio
+                    .as_ref()
+                    .is_some_and(|track| track.validate().is_err())
+                {
+                    return Err(DrillError::InvalidNumber { field: "audio" });
+                }
+                let previous = std::mem::replace(&mut document.audio, audio);
+                Ok(Self::SetAudioTrack { audio: previous })
+            }
+            Self::SetImageUnderlay { underlay } => {
+                if underlay.as_ref().is_some_and(|value| !value.validate()) {
+                    return Err(DrillError::InvalidEdit);
+                }
+                let previous = std::mem::replace(&mut document.underlay, underlay);
+                Ok(Self::SetImageUnderlay { underlay: previous })
+            }
+            Self::RenameDocument { title } => {
+                if title.len() > MAX_TEXT_BYTES {
+                    return Err(DrillError::LimitExceeded {
+                        field: "title",
+                        limit: MAX_TEXT_BYTES,
+                    });
+                }
+                let previous = std::mem::replace(&mut document.title, title);
+                Ok(Self::RenameDocument { title: previous })
+            }
+            Self::AddSyncAnchor { id, anchor } => {
+                let track = document.audio.as_mut().ok_or(DrillError::InvalidEdit)?;
+                let mut anchors = track.anchors.clone();
+                let id = if let Some(id) = id {
+                    anchors
+                        .add_with_id(id, anchor)
+                        .map_err(|_| DrillError::InvalidEdit)?;
+                    id
+                } else {
+                    anchors.add(anchor).map_err(|_| DrillError::InvalidEdit)?
+                };
+                track.anchors = anchors;
+                Ok(Self::RemoveSyncAnchor { id })
+            }
+            Self::MoveSyncAnchor { id, anchor } => {
+                let track = document.audio.as_mut().ok_or(DrillError::InvalidEdit)?;
+                let mut anchors = track.anchors.clone();
+                let previous = anchors
+                    .move_anchor(id, anchor)
+                    .map_err(|_| DrillError::InvalidEdit)?;
+                track.anchors = anchors;
+                Ok(Self::MoveSyncAnchor {
+                    id,
+                    anchor: previous,
+                })
+            }
+            Self::RemoveSyncAnchor { id } => {
+                let track = document.audio.as_mut().ok_or(DrillError::InvalidEdit)?;
+                let mut anchors = track.anchors.clone();
+                let anchor = anchors.remove_id(id).ok_or(DrillError::InvalidEdit)?;
+                track.anchors = anchors;
+                Ok(Self::AddSyncAnchor {
+                    id: Some(id),
+                    anchor,
+                })
+            }
+            Self::AddSection { section, at } => {
+                if document.sections.iter().any(|item| item.id == section.id)
+                    || section.name.len() > MAX_TEXT_BYTES
+                    || section.short.len() > MAX_TEXT_BYTES
+                {
+                    return Err(DrillError::InvalidEdit);
+                }
+                let at = at
+                    .unwrap_or(document.sections.len())
+                    .min(document.sections.len());
+                let id = section.id;
+                document.sections.insert(at, section);
+                let reassign_to = document
+                    .sections
+                    .iter()
+                    .find(|item| item.id != id)
+                    .map_or(id, |item| item.id);
+                Ok(Self::RemoveSection { id, reassign_to })
+            }
+            Self::RenameSection { id, name, short } => {
+                if name.len() > MAX_TEXT_BYTES || short.len() > MAX_TEXT_BYTES {
+                    return Err(DrillError::InvalidEdit);
+                }
+                let section = document
+                    .sections
+                    .iter_mut()
+                    .find(|section| section.id == id)
+                    .ok_or(DrillError::InvalidEdit)?;
+                let previous_name = std::mem::replace(&mut section.name, name);
+                let previous_short = std::mem::replace(&mut section.short, short);
+                Ok(Self::RenameSection {
+                    id,
+                    name: previous_name,
+                    short: previous_short,
+                })
+            }
+            Self::RemoveSection { id, reassign_to } => {
+                if id == reassign_to || !document.sections.iter().any(|item| item.id == reassign_to)
+                {
+                    return Err(DrillError::InvalidEdit);
+                }
+                let at = document
+                    .sections
+                    .iter()
+                    .position(|section| section.id == id)
+                    .ok_or(DrillError::InvalidEdit)?;
+                let assignments = document
+                    .performers
+                    .iter()
+                    .filter(|performer| performer.section == id)
+                    .map(|performer| performer.id)
+                    .collect::<Vec<_>>();
+                let section = document.sections.remove(at);
+                for performer in &mut document.performers {
+                    if performer.section == id {
+                        performer.section = reassign_to;
+                    }
+                }
+                Ok(Self::RestoreSection {
+                    at,
+                    section,
+                    assignments,
+                    reassign_to,
+                })
+            }
+            Self::RestoreSection {
+                at,
+                section,
+                assignments,
+                reassign_to,
+            } => {
+                if document.sections.iter().any(|item| item.id == section.id)
+                    || !document.sections.iter().any(|item| item.id == reassign_to)
+                    || assignments.iter().any(|id| {
+                        !document
+                            .performers
+                            .iter()
+                            .any(|performer| performer.id == *id)
+                    })
+                {
+                    return Err(DrillError::InvalidEdit);
+                }
+                let id = section.id;
+                document
+                    .sections
+                    .insert(at.min(document.sections.len()), section);
+                for performer in &mut document.performers {
+                    if assignments.contains(&performer.id) {
+                        performer.section = id;
+                    }
+                }
+                Ok(Self::RemoveSection { id, reassign_to })
+            }
+            Self::AssignPerformersToSection { assignments } => {
+                let unique_performers = assignments
+                    .iter()
+                    .map(|(performer, _)| *performer)
+                    .collect::<BTreeSet<_>>();
+                if unique_performers.len() != assignments.len()
+                    || assignments.iter().any(|(performer, section)| {
+                        !document.performers.iter().any(|item| item.id == *performer)
+                            || !document.sections.iter().any(|item| item.id == *section)
+                    })
+                {
+                    return Err(DrillError::InvalidEdit);
+                }
+                let mut inverse = Vec::with_capacity(assignments.len());
+                for (performer_id, section_id) in assignments {
+                    let performer = document
+                        .performers
+                        .iter_mut()
+                        .find(|item| item.id == performer_id)
+                        .ok_or(DrillError::InvalidEdit)?;
+                    inverse.push((performer_id, performer.section));
+                    performer.section = section_id;
+                }
+                Ok(Self::AssignPerformersToSection {
+                    assignments: inverse,
+                })
+            }
+            Self::AddSubset { mut subset, at } => {
+                if document.subsets.len() >= MAX_SUBSETS
+                    || document.subsets.iter().any(|item| item.id == subset.id)
+                    || subset.name.is_empty()
+                    || subset.name.len() > MAX_TEXT_BYTES
+                {
+                    return Err(DrillError::InvalidEdit);
+                }
+                subset.members.sort_unstable();
+                subset.members.dedup();
+                if subset.members.iter().any(|id| {
+                    !document
+                        .performers
+                        .iter()
+                        .any(|performer| performer.id == *id)
+                }) {
+                    return Err(DrillError::InvalidEdit);
+                }
+                let id = subset.id;
+                let at = at
+                    .unwrap_or(document.subsets.len())
+                    .min(document.subsets.len());
+                document.subsets.insert(at, subset);
+                Ok(Self::RemoveSubset { id })
+            }
+            Self::RenameSubset { id, name } => {
+                if name.is_empty() || name.len() > MAX_TEXT_BYTES {
+                    return Err(DrillError::InvalidEdit);
+                }
+                let subset = document
+                    .subsets
+                    .iter_mut()
+                    .find(|subset| subset.id == id)
+                    .ok_or(DrillError::MissingSubset)?;
+                let previous = std::mem::replace(&mut subset.name, name);
+                Ok(Self::RenameSubset { id, name: previous })
+            }
+            Self::SetSubsetMembers { id, mut members } => {
+                members.sort_unstable();
+                members.dedup();
+                if members.iter().any(|id| {
+                    !document
+                        .performers
+                        .iter()
+                        .any(|performer| performer.id == *id)
+                }) {
+                    return Err(DrillError::InvalidEdit);
+                }
+                let subset = document
+                    .subsets
+                    .iter_mut()
+                    .find(|subset| subset.id == id)
+                    .ok_or(DrillError::MissingSubset)?;
+                let previous = std::mem::replace(&mut subset.members, members);
+                Ok(Self::SetSubsetMembers {
+                    id,
+                    members: previous,
+                })
+            }
+            Self::RemoveSubset { id } => {
+                let at = document
+                    .subsets
+                    .iter()
+                    .position(|subset| subset.id == id)
+                    .ok_or(DrillError::MissingSubset)?;
+                let subset = document.subsets.remove(at);
+                Ok(Self::AddSubset {
+                    subset,
+                    at: Some(at),
+                })
+            }
+            Self::SetPerformerMetadata {
+                performer,
+                metadata,
+            } => {
+                if metadata.label.len() > MAX_TEXT_BYTES
+                    || !metadata.height_m.is_finite()
+                    || !(0.2..=3.0).contains(&metadata.height_m)
+                {
+                    return Err(DrillError::InvalidEdit);
+                }
+                let target = document
+                    .performers
+                    .iter_mut()
+                    .find(|item| item.id == performer)
+                    .ok_or(DrillError::InvalidEdit)?;
+                let previous = target.metadata();
+                target.label = metadata.label;
+                target.symbol = metadata.symbol;
+                target.color = metadata.color.into();
+                target.height_m = metadata.height_m;
+                target.kind = metadata.kind;
+                Ok(Self::SetPerformerMetadata {
+                    performer,
+                    metadata: previous,
+                })
+            }
+            Self::InsertCameraKeyframe {
+                camera_id,
+                keyframe,
+            } => {
+                let track = document
+                    .camera_program
+                    .tracks
+                    .iter_mut()
+                    .find(|track| track.id == camera_id)
+                    .ok_or(DrillError::InvalidEdit)?;
+                let count = keyframe.count;
+                match track.insert_keyframe(keyframe)? {
+                    Some(previous) => Ok(Self::InsertCameraKeyframe {
+                        camera_id,
+                        keyframe: previous,
+                    }),
+                    None => Ok(Self::RemoveCameraKeyframe { camera_id, count }),
+                }
+            }
+            Self::RemoveCameraKeyframe { camera_id, count } => {
+                let track = document
+                    .camera_program
+                    .tracks
+                    .iter_mut()
+                    .find(|track| track.id == camera_id)
+                    .ok_or(DrillError::InvalidEdit)?;
+                let keyframe = track
+                    .remove_keyframe(count)
+                    .ok_or(DrillError::InvalidEdit)?;
+                Ok(Self::InsertCameraKeyframe {
+                    camera_id,
+                    keyframe,
+                })
+            }
+            Self::InsertCameraCut { cut } => {
+                let count = cut.count;
+                match document.camera_program.insert_cut(cut)? {
+                    Some(previous) => Ok(Self::InsertCameraCut { cut: previous }),
+                    None => Ok(Self::RemoveCameraCut { count }),
+                }
+            }
+            Self::RemoveCameraCut { count } => {
+                let cut = document
+                    .camera_program
+                    .remove_cut(count)
+                    .ok_or(DrillError::InvalidEdit)?;
+                Ok(Self::InsertCameraCut { cut })
+            }
+        }
     }
 }
 
@@ -411,29 +1419,68 @@ pub struct MoveCommand {
     pub after: Vec<Point>,
 }
 
+#[derive(Clone, Debug)]
+enum HistoryEntry {
+    Stable(Edit),
+    Legacy(MoveCommand),
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Revision(pub u64);
+
 #[derive(Debug, Default)]
 pub struct History {
-    commands: Vec<MoveCommand>,
+    commands: VecDeque<HistoryEntry>,
     cursor: usize,
     limit: usize,
+    savepoint: Option<usize>,
+    revision: Revision,
 }
 
 impl History {
     pub fn with_limit(limit: usize) -> Self {
         Self {
-            commands: Vec::new(),
+            commands: VecDeque::new(),
             cursor: 0,
             limit,
+            savepoint: Some(0),
+            revision: Revision::default(),
         }
     }
 
     pub fn push(&mut self, command: MoveCommand) {
-        self.commands.truncate(self.cursor);
-        self.commands.push(command);
+        self.prepare_push();
+        self.commands.push_back(HistoryEntry::Legacy(command));
+        self.finish_push();
+    }
+
+    /// Applies and records a stable-ID edit. New code should use this instead
+    /// of the index-based [`MoveCommand`] adapter.
+    pub fn execute(&mut self, document: &mut Document, edit: Edit) -> Result<(), DrillError> {
+        let inverse = edit.apply(document)?;
+        self.prepare_push();
+        self.commands.push_back(HistoryEntry::Stable(inverse));
+        self.finish_push();
+        Ok(())
+    }
+
+    fn finish_push(&mut self) {
         if self.commands.len() > self.limit {
-            self.commands.remove(0);
+            self.commands.pop_front();
+            self.savepoint = self.savepoint.and_then(|position| position.checked_sub(1));
         }
         self.cursor = self.commands.len();
+        self.revision.0 = self.revision.0.wrapping_add(1);
+    }
+
+    fn prepare_push(&mut self) {
+        if self
+            .savepoint
+            .is_some_and(|position| position > self.cursor)
+        {
+            self.savepoint = None;
+        }
+        self.commands.truncate(self.cursor);
     }
 
     pub fn undo(&mut self, document: &mut Document) -> bool {
@@ -441,17 +1488,51 @@ impl History {
             return false;
         }
         self.cursor -= 1;
-        self.commands[self.cursor].apply(document, false);
-        true
+        let success = match self.commands.get(self.cursor).cloned() {
+            Some(HistoryEntry::Stable(edit)) => match edit.apply(document) {
+                Ok(inverse) => {
+                    self.commands[self.cursor] = HistoryEntry::Stable(inverse);
+                    true
+                }
+                Err(_) => false,
+            },
+            Some(HistoryEntry::Legacy(command)) => {
+                command.apply(document, false);
+                true
+            }
+            None => false,
+        };
+        if success {
+            self.revision.0 = self.revision.0.wrapping_add(1);
+        } else {
+            self.cursor += 1;
+        }
+        success
     }
 
     pub fn redo(&mut self, document: &mut Document) -> bool {
         if self.cursor == self.commands.len() {
             return false;
         }
-        self.commands[self.cursor].apply(document, true);
-        self.cursor += 1;
-        true
+        let success = match self.commands.get(self.cursor).cloned() {
+            Some(HistoryEntry::Stable(edit)) => match edit.apply(document) {
+                Ok(inverse) => {
+                    self.commands[self.cursor] = HistoryEntry::Stable(inverse);
+                    true
+                }
+                Err(_) => false,
+            },
+            Some(HistoryEntry::Legacy(command)) => {
+                command.apply(document, true);
+                true
+            }
+            None => false,
+        };
+        if success {
+            self.cursor += 1;
+            self.revision.0 = self.revision.0.wrapping_add(1);
+        }
+        success
     }
 
     pub fn can_undo(&self) -> bool {
@@ -459,6 +1540,18 @@ impl History {
     }
     pub fn can_redo(&self) -> bool {
         self.cursor < self.commands.len()
+    }
+
+    pub fn mark_saved(&mut self) {
+        self.savepoint = Some(self.cursor);
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.savepoint != Some(self.cursor)
+    }
+
+    pub fn revision(&self) -> Revision {
+        self.revision
     }
 }
 
@@ -506,7 +1599,7 @@ mod tests {
         let mut document = Document::demo(2, 2);
         document.schema_version = u16::MAX;
         let error = Document::from_json(&document.to_json().unwrap()).unwrap_err();
-        assert!(error.contains("未対応"));
+        assert!(matches!(error, DrillError::UnsupportedSchema { .. }));
     }
 
     #[test]
@@ -514,7 +1607,39 @@ mod tests {
         let mut document = Document::demo(2, 2);
         document.sets[1].positions.pop();
         let error = Document::from_json(&document.to_json().unwrap()).unwrap_err();
-        assert!(error.contains("演者数"));
+        assert!(matches!(error, DrillError::SetSizeMismatch { .. }));
+    }
+
+    #[test]
+    fn migrates_v1_without_changing_drill_content() {
+        let mut document = Document::demo(2, 2);
+        document.schema_version = 1;
+        let loaded = Document::from_json(&document.to_json().unwrap()).unwrap();
+        assert_eq!(loaded.schema_version, SCHEMA_VERSION);
+        assert_eq!(loaded.performers.len(), document.performers.len());
+        assert_eq!(loaded.sets[0].positions, document.sets[0].positions);
+    }
+
+    #[test]
+    fn rejects_non_finite_domain_values() {
+        let mut document = Document::demo(2, 2);
+        document.sets[0].positions[0].x = f32::NAN;
+        assert!(matches!(
+            document.validate(),
+            Err(DrillError::InvalidNumber { .. })
+        ));
+        document.sets[0].positions[0].x = 1.0;
+        document.grid.width = f32::INFINITY;
+        assert_eq!(document.validate(), Err(DrillError::InvalidGrid));
+    }
+
+    #[test]
+    fn empty_document_positions_are_safe() {
+        let mut document = Document::demo(1, 1);
+        document.sets.clear();
+        let mut output = vec![Point { x: 1.0, y: 1.0 }];
+        document.positions_at(0, 0.5, &mut output);
+        assert!(output.is_empty());
     }
 
     #[test]
@@ -558,6 +1683,441 @@ mod tests {
     }
 
     #[test]
+    fn replace_document_is_atomic_and_undoable() {
+        let mut current = Document::demo(2, 2);
+        let before = current.clone();
+        let mut imported = Document::demo(3, 3);
+        imported.title = "Imported selection".into();
+        let after = imported.clone();
+        let mut history = History::with_limit(10);
+        history
+            .execute(
+                &mut current,
+                Edit::ReplaceDocument {
+                    document: Box::new(imported),
+                },
+            )
+            .unwrap();
+        assert_eq!(current, after);
+        assert!(history.undo(&mut current));
+        assert_eq!(current, before);
+        assert!(history.redo(&mut current));
+        assert_eq!(current, after);
+    }
+
+    #[test]
+    fn stable_edit_survives_performer_and_set_reordering() {
+        let mut doc = Document::demo(2, 2);
+        let set_id = doc.sets[0].id;
+        let performer_id = doc.performers[0].id;
+        let original = doc.sets[0].positions[0];
+        let mut history = History::with_limit(10);
+        history
+            .execute(
+                &mut doc,
+                Edit::MovePerformers {
+                    set_id,
+                    performer_ids: vec![performer_id],
+                    positions: vec![Point { x: 99.0, y: 98.0 }],
+                },
+            )
+            .unwrap();
+
+        doc.sets.swap(0, 1);
+        doc.performers.swap(0, 3);
+        for set in &mut doc.sets {
+            set.positions.swap(0, 3);
+        }
+        assert!(history.undo(&mut doc));
+        let set = doc.sets.iter().find(|set| set.id == set_id).unwrap();
+        let performer_index = doc
+            .performers
+            .iter()
+            .position(|performer| performer.id == performer_id)
+            .unwrap();
+        assert_eq!(set.positions[performer_index], original);
+        assert!(history.redo(&mut doc));
+        assert_eq!(
+            doc.sets[1].positions[performer_index],
+            Point { x: 99.0, y: 98.0 }
+        );
+    }
+
+    #[test]
+    fn stable_edit_fails_atomically_after_target_deletion() {
+        let mut doc = Document::demo(1, 2);
+        let set_id = doc.sets[0].id;
+        let deleted_id = doc.performers.remove(0).id;
+        for set in &mut doc.sets {
+            set.positions.remove(0);
+        }
+        let before = doc.sets[0].positions.clone();
+        let result = Edit::MovePerformers {
+            set_id,
+            performer_ids: vec![deleted_id],
+            positions: vec![Point { x: 9.0, y: 9.0 }],
+        }
+        .apply(&mut doc);
+        assert_eq!(result, Err(DrillError::MissingPerformer));
+        assert_eq!(doc.sets[0].positions, before);
+    }
+
+    #[test]
+    fn ten_thousand_stable_undo_redo_round_trips() {
+        let mut doc = Document::demo(1, 1);
+        let set_id = doc.sets[0].id;
+        let performer_id = doc.performers[0].id;
+        let original = doc.sets[0].positions[0];
+        let mut history = History::with_limit(10_000);
+        for i in 0..10_000 {
+            history
+                .execute(
+                    &mut doc,
+                    Edit::MovePerformers {
+                        set_id,
+                        performer_ids: vec![performer_id],
+                        positions: vec![Point {
+                            x: i as f32,
+                            y: 1.0,
+                        }],
+                    },
+                )
+                .unwrap();
+        }
+        history.mark_saved();
+        assert!(!history.is_dirty());
+        for _ in 0..10_000 {
+            assert!(history.undo(&mut doc));
+        }
+        assert_eq!(doc.sets[0].positions[0], original);
+        assert!(history.is_dirty());
+        for _ in 0..10_000 {
+            assert!(history.redo(&mut doc));
+        }
+        assert_eq!(doc.sets[0].positions[0], Point { x: 9_999.0, y: 1.0 });
+        assert!(!history.is_dirty());
+        assert!(history.revision().0 >= 30_000);
+    }
+
+    #[test]
+    fn migration_assigns_stable_set_ids_when_absent() {
+        let doc = Document::demo(1, 1);
+        let mut value = serde_json::to_value(doc).unwrap();
+        for set in value["sets"].as_array_mut().unwrap() {
+            set.as_object_mut().unwrap().remove("id");
+        }
+        let loaded = Document::from_json(&serde_json::to_string(&value).unwrap()).unwrap();
+        assert_ne!(loaded.sets[0].id, loaded.sets[1].id);
+    }
+
+    #[test]
+    fn document_setting_edits_are_reversible() {
+        let mut doc = Document::demo(1, 1);
+        let original_grid = doc.grid.clone();
+        let original_tempo = doc.tempo.events().to_vec();
+        let mut history = History::with_limit(20);
+
+        history
+            .execute(
+                &mut doc,
+                Edit::RenameDocument {
+                    title: "Renamed".into(),
+                },
+            )
+            .unwrap();
+        history
+            .execute(
+                &mut doc,
+                Edit::ReplaceGrid {
+                    grid: GridConfig::indoor(),
+                    scale_positions: false,
+                },
+            )
+            .unwrap();
+        history
+            .execute(
+                &mut doc,
+                Edit::SetTempoMap {
+                    tempo: tempo::TempoMap::constant(90.0),
+                },
+            )
+            .unwrap();
+        history
+            .execute(
+                &mut doc,
+                Edit::SetAudioTrack {
+                    audio: Some(audio::AudioTrack {
+                        path: "audio.wav".into(),
+                        duration_seconds: 10.0,
+                        ..audio::AudioTrack::default()
+                    }),
+                },
+            )
+            .unwrap();
+        for _ in 0..4 {
+            assert!(history.undo(&mut doc));
+        }
+        assert_eq!(doc.title, "新しいドリル");
+        assert_eq!(doc.grid, original_grid);
+        assert_eq!(doc.tempo.events(), original_tempo);
+        assert!(doc.audio.is_none());
+        for _ in 0..4 {
+            assert!(history.redo(&mut doc));
+        }
+        assert_eq!(doc.title, "Renamed");
+        assert_eq!(doc.tempo.bpm_at(0.0), 90.0);
+        assert!(doc.audio.is_some());
+    }
+
+    #[test]
+    fn invalid_setting_edit_is_atomic() {
+        let mut doc = Document::demo(1, 1);
+        let before = doc.grid.clone();
+        let mut invalid = before.clone();
+        invalid.width = f32::NAN;
+        assert_eq!(
+            Edit::ReplaceGrid {
+                grid: invalid,
+                scale_positions: true,
+            }
+            .apply(&mut doc),
+            Err(DrillError::InvalidGrid)
+        );
+        assert_eq!(doc.grid, before);
+    }
+
+    #[test]
+    fn anchor_edits_are_id_stable_and_reversible() {
+        let mut doc = Document::demo(1, 1);
+        doc.audio = Some(audio::AudioTrack {
+            duration_seconds: 30.0,
+            ..audio::AudioTrack::default()
+        });
+        let mut history = History::with_limit(20);
+        for anchor in [
+            audio::SyncAnchor {
+                count: 0.0,
+                seconds: 0.0,
+            },
+            audio::SyncAnchor {
+                count: 8.0,
+                seconds: 4.0,
+            },
+        ] {
+            history
+                .execute(&mut doc, Edit::AddSyncAnchor { id: None, anchor })
+                .unwrap();
+        }
+        let second_id = doc.audio.as_ref().unwrap().anchors.id_at(1).unwrap();
+        history
+            .execute(
+                &mut doc,
+                Edit::MoveSyncAnchor {
+                    id: second_id,
+                    anchor: audio::SyncAnchor {
+                        count: 10.0,
+                        seconds: 5.0,
+                    },
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            doc.audio
+                .as_ref()
+                .unwrap()
+                .anchors
+                .get(second_id)
+                .unwrap()
+                .count,
+            10.0
+        );
+        assert!(history.undo(&mut doc));
+        assert_eq!(
+            doc.audio
+                .as_ref()
+                .unwrap()
+                .anchors
+                .get(second_id)
+                .unwrap()
+                .count,
+            8.0
+        );
+        assert!(history.redo(&mut doc));
+        assert_eq!(
+            doc.audio
+                .as_ref()
+                .unwrap()
+                .anchors
+                .get(second_id)
+                .unwrap()
+                .count,
+            10.0
+        );
+        history
+            .execute(&mut doc, Edit::RemoveSyncAnchor { id: second_id })
+            .unwrap();
+        assert!(doc.audio.as_ref().unwrap().anchors.get(second_id).is_none());
+        assert!(history.undo(&mut doc));
+        assert_eq!(
+            doc.audio
+                .as_ref()
+                .unwrap()
+                .anchors
+                .get(second_id)
+                .unwrap()
+                .count,
+            10.0
+        );
+    }
+
+    #[test]
+    fn ten_thousand_anchor_drag_edits_share_a_stable_coalesce_key() {
+        let anchors = audio::AnchorMap::try_from_anchors([audio::SyncAnchor {
+            count: 0.0,
+            seconds: 0.0,
+        }])
+        .unwrap();
+        let id = anchors.id_at(0).unwrap();
+        let expected = EditCoalesceKey::MoveSyncAnchor(id);
+        for i in 0..10_000 {
+            let edit = Edit::MoveSyncAnchor {
+                id,
+                anchor: audio::SyncAnchor {
+                    count: i as f64 / 100.0,
+                    seconds: i as f64 / 200.0,
+                },
+            };
+            assert_eq!(edit.coalesce_key(), Some(expected));
+        }
+    }
+
+    #[test]
+    fn section_and_performer_metadata_edits_round_trip() {
+        let mut doc = Document::demo(1, 2);
+        let ensemble = doc.sections[0].id;
+        let guard = SectionId::new(2).unwrap();
+        let performer = doc.performers[0].id;
+        let original_metadata = doc.performers[0].metadata();
+        let mut history = History::with_limit(20);
+        history
+            .execute(
+                &mut doc,
+                Edit::AddSection {
+                    section: Section {
+                        id: guard,
+                        name: "Guard".into(),
+                        short: "CG".into(),
+                        color: [255, 0, 128],
+                        order: 1,
+                    },
+                    at: None,
+                },
+            )
+            .unwrap();
+        history
+            .execute(
+                &mut doc,
+                Edit::AssignPerformersToSection {
+                    assignments: vec![(performer, guard)],
+                },
+            )
+            .unwrap();
+        history
+            .execute(
+                &mut doc,
+                Edit::RenameSection {
+                    id: guard,
+                    name: "Color Guard".into(),
+                    short: "Guard".into(),
+                },
+            )
+            .unwrap();
+        history
+            .execute(
+                &mut doc,
+                Edit::SetPerformerMetadata {
+                    performer,
+                    metadata: PerformerMetadata {
+                        label: "G1".into(),
+                        symbol: Symbol::Diamond,
+                        color: None,
+                        height_m: 1.8,
+                        kind: PerformerKind::Guard,
+                    },
+                },
+            )
+            .unwrap();
+        history
+            .execute(
+                &mut doc,
+                Edit::RemoveSection {
+                    id: guard,
+                    reassign_to: ensemble,
+                },
+            )
+            .unwrap();
+        assert_eq!(doc.performers[0].section, ensemble);
+        assert!(history.undo(&mut doc));
+        assert_eq!(doc.performers[0].section, guard);
+        for _ in 0..4 {
+            assert!(history.undo(&mut doc));
+        }
+        assert_eq!(doc.sections.len(), 1);
+        assert_eq!(doc.performers[0].section, ensemble);
+        assert_eq!(doc.performers[0].metadata(), original_metadata);
+        for _ in 0..5 {
+            assert!(history.redo(&mut doc));
+        }
+        assert_eq!(doc.performers[0].section, ensemble);
+        assert_eq!(doc.performers[0].kind, PerformerKind::Guard);
+    }
+
+    #[test]
+    fn invalid_section_assignment_is_atomic() {
+        let mut doc = Document::demo(1, 2);
+        let before = doc.performers.iter().map(|p| p.section).collect::<Vec<_>>();
+        let missing = SectionId::new(99).unwrap();
+        let result = Edit::AssignPerformersToSection {
+            assignments: vec![(doc.performers[0].id, missing)],
+        }
+        .apply(&mut doc);
+        assert_eq!(result, Err(DrillError::InvalidEdit));
+        assert_eq!(
+            doc.performers.iter().map(|p| p.section).collect::<Vec<_>>(),
+            before
+        );
+    }
+
+    #[test]
+    fn legacy_roster_json_migrates_without_visual_color_change() {
+        let doc = Document::demo(1, 2);
+        let expected = doc.performers[0].resolved_color(&doc.sections);
+        let mut value = serde_json::to_value(doc).unwrap();
+        value.as_object_mut().unwrap().remove("sections");
+        for performer in value["performers"].as_array_mut().unwrap() {
+            let object = performer.as_object_mut().unwrap();
+            object.remove("section");
+            object.remove("symbol");
+            object.remove("height_m");
+            object.remove("kind");
+        }
+        let loaded = Document::from_json(&serde_json::to_string(&value).unwrap()).unwrap();
+        assert_eq!(loaded.sections.len(), 1);
+        assert!(
+            loaded
+                .performers
+                .iter()
+                .all(|p| p.section == loaded.sections[0].id)
+        );
+        assert_eq!(
+            loaded.performers[0].resolved_color(&loaded.sections),
+            expected
+        );
+        assert_eq!(loaded.performers[0].height_m, 1.7);
+        assert_eq!(loaded.performers[0].symbol, Symbol::Circle);
+    }
+
+    #[test]
     fn grid_snap_uses_independent_step_sizes() {
         let grid = GridConfig {
             horizontal_steps: 8,
@@ -569,6 +2129,32 @@ mod tests {
         assert_eq!(
             grid.snap(Point { x: 1.1, y: 1.1 }),
             Point { x: 1.25, y: 1.25 }
+        );
+    }
+
+    #[test]
+    fn coordinate_notation_change_is_a_single_undoable_grid_edit() {
+        let mut doc = Document::demo(1, 1);
+        let mut grid = doc.grid.clone();
+        grid.coordinate_notation = coordinates::CoordinateNotation::dci();
+        let mut history = History::with_limit(4);
+        history
+            .execute(
+                &mut doc,
+                Edit::ReplaceGrid {
+                    grid,
+                    scale_positions: false,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            doc.grid.coordinate_notation,
+            coordinates::CoordinateNotation::dci()
+        );
+        assert!(history.undo(&mut doc));
+        assert_eq!(
+            doc.grid.coordinate_notation,
+            coordinates::CoordinateNotation::default()
         );
     }
 
@@ -620,6 +2206,39 @@ mod tests {
     }
 
     #[test]
+    fn camera_keyframe_edit_is_stable_and_reversible() {
+        let mut doc = Document::demo(1, 2);
+        let camera_id = doc.camera_program.tracks[0].id;
+        let before = doc.camera_program.clone();
+        let keyframe =
+            camera::CameraKeyframe::from_camera(8.0, camera::Camera::overhead(&doc.grid));
+        let inverse = Edit::InsertCameraKeyframe {
+            camera_id,
+            keyframe,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(doc.camera_program.tracks[0].keyframes().len(), 2);
+        inverse.apply(&mut doc).unwrap();
+        assert_eq!(doc.camera_program, before);
+    }
+
+    #[test]
+    fn camera_cut_edit_is_reversible() {
+        let mut doc = Document::demo(2, 2);
+        let before = doc.camera_program.clone();
+        let camera = doc.camera_program.tracks[0].id;
+        let inverse = Edit::InsertCameraCut {
+            cut: camera::CameraCut { count: 1.0, camera },
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(doc.camera_program.cuts.len(), before.cuts.len() + 1);
+        inverse.apply(&mut doc).unwrap();
+        assert_eq!(doc.camera_program, before);
+    }
+
+    #[test]
     fn transition_analysis_finds_collisions_and_long_strides() {
         let mut doc = Document::demo(1, 2);
         doc.sets[1].positions[0] = Point { x: 90.0, y: 40.0 };
@@ -627,5 +2246,247 @@ mod tests {
         let result = analyze_transition(&doc, 0, 0.5, 1.0);
         assert_eq!(result.collisions, 1);
         assert!(result.excessive_strides > 0);
+    }
+
+    #[test]
+    fn subset_edits_are_canonical_and_fully_reversible() {
+        let mut doc = Document::demo(1, 3);
+        let original = doc.clone();
+        let id = SubsetId::new(7).unwrap();
+        let inverse = Edit::AddSubset {
+            subset: Subset {
+                id,
+                name: "Soloists".into(),
+                members: vec![
+                    doc.performers[2].id,
+                    doc.performers[0].id,
+                    doc.performers[0].id,
+                ],
+            },
+            at: None,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(
+            doc.subsets[0].members,
+            vec![doc.performers[0].id, doc.performers[2].id]
+        );
+        assert!(doc.validate().is_ok());
+        inverse.apply(&mut doc).unwrap();
+        assert_eq!(doc, original);
+    }
+
+    #[test]
+    fn subset_rename_members_and_remove_round_trip_through_history() {
+        let mut doc = Document::demo(1, 3);
+        let id = SubsetId::new(4).unwrap();
+        Edit::AddSubset {
+            subset: Subset {
+                id,
+                name: "A".into(),
+                members: vec![],
+            },
+            at: None,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let before = doc.clone();
+        let mut history = History::with_limit(20);
+        let member = doc.performers[1].id;
+        history
+            .execute(
+                &mut doc,
+                Edit::RenameSubset {
+                    id,
+                    name: "Featured".into(),
+                },
+            )
+            .unwrap();
+        history
+            .execute(
+                &mut doc,
+                Edit::SetSubsetMembers {
+                    id,
+                    members: vec![member],
+                },
+            )
+            .unwrap();
+        history
+            .execute(&mut doc, Edit::RemoveSubset { id })
+            .unwrap();
+        assert!(doc.subsets.is_empty());
+        assert!(history.undo(&mut doc));
+        assert!(history.undo(&mut doc));
+        assert!(history.undo(&mut doc));
+        assert_eq!(doc, before);
+        assert!(history.redo(&mut doc));
+        assert!(history.redo(&mut doc));
+        assert_eq!(doc.subsets[0].name, "Featured");
+        assert_eq!(doc.subsets[0].members, vec![doc.performers[1].id]);
+    }
+
+    #[test]
+    fn schema_two_migrates_with_empty_subsets() {
+        let doc = Document::demo(1, 1);
+        let mut value = serde_json::to_value(&doc).unwrap();
+        value["schema_version"] = serde_json::json!(2);
+        value.as_object_mut().unwrap().remove("subsets");
+        let loaded = Document::from_json(&serde_json::to_string(&value).unwrap()).unwrap();
+        assert_eq!(loaded.schema_version, SCHEMA_VERSION);
+        assert!(loaded.subsets.is_empty());
+    }
+
+    #[test]
+    fn snapshots_compare_by_stable_identity() {
+        let left = snapshot::DocumentSnapshot::capture("main", &Document::demo(1, 2)).unwrap();
+        let mut changed = left.document.clone();
+        let performer = changed.performers[0].id;
+        changed.performers[0].label = "Lead".into();
+        changed.sets[0].positions.swap(0, 1);
+        let right = snapshot::DocumentSnapshot::capture("idea", &changed).unwrap();
+        let diff = left.compare(&right);
+        assert_eq!(diff.changed_performers, vec![performer]);
+        assert_eq!(diff.changed_sets, vec![changed.sets[0].id]);
+        assert!(!diff.is_empty());
+    }
+
+    #[test]
+    fn set_annotation_edit_is_persistent_and_reversible() {
+        let mut doc = Document::demo(1, 1);
+        let set_id = doc.sets[0].id;
+        let annotation = SetAnnotation {
+            title: "Finale".into(),
+            notes: "Lights: blue".into(),
+            rehearsal_mark: "Z".into(),
+            tempo_bpm: Some(168.0),
+            sync_time_seconds: Some(42.25),
+            transition_duration_seconds: Some(7.5),
+        };
+        let mut history = History::with_limit(10);
+        history
+            .execute(
+                &mut doc,
+                Edit::SetAnnotation {
+                    set_id,
+                    annotation: annotation.clone(),
+                },
+            )
+            .unwrap();
+        assert_eq!(doc.sets[0].annotation, annotation);
+        assert!(history.undo(&mut doc));
+        assert_eq!(doc.sets[0].annotation, SetAnnotation::default());
+        assert!(history.redo(&mut doc));
+        assert_eq!(doc.sets[0].annotation, annotation);
+        let loaded = Document::from_json(&doc.to_json().unwrap()).unwrap();
+        assert_eq!(loaded.sets[0].annotation, doc.sets[0].annotation);
+    }
+
+    #[test]
+    fn invalid_set_annotation_is_rejected_atomically() {
+        let mut doc = Document::demo(1, 1);
+        let before = doc.clone();
+        let result = Edit::SetAnnotation {
+            set_id: doc.sets[0].id,
+            annotation: SetAnnotation {
+                tempo_bpm: Some(f32::NAN),
+                ..SetAnnotation::default()
+            },
+        }
+        .apply(&mut doc);
+        assert_eq!(result, Err(DrillError::InvalidEdit));
+        assert_eq!(doc, before);
+    }
+
+    #[test]
+    fn parametric_shape_is_persistent_validated_and_reversible() {
+        let mut doc = Document::demo(2, 3);
+        let set_id = doc.sets[0].id;
+        let shape = shapes::ShapeSpec::Ellipse {
+            center: Point { x: 50.0, y: 42.0 },
+            radius_x: 20.0,
+            radius_y: 8.0,
+            rotation: 0.25,
+        };
+        let mut history = History::with_limit(8);
+        history
+            .execute(
+                &mut doc,
+                Edit::SetShape {
+                    set_id,
+                    shape: Some(shape.clone()),
+                },
+            )
+            .unwrap();
+        assert_eq!(doc.sets[0].shape.as_ref(), Some(&shape));
+        assert!(history.undo(&mut doc));
+        assert!(doc.sets[0].shape.is_none());
+        assert!(history.redo(&mut doc));
+        let loaded = Document::from_json(&doc.to_json().unwrap()).unwrap();
+        assert_eq!(loaded.sets[0].shape, Some(shape));
+
+        let before = doc.clone();
+        let invalid = shapes::ShapeSpec::Circle {
+            center: Point::default(),
+            radius: -1.0,
+        };
+        assert!(
+            Edit::SetShape {
+                set_id,
+                shape: Some(invalid)
+            }
+            .apply(&mut doc)
+            .is_err()
+        );
+        assert_eq!(doc, before);
+    }
+
+    #[test]
+    fn image_underlay_is_schema_migrated_persistent_and_undoable() {
+        let mut doc = Document::demo(1, 1);
+        let underlay = underlay::ImageUnderlay {
+            content_hash: "ab".repeat(32),
+            byte_len: 1_024,
+            original_name: "reference.png".into(),
+            external_path: Some("reference.png".into()),
+            placement: underlay::UnderlayPlacement {
+                x: 4.0,
+                y: 5.0,
+                scale_x: 0.8,
+                scale_y: 0.7,
+                rotation_radians: 0.2,
+                opacity: 0.4,
+                visible: true,
+                render_policy: underlay::UnderlayRenderPolicy::Editor2dOnly,
+            },
+        };
+        let mut history = History::with_limit(4);
+        history
+            .execute(
+                &mut doc,
+                Edit::SetImageUnderlay {
+                    underlay: Some(underlay.clone()),
+                },
+            )
+            .unwrap();
+        assert_eq!(doc.underlay.as_ref(), Some(&underlay));
+        assert!(history.undo(&mut doc));
+        assert!(doc.underlay.is_none());
+        assert!(history.redo(&mut doc));
+        assert_eq!(
+            Document::from_json(&doc.to_json().unwrap())
+                .unwrap()
+                .underlay,
+            Some(underlay)
+        );
+
+        let mut legacy: serde_json::Value = serde_json::from_str(&doc.to_json().unwrap()).unwrap();
+        legacy["schema_version"] = serde_json::json!(3);
+        legacy.as_object_mut().unwrap().remove("underlay");
+        assert!(
+            Document::from_json(&legacy.to_string())
+                .unwrap()
+                .underlay
+                .is_none()
+        );
     }
 }

@@ -63,21 +63,22 @@ pub fn advance(
     } else {
         1.0
     };
-    let target_seconds = tempo.seconds_at(current) + elapsed * speed;
-    let end_seconds = tempo.seconds_at(range.end);
+    let target_seconds =
+        tempo.seconds_at_f64(f64::from(current)) + f64::from(elapsed) * f64::from(speed);
+    let end_seconds = tempo.seconds_at_f64(f64::from(range.end));
     if target_seconds < end_seconds {
-        return AdvanceResult::Running(tempo.count_at(target_seconds));
+        return AdvanceResult::Running(tempo.count_at_f64(target_seconds) as f32);
     }
     if !looping {
         return AdvanceResult::Stopped(range.end);
     }
-    let start_seconds = tempo.seconds_at(range.start);
+    let start_seconds = tempo.seconds_at_f64(f64::from(range.start));
     let duration = end_seconds - start_seconds;
-    if duration <= f32::EPSILON {
+    if duration <= f64::EPSILON {
         return AdvanceResult::Stopped(range.start);
     }
     let wrapped_seconds = start_seconds + (target_seconds - start_seconds).rem_euclid(duration);
-    AdvanceResult::Looped(tempo.count_at(wrapped_seconds))
+    AdvanceResult::Looped(tempo.count_at_f64(wrapped_seconds) as f32)
 }
 
 fn finite_non_negative(value: f32) -> f32 {
@@ -177,5 +178,30 @@ mod tests {
             advance(f32::NAN, -1.0, f32::NAN, range, true, &tempo),
             AdvanceResult::Stopped(0.0)
         );
+    }
+
+    #[test]
+    fn many_small_steps_match_one_large_step() {
+        let tempo = TempoMap::from_changes([
+            TempoChange {
+                count: 0.0,
+                bpm: 137.0,
+            },
+            TempoChange {
+                count: 64.0,
+                bpm: 83.0,
+            },
+            TempoChange {
+                count: 128.0,
+                bpm: 191.0,
+            },
+        ]);
+        let range = PlaybackRange::new(0.0, 256.0, 256.0);
+        let one = advance(0.0, 10.0, 1.0, range, false, &tempo).count();
+        let mut many = 0.0;
+        for _ in 0..600 {
+            many = advance(many, 1.0 / 60.0, 1.0, range, false, &tempo).count();
+        }
+        assert!((one - many).abs() < 1e-3, "{one} != {many}");
     }
 }

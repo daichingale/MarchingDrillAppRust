@@ -181,7 +181,7 @@ pub fn field_svg(doc: &Document, set_index: usize, width_px: f32, height_px: f32
     for (i, performer) in doc.performers.iter().enumerate() {
         let p = set.positions.get(i).copied().unwrap_or_default();
         let (cx, cy) = map(p.x, p.y);
-        let color = hex_color(performer.color);
+        let color = hex_color(performer.resolved_color(&doc.sections));
         let _ = write!(
             body,
             "<circle cx=\"{}\" cy=\"{}\" r=\"7\" fill=\"{}\" stroke=\"#000000\" \
@@ -245,26 +245,42 @@ fn print_style() -> &'static str {
 /// row and one data row per (performer, set) carrying the performer label, set
 /// name, counts and the human-readable coordinate.
 pub fn coordinate_sheet_html(doc: &Document) -> String {
+    coordinate_sheet_html_localized(doc, crate::Locale::Ja)
+}
+pub fn coordinate_sheet_html_localized(doc: &Document, locale: crate::Locale) -> String {
     let mut out = String::with_capacity(4096);
-    out.push_str("<!DOCTYPE html><html lang=\"ja\"><head><meta charset=\"utf-8\">");
+    let (lang, title, columns) = match locale {
+        crate::Locale::Ja => ("ja", "座標シート", ["演者", "セット", "カウント", "座標"]),
+        crate::Locale::En => (
+            "en",
+            "Coordinate Sheet",
+            ["Performer", "Set", "Counts", "Coordinate"],
+        ),
+    };
     let _ = write!(
         out,
-        "<title>{} — 座標シート</title>",
-        html_escape(&doc.title)
+        "<!DOCTYPE html><html lang=\"{lang}\"><head><meta charset=\"utf-8\">"
+    );
+    let _ = write!(
+        out,
+        "<title>{} — {}</title>",
+        html_escape(&doc.title),
+        title
     );
     out.push_str(print_style());
     out.push_str("</head><body>");
     let _ = write!(out, "<h1>{}</h1>", html_escape(&doc.title));
-    out.push_str(
-        "<table><thead><tr><th>演者</th><th>セット</th><th>カウント</th>\
-         <th>座標</th></tr></thead><tbody>",
+    let _ = write!(
+        out,
+        "<table><thead><tr><th>{}</th><th>{}</th><th>{}</th><th>{}</th></tr></thead><tbody>",
+        columns[0], columns[1], columns[2], columns[3]
     );
     for (i, performer) in doc.performers.iter().enumerate() {
         for set in &doc.sets {
             let coord = set
                 .positions
                 .get(i)
-                .map(|&p| crate::coordinates::readable(p, &doc.grid))
+                .map(|&p| crate::coordinates::readable_localized(p, &doc.grid, locale))
                 .unwrap_or_default();
             let _ = write!(
                 out,
@@ -284,12 +300,23 @@ pub fn coordinate_sheet_html(doc: &Document) -> String {
 /// label as a heading and a small table of their coordinate at every set.
 /// Each performer after the first begins on a fresh printed page.
 pub fn drill_book_html(doc: &Document) -> String {
+    drill_book_html_localized(doc, crate::Locale::Ja)
+}
+pub fn drill_book_html_localized(doc: &Document, locale: crate::Locale) -> String {
     let mut out = String::with_capacity(4096);
-    out.push_str("<!DOCTYPE html><html lang=\"ja\"><head><meta charset=\"utf-8\">");
+    let (lang, title, columns) = match locale {
+        crate::Locale::Ja => ("ja", "ドットブック", ["セット", "カウント", "座標"]),
+        crate::Locale::En => ("en", "Drill Book", ["Set", "Counts", "Coordinate"]),
+    };
     let _ = write!(
         out,
-        "<title>{} — ドットブック</title>",
-        html_escape(&doc.title)
+        "<!DOCTYPE html><html lang=\"{lang}\"><head><meta charset=\"utf-8\">"
+    );
+    let _ = write!(
+        out,
+        "<title>{} — {}</title>",
+        html_escape(&doc.title),
+        title
     );
     out.push_str(print_style());
     out.push_str("</head><body>");
@@ -297,15 +324,16 @@ pub fn drill_book_html(doc: &Document) -> String {
         let cls = if i == 0 { "section" } else { "section page" };
         let _ = write!(out, "<div class=\"{}\">", cls);
         let _ = write!(out, "<h2>{}</h2>", html_escape(&performer.label));
-        out.push_str(
-            "<table><thead><tr><th>セット</th><th>カウント</th>\
-             <th>座標</th></tr></thead><tbody>",
+        let _ = write!(
+            out,
+            "<table><thead><tr><th>{}</th><th>{}</th><th>{}</th></tr></thead><tbody>",
+            columns[0], columns[1], columns[2]
         );
         for set in &doc.sets {
             let coord = set
                 .positions
                 .get(i)
-                .map(|&p| crate::coordinates::readable(p, &doc.grid))
+                .map(|&p| crate::coordinates::readable_localized(p, &doc.grid, locale))
                 .unwrap_or_default();
             let _ = write!(
                 out,
@@ -397,5 +425,34 @@ mod tests {
 
         let book = drill_book_html(&doc);
         assert!(book.contains("A &amp; B"));
+    }
+
+    #[test]
+    fn english_legacy_html_localizes_all_built_in_labels() {
+        let mut doc = Document::demo(1, 1);
+        doc.title = "Show".into();
+        for (i, set) in doc.sets.iter_mut().enumerate() {
+            set.name = format!("Set {}", i + 1);
+        }
+        let html = coordinate_sheet_html_localized(&doc, crate::Locale::En);
+        assert!(
+            html.contains("lang=\"en\"")
+                && html.contains("Coordinate Sheet")
+                && html.contains("Performer")
+        );
+        assert!(
+            !html.chars().any(|c| ('\u{3040}'..='\u{30ff}').contains(&c)
+                || ('\u{4e00}'..='\u{9fff}').contains(&c)),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn html_coordinate_sheet_uses_persisted_notation() {
+        let mut doc = Document::demo(1, 1);
+        doc.grid.coordinate_notation = crate::coordinates::CoordinateNotation::dci();
+        let html = coordinate_sheet_html_localized(&doc, crate::Locale::En);
+        assert!(html.contains("8-to-5"));
+        assert!(html.contains("front hash"));
     }
 }

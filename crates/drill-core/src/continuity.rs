@@ -14,12 +14,51 @@
 //! (`右前` / `左後ろ` / `右後ろ` / `左前`), or a single axis (`前` / `右` …).
 //! A move shorter than roughly a quarter step is reported as `静止` (a hold).
 
-use crate::{Document, pathing::path_length};
+use crate::{Document, Locale, pathing::path_length};
 use serde::{Deserialize, Serialize};
 
 /// Moves smaller than this (in steps) are treated as a hold (`静止`), and an axis
 /// component below this magnitude does not contribute to the direction name.
 const HOLD_THRESHOLD_STEPS: f32 = 0.25;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TravelDirection {
+    Hold,
+    Right,
+    Left,
+    Forward,
+    Backward,
+    RightForward,
+    RightBackward,
+    LeftForward,
+    LeftBackward,
+}
+
+impl TravelDirection {
+    pub fn text(self, locale: Locale) -> &'static str {
+        use TravelDirection::*;
+        match (self, locale) {
+            (Hold, Locale::Ja) => "静止",
+            (Right, Locale::Ja) => "右",
+            (Left, Locale::Ja) => "左",
+            (Forward, Locale::Ja) => "前",
+            (Backward, Locale::Ja) => "後ろ",
+            (RightForward, Locale::Ja) => "右前",
+            (RightBackward, Locale::Ja) => "右後ろ",
+            (LeftForward, Locale::Ja) => "左前",
+            (LeftBackward, Locale::Ja) => "左後ろ",
+            (Hold, Locale::En) => "hold",
+            (Right, Locale::En) => "right",
+            (Left, Locale::En) => "left",
+            (Forward, Locale::En) => "forward",
+            (Backward, Locale::En) => "backward",
+            (RightForward, Locale::En) => "forward-right",
+            (RightBackward, Locale::En) => "backward-right",
+            (LeftForward, Locale::En) => "forward-left",
+            (LeftBackward, Locale::En) => "backward-left",
+        }
+    }
+}
 
 /// One performer's travel across a single set-to-set transition, with both the
 /// numeric metrics and a ready-to-print Japanese `description`.
@@ -39,6 +78,8 @@ pub struct ContinuitySegment {
     pub distance_steps: f32,
     /// 8-way Japanese direction name, or `静止` for a hold.
     pub direction: String,
+    /// Language-neutral direction used by UI and exporters.
+    pub direction_kind: TravelDirection,
     /// Steps travelled per count (`distance_steps / counts`), rounded to 0.25.
     pub step_size_per_count: f32,
     /// Human-readable one-line summary, e.g.
@@ -62,27 +103,61 @@ fn vertical_step(doc: &Document) -> f32 {
 }
 
 /// 8-way direction name from rounded per-axis step deltas, or `静止` for a hold.
-fn direction_name(steps_x: f32, steps_y: f32) -> String {
-    let horizontal = if steps_x >= HOLD_THRESHOLD_STEPS {
-        "右"
-    } else if steps_x <= -HOLD_THRESHOLD_STEPS {
-        "左"
+fn direction_kind(steps_x: f32, steps_y: f32) -> TravelDirection {
+    use TravelDirection::*;
+    let h = steps_x.abs() >= HOLD_THRESHOLD_STEPS;
+    let v = steps_y.abs() >= HOLD_THRESHOLD_STEPS;
+    match (h, v, steps_x.is_sign_positive(), steps_y.is_sign_positive()) {
+        (false, false, _, _) => Hold,
+        (true, false, true, _) => Right,
+        (true, false, false, _) => Left,
+        (false, true, _, false) => Forward,
+        (false, true, _, true) => Backward,
+        (true, true, true, false) => RightForward,
+        (true, true, true, true) => RightBackward,
+        (true, true, false, false) => LeftForward,
+        (true, true, false, true) => LeftBackward,
+    }
+}
+
+pub fn format_segment(value: &ContinuitySegment, locale: Locale) -> String {
+    if value.direction_kind == TravelDirection::Hold {
+        return if locale == Locale::Ja {
+            format!(
+                "セット{}→{}: {}カウント静止",
+                value.from_set + 1,
+                value.to_set + 1,
+                value.counts
+            )
+        } else {
+            format!(
+                "Set {}→{}: hold for {} counts",
+                value.from_set + 1,
+                value.to_set + 1,
+                value.counts
+            )
+        };
+    }
+    if locale == Locale::Ja {
+        format!(
+            "セット{}→{}: {}カウントで{}方へ {:.1}歩 ({:.2} steps/count)",
+            value.from_set + 1,
+            value.to_set + 1,
+            value.counts,
+            value.direction_kind.text(locale),
+            value.distance_steps,
+            value.step_size_per_count
+        )
     } else {
-        ""
-    };
-    // Remember: -y is toward the audience (前), +y is away (後ろ).
-    let vertical = if steps_y <= -HOLD_THRESHOLD_STEPS {
-        "前"
-    } else if steps_y >= HOLD_THRESHOLD_STEPS {
-        "後ろ"
-    } else {
-        ""
-    };
-    let combined = format!("{horizontal}{vertical}");
-    if combined.is_empty() {
-        "静止".to_string()
-    } else {
-        combined
+        format!(
+            "Set {}→{}: {} counts, {} for {:.1} steps ({:.2} steps/count)",
+            value.from_set + 1,
+            value.to_set + 1,
+            value.counts,
+            value.direction_kind.text(locale),
+            value.distance_steps,
+            value.step_size_per_count
+        )
     }
 }
 
@@ -117,42 +192,25 @@ fn segment(
     // Hold is decided on the true (unrounded) travel, so anything under ~a
     // quarter step reads as 静止 regardless of quarter-step rounding.
     let is_hold = raw_distance_steps < HOLD_THRESHOLD_STEPS;
-    let direction = if is_hold {
-        "静止".to_string()
+    let direction_kind = if is_hold {
+        TravelDirection::Hold
     } else {
-        direction_name(steps_x, steps_y)
+        direction_kind(steps_x, steps_y)
     };
-
-    let description = if is_hold {
-        format!(
-            "セット{}→{}: {}カウント静止",
-            from_index + 1,
-            to_index + 1,
-            counts
-        )
-    } else {
-        format!(
-            "セット{}→{}: {}カウントで{}方へ {:.1}歩 ({:.2} steps/count)",
-            from_index + 1,
-            to_index + 1,
-            counts,
-            direction,
-            distance_steps,
-            step_size_per_count,
-        )
-    };
-
-    Some(ContinuitySegment {
+    let mut value = ContinuitySegment {
         from_set: from_index,
         to_set: to_index,
         counts,
         steps_x,
         steps_y,
         distance_steps,
-        direction,
+        direction: direction_kind.text(Locale::Ja).to_owned(),
+        direction_kind,
         step_size_per_count,
-        description,
-    })
+        description: String::new(),
+    };
+    value.description = format_segment(&value, Locale::Ja);
+    Some(value)
 }
 
 /// Continuity for one performer: a segment for every consecutive set pair.
@@ -172,13 +230,16 @@ pub fn performer_continuity(doc: &Document, performer_index: usize) -> Vec<Conti
 ///
 /// Returns an empty string if `performer_index` is out of range.
 pub fn continuity_text(doc: &Document, performer_index: usize) -> String {
+    continuity_text_localized(doc, performer_index, Locale::Ja)
+}
+pub fn continuity_text_localized(doc: &Document, performer_index: usize, locale: Locale) -> String {
     let Some(performer) = doc.performers.get(performer_index) else {
         return String::new();
     };
     let mut text = performer.label.clone();
     for segment in performer_continuity(doc, performer_index) {
         text.push('\n');
-        text.push_str(&segment.description);
+        text.push_str(&format_segment(&segment, locale));
     }
     text
 }
@@ -296,5 +357,18 @@ mod tests {
         let mut lines = text.lines();
         assert_eq!(lines.next().unwrap(), doc.performers[0].label);
         assert!(lines.next().unwrap().starts_with("セット1→2:"));
+    }
+
+    #[test]
+    fn english_continuity_is_complete_and_has_no_japanese_glyphs() {
+        let doc = moving_doc(Point { x: 10.0, y: 20.0 }, Point { x: 15.0, y: 15.0 }, 16);
+        let value = &performer_continuity(&doc, 0)[0];
+        assert_eq!(value.direction_kind, TravelDirection::RightForward);
+        let text = format_segment(value, Locale::En);
+        assert!(text.contains("Set 1→2: 16 counts, forward-right"), "{text}");
+        assert!(
+            !text.chars().any(|c| ('\u{3040}'..='\u{30ff}').contains(&c)
+                || ('\u{4e00}'..='\u{9fff}').contains(&c))
+        );
     }
 }

@@ -6,5 +6,17 @@ license.workspace = true
 
 [dependencies]
 drill-core = { path = "../drill-core" }
-eframe = { version = "0.35.0", default-features = false, features = ["wgpu", "wayland", "x11"] }
+drill-audio = { path = "../drill-audio" }
+drill-export = { path = "../drill-export" }
+drill-jobs = { path = "../drill-jobs" }
+drill-render = { path = "../drill-render" }
+drill-gpu = { path = "../drill-gpu" }
+drill-project = { path = "../drill-project" }
+drill-updater = { path = "../drill-updater" }
+drill-interop = { path = "../drill-interop" }
+drill-plugin = { path = "../drill-plugin" }
+eframe = { version = "0.35.0", default-features = false, features = ["accesskit", "wgpu", "glow", "__screenshot", "wayland", "x11"] }
 rfd = "0.17.2"
+blake3 = "1.8.2"
+serde.workspace = true
+serde_json.workspace = true

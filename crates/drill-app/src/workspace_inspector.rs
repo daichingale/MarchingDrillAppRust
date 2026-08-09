@@ -1,0 +1,787 @@
+//! Editing workspace inspector: audio sync, sets, performers, clinic, grid and tempo.
+//!
+//! This module owns no document state. Mutations still flow through DrillApp and History.
+
+use super::*;
+
+impl DrillApp {
+    pub(super) fn show_workspace_inspector(&mut self, ui: &mut egui::Ui, set_counts: f32) {
+        let global_count = self
+            .document
+            .global_count(self.current_set, self.count_position);
+        let waveform_action = self.audio_state.show_waveform(
+            ui,
+            self.locale,
+            self.document.audio.as_ref(),
+            &self.document.tempo,
+            global_count,
+            self.timeline_view.visible_range(),
+        );
+        if let Some(action) = waveform_action {
+            let edit = match action {
+                audio_state::WaveformAction::Add(anchor) => {
+                    Edit::AddSyncAnchor { id: None, anchor }
+                }
+                audio_state::WaveformAction::Move { id, anchor } => {
+                    Edit::MoveSyncAnchor { id, anchor }
+                }
+                audio_state::WaveformAction::Remove(id) => Edit::RemoveSyncAnchor { id },
+            };
+            if self.history.execute(&mut self.document, edit).is_ok() {
+                self.dirty = true;
+            } else {
+                self.status =
+                    super::i18n::registered(self.locale, "workspace-inspector.102").into();
+            }
+        }
+        if let Some(track) = &self.document.audio {
+            let proposal = track.anchors.tempo_proposal(&self.document.tempo);
+            if let Some(worst) = proposal
+                .residuals
+                .iter()
+                .max_by(|a, b| a.milliseconds.abs().total_cmp(&b.milliseconds.abs()))
+            {
+                ui.small(format!(
+                    "{} {:+.1} ms",
+                    super::i18n::registered(self.locale, "workspace-inspector.074"),
+                    worst.milliseconds
+                ));
+            }
+            let mut mismatches = Vec::new();
+            track
+                .anchors
+                .mismatches(&self.document.tempo, &mut mismatches);
+            if !mismatches.is_empty() {
+                ui.colored_label(
+                    Color32::from_rgb(255, 184, 77),
+                    format!("⚠ テンポ不一致 {} 区間", mismatches.len()),
+                );
+            }
+            ui.small(super::i18n::registered(
+                self.locale,
+                "workspace-inspector.075",
+            ));
+        }
+        ui.separator();
+
+        ui.allocate_ui_with_layout(
+        Vec2::new(300.0, ui.available_height()),
+        egui::Layout::top_down(egui::Align::Min),
+        |ui| {
+            egui::ScrollArea::vertical()
+                .id_salt("workspace-inspector-scroll")
+                .show(ui, |ui| {
+            ui.heading(super::i18n::registered(self.locale, "workspace-inspector.001"));
+            ui.small(super::i18n::registered(self.locale, "workspace-inspector.002"));
+            for (index, set) in self.document.sets.iter().enumerate() {
+                let text = format!("{}  ·  {} counts", set.name, set.counts);
+                if ui
+                    .selectable_label(index == self.current_set, text)
+                    .clicked()
+                {
+                    self.current_set = index;
+                    self.count_position = 0.0;
+                    self.playing = false;
+                    self.selected.clear();
+                }
+            }
+            if ui.button(super::i18n::registered(self.locale, "workspace-inspector.003")).clicked() {
+                self.duplicate_current_set();
+            }
+            ui.collapsing(super::i18n::registered(self.locale, "workspace-inspector.004"), |ui| {
+                ui.small(super::i18n::registered(self.locale, "workspace-inspector.005"));
+                let set_id = self.document.sets[self.current_set].id;
+                let mut value = self.document.sets[self.current_set].annotation.clone();
+                let before = value.clone();
+                ui.label(super::i18n::registered(self.locale, "workspace-inspector.006"));
+                ui.text_edit_singleline(&mut value.title);
+                ui.label(super::i18n::registered(self.locale, "workspace-inspector.007"));
+                ui.text_edit_singleline(&mut value.rehearsal_mark);
+                ui.label(super::i18n::registered(self.locale, "workspace-inspector.008"));
+                ui.add(egui::TextEdit::multiline(&mut value.notes).desired_rows(3));
+                let mut custom_tempo = value.tempo_bpm.is_some();
+                if ui.checkbox(&mut custom_tempo, super::i18n::registered(self.locale, "workspace-inspector.009")).changed() { value.tempo_bpm = custom_tempo.then_some(self.document.tempo.bpm_at(self.document.global_count(self.current_set, 0.0))); }
+                if let Some(v) = &mut value.tempo_bpm { ui.add(egui::DragValue::new(v).range(1.0..=999.0).suffix(" BPM")); }
+                let mut custom_sync = value.sync_time_seconds.is_some();
+                if ui.checkbox(&mut custom_sync, super::i18n::registered(self.locale, "workspace-inspector.010")).changed() { value.sync_time_seconds = custom_sync.then_some(f64::from(self.document.tempo.seconds_at(self.document.global_count(self.current_set, 0.0)))); }
+                if let Some(v) = &mut value.sync_time_seconds { ui.add(egui::DragValue::new(v).range(0.0..=86_400.0).speed(0.01).suffix(" s")); }
+                let mut custom_duration = value.transition_duration_seconds.is_some();
+                if ui.checkbox(&mut custom_duration, super::i18n::registered(self.locale, "workspace-inspector.011")).changed() {
+                    let start = self.document.global_count(self.current_set, 0.0);
+                    let end = start + f32::from(self.document.sets[self.current_set].counts);
+                    let derived = f64::from(self.document.tempo.seconds_at(end) - self.document.tempo.seconds_at(start));
+                    value.transition_duration_seconds = custom_duration.then_some(derived.max(0.0));
+                }
+                if let Some(v) = &mut value.transition_duration_seconds { ui.add(egui::DragValue::new(v).range(0.0..=86_400.0).speed(0.01).suffix(" s")); }
+                if value != before {
+                    self.execute_edit(Edit::SetAnnotation { set_id, annotation: value }, super::i18n::registered(self.locale, "workspace-inspector.012"));
+                }
+            });
+            ui.separator();
+            ui.label(format!(
+                "COUNT  {:02} / {:02}",
+                self.count_position.round() as u16,
+                self.document.sets[self.current_set].counts
+            ));
+            let seek = ui.add(
+                egui::Slider::new(&mut self.count_position, 0.0..=set_counts)
+                    .step_by(1.0)
+                    .show_value(false),
+            );
+            if seek.drag_stopped() {
+                self.count_position = self.count_position.round();
+            }
+            ui.separator();
+            ui.heading(super::i18n::registered(self.locale, "workspace-inspector.013"));
+            ui.small(super::i18n::registered(self.locale, "workspace-inspector.014"));
+            if self.document.performers.is_empty() {
+                egui::Frame::new()
+                    .fill(Color32::from_rgb(38, 55, 72))
+                    .inner_margin(10)
+                    .corner_radius(5)
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new(super::i18n::registered(self.locale, "workspace-inspector.015")).strong());
+                        ui.small(super::i18n::registered(self.locale, "workspace-inspector.016"));
+                        if ui.button(super::i18n::registered(self.locale, "workspace-inspector.017")).clicked()
+                            && self.execute_edit(
+                                Edit::ReplaceDocument { document: Box::new(Document::demo(8, 10)) },
+                                super::i18n::registered(self.locale, "workspace-inspector.018"),
+                            )
+                        {
+                            self.current_set = 0;
+                            self.count_position = 0.0;
+                            self.playback_start = 0;
+                            self.playback_end = self.document.timeline_counts();
+                            self.selected.clear();
+                            self.status = super::i18n::registered(self.locale, "workspace-inspector.019").into();
+                        }
+                    });
+            }
+            ui.horizontal(|ui| {
+                if ui.button(super::i18n::registered(self.locale, "workspace-inspector.020")).clicked() {
+                    self.selected = (0..self.document.performers.len()).collect();
+                }
+                if ui.button(super::i18n::registered(self.locale, "workspace-inspector.021")).clicked() {
+                    self.selected.clear();
+                }
+                if ui.button(super::i18n::registered(self.locale, "workspace-inspector.076")).on_hover_text(super::i18n::registered(self.locale, "workspace-inspector.077")).clicked() {
+                    self.section_manager.open = true;
+                }
+            });
+            if self.count_position != 0.0 {
+                ui.colored_label(
+                    Color32::from_rgb(255, 184, 77),
+                    super::i18n::registered(self.locale, "workspace-inspector.078"),
+                );
+            }
+            ui.separator();
+            ui.heading(if self.selected.is_empty() {
+                super::i18n::registered(self.locale, "workspace-inspector.103").to_owned()
+            } else {
+                format!(
+                    "{} {}",
+                    super::i18n::registered(self.locale, "workspace-inspector.104"),
+                    self.selected.len()
+                )
+            });
+            if !self.selected.is_empty() {
+                if self.workspace_focus == Some(WorkspaceFocus::Performer) {
+                    ui.scroll_to_cursor(Some(egui::Align::Center));
+                    self.workspace_focus = None;
+                }
+                if let Some(&first) = self.selected.iter().next() {
+                    let pos = self.document.sets[self.current_set].positions[first];
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{} {}",
+                            self.document.performers[first].label
+                            ,super::i18n::registered(self.locale, "workspace-inspector.105")
+                        ))
+                        .strong(),
+                    );
+                    ui.small(coordinates::readable_localized(pos, &self.document.grid, self.locale));
+                    let segments =
+                        continuity::performer_continuity(&self.document, first);
+                    if let Some(seg) =
+                        segments.iter().find(|s| s.from_set == self.current_set)
+                    {
+                        ui.small(format!("→ {}", continuity::format_segment(seg, self.locale)));
+                    }
+                }
+                if let Some((min, max)) = self.selection_bounds() {
+                    ui.label(egui::RichText::new(super::i18n::registered(self.locale, "workspace-inspector.079")).strong());
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.small_button(super::i18n::registered(self.locale, "workspace-inspector.080")).clicked() {
+                            let y = (min.y + max.y) * 0.5;
+                            self.commit_layout(evenly_spaced_line(
+                                Point { x: min.x, y },
+                                Point { x: max.x, y },
+                                self.selected.len(),
+                            ));
+                        }
+                        if ui.small_button(super::i18n::registered(self.locale, "workspace-inspector.081")).clicked() {
+                            let x = (min.x + max.x) * 0.5;
+                            self.commit_layout(evenly_spaced_line(
+                                Point { x, y: min.y },
+                                Point { x, y: max.y },
+                                self.selected.len(),
+                            ));
+                        }
+                        if ui.small_button(super::i18n::registered(self.locale, "workspace-inspector.082")).clicked() {
+                            self.commit_layout(evenly_spaced_line(
+                                min,
+                                max,
+                                self.selected.len(),
+                            ));
+                        }
+                        if ui.small_button(super::i18n::registered(self.locale, "workspace-inspector.083")).clicked() {
+                            let center = Point {
+                                x: (min.x + max.x) * 0.5,
+                                y: max.y,
+                            };
+                            let radius =
+                                ((max.x - min.x) * 0.5).max((max.y - min.y) * 0.5).max(2.5);
+                            self.commit_layout(evenly_spaced_arc(
+                                center,
+                                radius,
+                                std::f32::consts::PI,
+                                std::f32::consts::TAU,
+                                self.selected.len(),
+                            ));
+                        }
+                        if ui.small_button(super::i18n::registered(self.locale, "workspace-inspector.084")).clicked() {
+                            let center = Point {
+                                x: (min.x + max.x) * 0.5,
+                                y: (min.y + max.y) * 0.5,
+                            };
+                            let radius =
+                                ((max.x - min.x) * 0.5).max((max.y - min.y) * 0.5).max(2.5);
+                            self.commit_layout(shapes::circle(
+                                center,
+                                radius,
+                                self.selected.len(),
+                            ));
+                        }
+                        if ui.small_button(super::i18n::registered(self.locale, "workspace-inspector.085")).clicked() {
+                            let n = self.selected.len();
+                            let cols = (n as f32).sqrt().ceil() as usize;
+                            let rows = n.div_ceil(cols.max(1));
+                            let mut pts = shapes::block_fit(min, max, cols, rows);
+                            pts.truncate(n);
+                            self.commit_layout(pts);
+                        }
+                        if ui.small_button(super::i18n::registered(self.locale, "workspace-inspector.086")).clicked() {
+                            let center = Point {
+                                x: (min.x + max.x) * 0.5,
+                                y: (min.y + max.y) * 0.5,
+                            };
+                            let radius =
+                                ((max.x - min.x) * 0.5).max((max.y - min.y) * 0.5).max(3.0);
+                            self.commit_layout(shapes::spiral(
+                                center,
+                                radius * 0.15,
+                                radius,
+                                2.0,
+                                self.selected.len(),
+                            ));
+                        }
+                    });
+                    ui.collapsing(
+                        super::i18n::registered(self.locale, "workspace-inspector.022"),
+                        |ui| {
+                            ui.small(super::i18n::registered(self.locale, "workspace-inspector.023"));
+                            let center = Point { x: (min.x + max.x) * 0.5, y: (min.y + max.y) * 0.5 };
+                            let rx = ((max.x - min.x) * 0.5).max(2.5);
+                            let ry = ((max.y - min.y) * 0.5).max(2.5);
+                            ui.horizontal_wrapped(|ui| {
+                                if ui.button(super::i18n::registered(self.locale, "workspace-inspector.024")).clicked() {
+                                    self.preview_shape(shapes::ShapeSpec::Ellipse { center, radius_x: rx, radius_y: ry, rotation: 0.0 });
+                                }
+                                if ui.button(super::i18n::registered(self.locale, "workspace-inspector.025")).clicked() {
+                                    self.begin_free_draw();
+                                }
+                                let ready = self.formation_preview_spec.is_some();
+                                if ui.add_enabled(ready, egui::Button::new(super::i18n::registered(self.locale, "workspace-inspector.026"))).clicked() {
+                                    self.apply_shape_preview();
+                                }
+                                if ui.add_enabled(ready || self.free_draw_active, egui::Button::new(super::i18n::registered(self.locale, "workspace-inspector.027"))).clicked() {
+                                    self.cancel_shape_preview();
+                                }
+                            });
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(super::i18n::registered(self.locale, "workspace-inspector.028"));
+                                let changed=ui.add(egui::TextEdit::singleline(&mut self.formation_text).char_limit(32).desired_width(180.0).hint_text(super::i18n::registered(self.locale, "workspace-inspector.029"))).changed();
+                                if changed || ui.button(super::i18n::registered(self.locale, "workspace-inspector.030")).clicked(){self.preview_formation_text();}
+                            });
+                            if self.free_draw_active {
+                                ui.colored_label(
+                                    Color32::from_rgb(100, 220, 255),
+                                    super::i18n::registered(self.locale, "workspace-inspector.031"),
+                                );
+                            }
+                            ui.horizontal_wrapped(|ui| {
+                                if ui.button(super::i18n::registered(self.locale, "workspace-inspector.032")).clicked() {
+                                    self.commit_shape(shapes::ShapeSpec::Ellipse { center, radius_x: rx, radius_y: ry, rotation: 0.0 });
+                                }
+                                if ui.button(super::i18n::registered(self.locale, "workspace-inspector.033")).clicked() {
+                                    self.commit_shape(shapes::ShapeSpec::Parabola { vertex: Point { x: center.x, y: min.y }, curvature: 0.06, half_width: rx, rotation: 0.0 });
+                                }
+                                if ui.button(super::i18n::registered(self.locale, "workspace-inspector.034")).clicked() {
+                                    self.commit_shape(shapes::ShapeSpec::SineWave { start: Point { x: min.x, y: center.y }, end: Point { x: max.x, y: center.y }, amplitude: ry * 0.65, cycles: 2.0, phase: 0.0 });
+                                }
+                                if ui.button(super::i18n::registered(self.locale, "workspace-inspector.035")).clicked() {
+                                    self.commit_shape(shapes::ShapeSpec::Star { center, outer_radius: rx.max(ry), inner_radius: rx.max(ry) * 0.45, points: 5, rotation: 0.0 });
+                                }
+                                if ui.button(super::i18n::registered(self.locale, "workspace-inspector.036")).clicked() {
+                                    self.commit_shape(shapes::ShapeSpec::Polygon { center, radius: rx.max(ry), sides: 6, rotation: 0.0 });
+                                }
+                                if ui.button(super::i18n::registered(self.locale, "workspace-inspector.037")).clicked() {
+                                    self.commit_shape(shapes::ShapeSpec::Cross { center, arm_length: rx.max(ry), arm_width: rx.min(ry) * 0.7 });
+                                }
+                            });
+                            ui.horizontal_wrapped(|ui| {
+                                if ui.button(super::i18n::registered(self.locale, "workspace-inspector.038")).clicked()
+                                    && let Some(fit) = shapes::fit_line(&self.selected_points())
+                                {
+                                    self.commit_layout(shapes::snap_to_line(&self.selected_points(), &fit));
+                                }
+                                if ui.button(super::i18n::registered(self.locale, "workspace-inspector.039")).clicked()
+                                    && let Some(fit) = shapes::fit_circle(&self.selected_points())
+                                {
+                                    self.commit_layout(shapes::snap_to_circle(&self.selected_points(), &fit));
+                                }
+                            });
+                            ui.separator();
+                            ui.small(super::i18n::registered(self.locale, "workspace-inspector.040"));
+                            ui.horizontal_wrapped(|ui| {
+                                let has_next = self.current_set + 1 < self.document.sets.len();
+                                if ui.add_enabled(has_next, egui::Button::new(super::i18n::registered(self.locale, "workspace-inspector.041"))).clicked() {
+                                    self.apply_morph_preview(0.25);
+                                }
+                                if ui.add_enabled(has_next, egui::Button::new(super::i18n::registered(self.locale, "workspace-inspector.042"))).clicked() {
+                                    self.apply_morph_preview(0.5);
+                                }
+                                if ui.button(super::i18n::registered(self.locale, "workspace-inspector.043")).clicked() {
+                                    self.apply_radial_selection(2);
+                                }
+                                if ui.button(super::i18n::registered(self.locale, "workspace-inspector.044")).clicked() {
+                                    self.apply_radial_selection(4);
+                                }
+                                let has_shape = self.document.sets[self.current_set].shape.is_some();
+                                if ui.add_enabled(has_shape, egui::Button::new(super::i18n::registered(self.locale, "workspace-inspector.045"))).clicked() {
+                                    self.apply_section_shape_assignment();
+                                }
+                                if ui.button(super::i18n::registered(self.locale, "workspace-inspector.046")).on_hover_text(super::i18n::registered(self.locale, "workspace-inspector.047")).clicked(){self.apply_constraint_cleanup();}
+                            });
+                            if let Some(spec) = self.document.sets[self.current_set].shape.as_ref() {
+                                ui.small(format!("{}: {:?}", super::i18n::registered(self.locale, "workspace-inspector.048"), spec));
+                            }
+                        },
+                    );
+                    ui.label(egui::RichText::new(super::i18n::registered(self.locale, "workspace-inspector.087")).strong());
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.small_button("↶ 15°").clicked() {
+                            self.transform_selection(1.0, -15.0_f32.to_radians());
+                        }
+                        if ui.small_button("↷ 15°").clicked() {
+                            self.transform_selection(1.0, 15.0_f32.to_radians());
+                        }
+                        if ui.small_button("＋ 10%").clicked() {
+                            self.transform_selection(1.1, 0.0);
+                        }
+                        if ui.small_button("－ 10%").clicked() {
+                            self.transform_selection(0.9, 0.0);
+                        }
+                    });
+                    ui.label(egui::RichText::new(super::i18n::registered(self.locale, "workspace-inspector.088")).strong());
+                    ui.horizontal_wrapped(|ui| {
+                        let pts = self.selected_points();
+                        if ui.small_button(super::i18n::registered(self.locale, "workspace-inspector.089")).clicked() {
+                            self.commit_layout(editing::align_horizontal(&pts));
+                        }
+                        if ui.small_button(super::i18n::registered(self.locale, "workspace-inspector.090")).clicked() {
+                            self.commit_layout(editing::align_vertical(&pts));
+                        }
+                        if ui.small_button(super::i18n::registered(self.locale, "workspace-inspector.091")).clicked() {
+                            self.commit_layout(editing::distribute_horizontal(&pts));
+                        }
+                        if ui.small_button(super::i18n::registered(self.locale, "workspace-inspector.092")).clicked() {
+                            self.commit_layout(editing::distribute_vertical(&pts));
+                        }
+                        if ui.small_button(super::i18n::registered(self.locale, "workspace-inspector.093")).clicked() {
+                            self.commit_layout(editing::flip_horizontal(&pts));
+                        }
+                        if ui.small_button(super::i18n::registered(self.locale, "workspace-inspector.094")).clicked() {
+                            self.commit_layout(editing::flip_vertical(&pts));
+                        }
+                    });
+                }
+            }
+            let analysis = analyze_transition(&self.document, self.current_set, 0.75, 1.0);
+            ui.separator();
+            if self.workspace_focus == Some(WorkspaceFocus::Clinic) {
+                ui.scroll_to_cursor(Some(egui::Align::Center));
+                self.workspace_focus = None;
+            }
+            ui.heading(super::i18n::registered(self.locale, "workspace-inspector.095"));
+            ui.small(super::i18n::registered(self.locale, "workspace-inspector.049"));
+            let collision_color = if analysis.collisions == 0 {
+                Color32::from_rgb(99, 210, 151)
+            } else {
+                Color32::from_rgb(255, 92, 92)
+            };
+            ui.colored_label(
+                collision_color,
+                format!("● {}: {}", super::i18n::registered(self.locale, "workspace-inspector.106"), analysis.collisions),
+            );
+            let stride_color = if analysis.excessive_strides == 0 {
+                Color32::from_rgb(99, 210, 151)
+            } else {
+                Color32::from_rgb(255, 184, 77)
+            };
+            ui.colored_label(
+                stride_color,
+                format!("● {}: {}", super::i18n::registered(self.locale, "workspace-inspector.107"), analysis.excessive_strides),
+            );
+            let stats = pathing::transition_stats(&self.document, self.current_set);
+            let unit_label = match self.document.grid.unit {
+                Unit::Yards => "yd",
+                Unit::Meters => "m",
+            };
+            ui.small(format!(
+                "最大歩幅 {:.2}/count ・ 総移動 {:.0}{}",
+                stats.max_step, stats.total_distance, unit_label
+            ));
+            ui.add_space(4.0);
+            if ui
+                .button(super::i18n::registered(self.locale, "workspace-inspector.050"))
+                .on_hover_text(super::i18n::registered(self.locale, "workspace-inspector.051"))
+                .clicked()
+            {
+                self.route_suggestions = suggest_routes(
+                    &self.document,
+                    self.current_set,
+                    SuggestionConstraints::default(),
+                    SuggestionLimits::default(),
+                );
+                self.route_suggestion_selected = 0;
+                self.status = if self.route_suggestions.is_empty() {
+                    super::i18n::registered(self.locale, "workspace-inspector.052").into()
+                } else {
+                    super::i18n::registered(self.locale, "workspace-inspector.053").into()
+                };
+            }
+            if !self.route_suggestions.is_empty() {
+                egui::CollapsingHeader::new(if self.locale == Locale::Ja {
+                    format!("改善案プレビュー（{}件）", self.route_suggestions.len())
+                } else {
+                    format!("Fix preview ({})", self.route_suggestions.len())
+                })
+                .default_open(true)
+                .show(ui, |ui| {
+                    for (index, candidate) in self.route_suggestions.iter().enumerate() {
+                        let reasons = candidate.reasons.iter().map(|reason| match (self.locale, reason) {
+                            (Locale::Ja, SuggestionReason::AvoidCollision) => "衝突回避",
+                            (Locale::Ja, SuggestionReason::ReduceStride) => "歩幅軽減",
+                            (Locale::Ja, SuggestionReason::SoftenArrivalTurn) => "到着ターン緩和",
+                            (Locale::Ja, SuggestionReason::MeetArrival) => "到着時刻",
+                            (_, SuggestionReason::AvoidCollision) => "collision",
+                            (_, SuggestionReason::ReduceStride) => "stride",
+                            (_, SuggestionReason::SoftenArrivalTurn) => "arrival turn",
+                            (_, SuggestionReason::MeetArrival) => "arrival time",
+                        }).collect::<Vec<_>>().join(" + ");
+                        let label = format!(
+                            "{}  {}  · {} → {} pts · {} performer(s)",
+                            index + 1,
+                            reasons,
+                            candidate.before.penalty(),
+                            candidate.after.penalty(),
+                            candidate.affected_performers.len()
+                        );
+                        ui.selectable_value(&mut self.route_suggestion_selected, index, label);
+                    }
+                    if let Some(candidate) = self.route_suggestions.get(self.route_suggestion_selected) {
+                        ui.small(if self.locale == Locale::Ja {
+                            format!("適用内容: {} moves / {} hold、経路変更 {}人。まだ設計には反映されていません。", candidate.counts.moves, candidate.counts.hold, candidate.affected_performers.len())
+                        } else {
+                            format!("Preview: {} moves / {} hold, {} route change(s). The design is still unchanged.", candidate.counts.moves, candidate.counts.hold, candidate.affected_performers.len())
+                        });
+                    }
+                    if ui.button(super::i18n::registered(self.locale, "workspace-inspector.054")).clicked() {
+                        let edit = self.route_suggestions.get(self.route_suggestion_selected)
+                            .and_then(|candidate| candidate.to_edit(&self.document, self.current_set));
+                        if let Some(edit) = edit {
+                            if self.execute_edit(edit, super::i18n::registered(self.locale, "workspace-inspector.055")) {
+                                self.status = super::i18n::registered(self.locale, "workspace-inspector.056").into();
+                                self.route_suggestions.clear();
+                            }
+                        } else {
+                            self.status = super::i18n::registered(self.locale, "workspace-inspector.057").into();
+                            self.route_suggestions.clear();
+                        }
+                    }
+                });
+            }
+            ui.separator();
+            let focus_grid = self.workspace_focus == Some(WorkspaceFocus::Grid);
+            egui::CollapsingHeader::new(super::i18n::registered(self.locale, "workspace-inspector.058")).open(focus_grid.then_some(true)).show(ui, |ui| {
+                if focus_grid { ui.scroll_to_cursor(Some(egui::Align::Center)); }
+                if !self.grid_draft_dirty && self.grid_draft.as_ref() != Some(&self.document.grid) {
+                    self.grid_draft = Some(self.document.grid.clone());
+                }
+                let mut grid = self.grid_draft.clone().unwrap_or_else(|| self.document.grid.clone());
+                let mut changed = false;
+                let mut commit = false;
+                let mut preset = None;
+                ui.label(super::i18n::registered(self.locale, "workspace-inspector.059"));
+                ui.horizontal_wrapped(|ui| {
+                    if ui.small_button(super::i18n::registered(self.locale, "workspace-inspector.096")).clicked() {
+                        preset = Some(GridConfig::default());
+                    }
+                    if ui.small_button(super::i18n::registered(self.locale, "workspace-inspector.097")).clicked() {
+                        preset = Some(GridConfig::indoor());
+                    }
+                    if ui.small_button(super::i18n::registered(self.locale, "workspace-inspector.098")).clicked() {
+                        preset = Some(GridConfig::soccer());
+                    }
+                });
+                ui.horizontal(|ui| {
+                    changed |= ui.selectable_value(&mut grid.unit, Unit::Yards, super::i18n::registered(self.locale, "workspace-inspector.099")).changed();
+                    changed |= ui.selectable_value(&mut grid.unit, Unit::Meters, super::i18n::registered(self.locale, "workspace-inspector.100")).changed();
+                    commit |= changed;
+                });
+                ui.label(super::i18n::registered(self.locale, "workspace-inspector.060"));
+                ui.horizontal(|ui| {
+                    let width = ui.add(
+                        egui::DragValue::new(&mut grid.width)
+                            .range(10.0..=300.0)
+                            .suffix(" W"),
+                    );
+                    let height = ui.add(
+                        egui::DragValue::new(&mut grid.height)
+                            .range(10.0..=300.0)
+                            .suffix(" H"),
+                    );
+                    changed |= width.changed() || height.changed();
+                    commit |= width.drag_stopped() || height.drag_stopped()
+                        || (width.changed() && !width.dragged()) || (height.changed() && !height.dragged());
+                });
+                ui.label(super::i18n::registered(self.locale, "workspace-inspector.061"));
+                ui.horizontal(|ui| {
+                    let steps = ui.add(egui::DragValue::new(&mut grid.horizontal_steps).range(1..=32));
+                    let units = ui.add(
+                        egui::DragValue::new(&mut grid.horizontal_units).range(0.5..=20.0),
+                    );
+                    changed |= steps.changed() || units.changed();
+                    commit |= steps.drag_stopped() || units.drag_stopped()
+                        || (steps.changed() && !steps.dragged()) || (units.changed() && !units.dragged());
+                });
+                ui.label(super::i18n::registered(self.locale, "workspace-inspector.062"));
+                ui.horizontal(|ui| {
+                    let steps = ui.add(egui::DragValue::new(&mut grid.vertical_steps).range(1..=32));
+                    let units = ui.add(
+                        egui::DragValue::new(&mut grid.vertical_units).range(0.5..=20.0),
+                    );
+                    changed |= steps.changed() || units.changed();
+                    commit |= steps.drag_stopped() || units.drag_stopped()
+                        || (steps.changed() && !steps.dragged()) || (units.changed() && !units.dragged());
+                });
+                let major = ui.add(
+                    egui::Slider::new(&mut grid.major_line_interval, 1.0..=20.0)
+                        .text(super::i18n::registered(self.locale, "workspace-inspector.063")),
+                );
+                let resolution = ui.add(egui::Slider::new(&mut grid.resolution, 1..=8).text(super::i18n::registered(self.locale, "workspace-inspector.064")));
+                changed |= major.changed() || resolution.changed();
+                commit |= major.drag_stopped() || resolution.drag_stopped()
+                    || (major.changed() && !major.dragged()) || (resolution.changed() && !resolution.dragged());
+                ui.horizontal(|ui| {
+                    let lines = ui.selectable_value(&mut grid.style, GridStyle::Lines, super::i18n::registered(self.locale, "workspace-inspector.065"));
+                    let dots = ui.selectable_value(&mut grid.style, GridStyle::Dots, super::i18n::registered(self.locale, "workspace-inspector.066"));
+                    changed |= lines.changed() || dots.changed();
+                    commit |= lines.changed() || dots.changed();
+                });
+                let show = ui.checkbox(&mut grid.show_step_grid, super::i18n::registered(self.locale, "workspace-inspector.067"));
+                let snap = ui.checkbox(&mut grid.snap_enabled, super::i18n::registered(self.locale, "workspace-inspector.068"));
+                changed |= show.changed() || snap.changed();
+                commit |= show.changed() || snap.changed();
+                ui.label(super::i18n::registered(self.locale, "workspace-inspector.069"));
+                let grid_height = grid.height;
+                let mut remove_hash = None;
+                for (index, hash) in grid.hashes.iter_mut().enumerate() {
+                    ui.horizontal(|ui| {
+                        let label = ui.text_edit_singleline(&mut hash.label);
+                        let position = ui.add(
+                            egui::DragValue::new(&mut hash.position)
+                                .range(0.0..=grid_height),
+                        );
+                        let weight = ui.add(
+                            egui::DragValue::new(&mut hash.weight)
+                                .range(0.25..=4.0)
+                                .speed(0.1),
+                        );
+                        changed |= label.changed() || position.changed() || weight.changed();
+                        commit |= label.lost_focus() || position.drag_stopped() || weight.drag_stopped()
+                            || (position.changed() && !position.dragged()) || (weight.changed() && !weight.dragged());
+                        if ui.small_button("×").clicked() {
+                            remove_hash = Some(index);
+                        }
+                    });
+                }
+                if let Some(index) = remove_hash {
+                    grid.hashes.remove(index);
+                    changed = true;
+                    commit = true;
+                }
+                if ui.small_button(super::i18n::registered(self.locale, "workspace-inspector.070")).clicked() {
+                    grid.hashes.push(GridLine {
+                        position: grid.height / 2.0,
+                        label: "新しい線".into(),
+                        weight: 1.0,
+                    });
+                    changed = true;
+                    commit = true;
+                }
+                if let Some(grid) = preset {
+                    if self
+                        .history
+                        .execute(
+                            &mut self.document,
+                            Edit::ReplaceGrid {
+                                grid,
+                                scale_positions: true,
+                            },
+                        )
+                        .is_ok()
+                    {
+                        self.grid_draft = Some(self.document.grid.clone());
+                        self.grid_draft_dirty = false;
+                        self.dirty = true;
+                    }
+                } else {
+                    if changed {
+                        self.grid_draft = Some(grid.clone());
+                        self.grid_draft_dirty = true;
+                    }
+                    if commit
+                        && self.grid_draft_dirty
+                        && grid != self.document.grid
+                        && self
+                        .history
+                        .execute(
+                            &mut self.document,
+                            Edit::ReplaceGrid {
+                                grid,
+                                scale_positions: false,
+                            },
+                        )
+                        .is_ok()
+                    {
+                        self.grid_draft_dirty = false;
+                        self.grid_draft = Some(self.document.grid.clone());
+                        self.dirty = true;
+                    }
+                }
+            });
+            if focus_grid { self.workspace_focus = None; }
+            ui.separator();
+            let focus_tempo = self.workspace_focus == Some(WorkspaceFocus::Tempo);
+            egui::CollapsingHeader::new(super::i18n::registered(self.locale, "workspace-inspector.071")).open(focus_tempo.then_some(true)).show(ui, |ui| {
+                if focus_tempo { ui.scroll_to_cursor(Some(egui::Align::Center)); }
+                if !self.tempo_draft_dirty
+                    && self.tempo_draft.as_ref().map(|tempo| tempo.events())
+                        != Some(self.document.tempo.events())
+                {
+                    self.tempo_draft = Some(self.document.tempo.clone());
+                }
+                let mut tempo = self.tempo_draft.clone().unwrap_or_else(|| self.document.tempo.clone());
+                let mut changed = false;
+                let mut commit = false;
+                ui.small(super::i18n::registered(self.locale, "workspace-inspector.072"));
+                let total = self.document.timeline_counts() as f32;
+                let events = tempo.events().to_vec();
+                let mut edit: Option<(f32, f32, f32)> = None;
+                let mut remove: Option<f32> = None;
+                let removable = events.len() > 1;
+                for ev in &events {
+                    ui.horizontal(|ui| {
+                        let mut count = ev.count;
+                        let mut bpm = ev.bpm;
+                        ui.label(super::i18n::registered(self.locale, "workspace-inspector.101"));
+                        let c = ui.add(
+                            egui::DragValue::new(&mut count).range(0.0..=total.max(0.0)),
+                        );
+                        let b = ui.add(
+                            egui::DragValue::new(&mut bpm)
+                                .range(20.0..=300.0)
+                                .suffix(" BPM"),
+                        );
+                        if c.changed() || b.changed() {
+                            edit = Some((ev.count, count, bpm));
+                            changed = true;
+                        }
+                        commit |= c.drag_stopped() || b.drag_stopped()
+                            || (c.changed() && !c.dragged()) || (b.changed() && !b.dragged());
+                        if removable && ui.small_button("×").clicked() {
+                            remove = Some(ev.count);
+                        }
+                    });
+                }
+                if let Some((old_count, new_count, new_bpm)) = edit {
+                    if (new_count - old_count).abs() > f32::EPSILON {
+                        tempo.remove(old_count);
+                    }
+                    tempo.set(new_count, new_bpm);
+                }
+                if let Some(count) = remove {
+                    tempo.remove(count);
+                    changed = true;
+                    commit = true;
+                }
+                if ui.button(super::i18n::registered(self.locale, "workspace-inspector.073")).clicked() {
+                    let global = self
+                        .document
+                        .global_count(self.current_set, self.count_position)
+                        .round();
+                    tempo.set(global, self.tempo_bpm);
+                    changed = true;
+                    commit = true;
+                }
+                if changed {
+                    self.tempo_draft = Some(tempo.clone());
+                    self.tempo_draft_dirty = true;
+                }
+                if commit && self.tempo_draft_dirty
+                    && tempo.events() != self.document.tempo.events()
+                    && self
+                        .history
+                        .execute(&mut self.document, Edit::SetTempoMap { tempo })
+                        .is_ok()
+                {
+                    self.tempo_bpm = self.document.tempo.bpm_at(0.0);
+                    self.tempo_draft_dirty = false;
+                    self.tempo_draft = Some(self.document.tempo.clone());
+                    self.dirty = true;
+                }
+                let global = self
+                    .document
+                    .global_count(self.current_set, self.count_position);
+                ui.small(format!(
+                    "現在位置 {:.2} 秒 ・ 曲全体 {:.1} 秒",
+                    self.document.tempo.seconds_at(global),
+                    self.document.tempo.seconds_at(total)
+                ));
+            });
+            if focus_tempo { self.workspace_focus = None; }
+            ui.separator();
+            self.show_export_inspector(ui);
+            ui.separator();
+            self.show_audio_inspector(ui);
+            ui.separator();
+            self.show_text_export_progress(ui);
+            ui.small(&self.status);
+                });
+        },
+    );
+        ui.separator();
+    }
+}

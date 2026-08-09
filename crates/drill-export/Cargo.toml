@@ -1,0 +1,19 @@
+[package]
+name = "drill-export"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+drill-core = { path = "../drill-core" }
+drill-jobs = { path = "../drill-jobs" }
+drill-project = { path = "../drill-project" }
+drill-render = { path = "../drill-render" }
+drill-interop = { path = "../drill-interop" }
+
+[dev-dependencies]
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+
+[[bench]]
+name = "raster_performance"
+harness = false

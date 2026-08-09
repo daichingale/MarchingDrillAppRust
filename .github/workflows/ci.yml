@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / stable
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux desktop and audio headers
+        if: runner.os == 'Linux'
+        run: >-
+          sudo apt-get update && sudo apt-get install -y
+          libasound2-dev libudev-dev libxkbcommon-dev libwayland-dev
+          libx11-xcb-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Verify lockfile and dependency inventory
+        shell: pwsh
+        run: pwsh ./scripts/test-supply-chain.ps1
+
+      - name: Verify complete localized message inventory
+        shell: pwsh
+        run: pwsh ./scripts/test-message-catalog.ps1
+
+      - name: Check release license files
+        shell: pwsh
+        run: |
+          $required = @(
+            "LICENSE",
+            "LICENSE-MIT",
+            "LICENSE-APACHE",
+            "THIRD_PARTY_NOTICES.md",
+            "THIRD_PARTY_LICENSES.md",
+            "assets/OFL-NotoSansJP.txt"
+          )
+          $missing = $required | Where-Object { -not (Test-Path -LiteralPath $_) }
+          if ($missing.Count -ne 0) {
+            throw "Missing release license files: $($missing -join ', ')"
+          }
+
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Run tests
+        run: cargo test --workspace --locked
+
+      - name: Run deterministic desktop UI smoke tests
+        run: cargo test -p drill-app --locked ui_qa -- --nocapture
+
+      - name: Enforce non-blocking UI latency budget
+        run: cargo test -p drill-jobs --locked --test ui_latency_gate -- --nocapture
+
+      - name: Enforce maximum-project save UI latency and heap budget
+        run: cargo bench -p drill-jobs --bench max_project_save_latency --locked
+
+      - name: Run cross-crate conformance tests
+        run: cargo test -p drill-conformance --locked
+
+      - name: Verify approved product goldens (check only)
+        shell: bash
+        run: |
+          unset UPDATE_GOLDENS
+          cargo test -p drill-conformance --test golden_approval --locked -- --nocapture
+          if find . -type f \( -name '*.actual' -o -name '*.new' -o -name '*.snap.new' \) | grep -q .; then
+            echo 'Unapproved golden draft found'
+            exit 1
+          fi
+
+      - name: Enforce deterministic parser complexity budgets
+        run: cargo test -p drill-conformance --test complexity_dos --locked
+
+      - name: Enforce CPU/GPU renderer parity matrix
+        run: cargo test -p drill-gpu --test renderer_parity --locked
+
+      - name: Check release build
+        run: cargo check --workspace --release --locked
+
+  supply-chain:
+    name: Supply-chain policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: EmbarkStudios/cargo-deny-action@v2

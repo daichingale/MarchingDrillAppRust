@@ -1,0 +1,20 @@
+[package]
+name = "drill-jobs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+blake3 = "1.8.6"
+drill-core = { path = "../drill-core" }
+drill-project = { path = "../drill-project" }
+
+[[bench]]
+name = "ui_latency"
+harness = false
+
+[[bench]]
+name = "max_project_save_latency"
+harness = false

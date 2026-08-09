@@ -1,0 +1,146 @@
+name: Release artifacts
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  macos-distribution:
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Validate packaging scripts
+        run: |
+          bash -n scripts/package-macos.sh scripts/notarize-macos.sh scripts/test-macos-package.sh
+          plutil -lint packaging/macos/Info.plist packaging/macos/DrillForge.entitlements
+      - name: Test release sources
+        run: cargo test --workspace --locked
+      - name: Import signing identity for tagged release
+        if: github.ref_type == 'tag'
+        env:
+          SIGNING_CERTIFICATE_B64: ${{ secrets.DRILLFORGE_MACOS_CERTIFICATE_B64 }}
+          SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.DRILLFORGE_MACOS_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.DRILLFORGE_MACOS_KEYCHAIN_PASSWORD }}
+        run: |
+          test -n "$SIGNING_CERTIFICATE_B64" && test -n "$SIGNING_CERTIFICATE_PASSWORD" && test -n "$KEYCHAIN_PASSWORD"
+          CERTIFICATE="$RUNNER_TEMP/drillforge-signing.p12"
+          KEYCHAIN="$RUNNER_TEMP/drillforge-signing.keychain-db"
+          printf '%s' "$SIGNING_CERTIFICATE_B64" | base64 -D > "$CERTIFICATE"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$CERTIFICATE" -P "$SIGNING_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security list-keychain -d user -s "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          rm -f "$CERTIFICATE"
+      - name: Build development artifact
+        if: github.ref_type != 'tag'
+        run: bash scripts/package-macos.sh dev
+      - name: Build, sign and notarize release artifact
+        if: github.ref_type == 'tag'
+        env:
+          DRILLFORGE_MACOS_BUNDLE_ID: ${{ secrets.DRILLFORGE_MACOS_BUNDLE_ID }}
+          DRILLFORGE_MACOS_SIGN_IDENTITY: ${{ secrets.DRILLFORGE_MACOS_SIGN_IDENTITY }}
+          DRILLFORGE_NOTARY_KEY_B64: ${{ secrets.DRILLFORGE_NOTARY_KEY_B64 }}
+          DRILLFORGE_NOTARY_KEY_ID: ${{ secrets.DRILLFORGE_NOTARY_KEY_ID }}
+          DRILLFORGE_NOTARY_ISSUER_ID: ${{ secrets.DRILLFORGE_NOTARY_ISSUER_ID }}
+          DRILLFORGE_MACOS_UNIVERSAL: '1'
+        run: |
+          test -n "$DRILLFORGE_MACOS_BUNDLE_ID" && test -n "$DRILLFORGE_MACOS_SIGN_IDENTITY"
+          test -n "$DRILLFORGE_NOTARY_KEY_B64" && test -n "$DRILLFORGE_NOTARY_KEY_ID" && test -n "$DRILLFORGE_NOTARY_ISSUER_ID"
+          bash scripts/package-macos.sh release
+          bash scripts/test-macos-package.sh target/package-macos/DrillForge.app --release
+          bash scripts/notarize-macos.sh dist/DrillForge-*-macos-*.dmg
+      - name: Verify development bundle
+        if: github.ref_type != 'tag'
+        run: bash scripts/test-macos-package.sh target/package-macos/DrillForge.app
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DrillForge-macos
+          path: |
+            dist/*.dmg
+            dist/*.dmg.sha256
+          if-no-files-found: error
+      - name: Remove temporary signing keychain
+        if: always() && github.ref_type == 'tag'
+        env:
+          KEYCHAIN_PASSWORD: ${{ secrets.DRILLFORGE_MACOS_KEYCHAIN_PASSWORD }}
+        run: |
+          security delete-keychain "$RUNNER_TEMP/drillforge-signing.keychain-db" || true
+          rm -f "$RUNNER_TEMP/drillforge-signing.p12"
+
+  windows-portable:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test release sources
+        run: cargo test --workspace --locked
+      - name: Real FFmpeg video export E2E
+        shell: pwsh
+        run: ./scripts/test-video-export.ps1 -RequireTools
+      - name: Build release
+        run: cargo build --workspace --release --locked
+        env:
+          DRILLFORGE_UPDATE_HOST: ${{ secrets.DRILLFORGE_UPDATE_HOST }}
+          DRILLFORGE_UPDATE_PATH: ${{ secrets.DRILLFORGE_UPDATE_PATH }}
+      - name: Package portable release
+        shell: pwsh
+        run: |
+          ./scripts/package-windows.ps1
+          if ("${{ github.ref_type }}" -eq "tag") {
+            if (-not $env:DRILLFORGE_MSIX_IDENTITY -or -not $env:DRILLFORGE_MSIX_PUBLISHER -or -not $env:DRILLFORGE_PFX_BASE64 -or -not $env:DRILLFORGE_PFX_PASSWORD -or -not $env:DRILLFORGE_UPDATE_HOST -or -not $env:DRILLFORGE_UPDATE_PATH) {
+              throw "Tagged releases require MSIX signing and update-endpoint secrets"
+            }
+            $semver = "${{ github.ref_name }}" -replace '^v',''
+            if ($semver -notmatch '^\d+\.\d+\.\d+$') { throw "Release tag must be vMAJOR.MINOR.PATCH" }
+            $version = "$semver.0"
+            ./scripts/package-msix.ps1 -IdentityName $env:DRILLFORGE_MSIX_IDENTITY -Publisher $env:DRILLFORGE_MSIX_PUBLISHER -Version $version
+            $pfx = Join-Path $env:RUNNER_TEMP "drillforge-signing.pfx"
+            try {
+              [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:DRILLFORGE_PFX_BASE64))
+              $password = ConvertTo-SecureString $env:DRILLFORGE_PFX_PASSWORD -AsPlainText -Force
+              ./scripts/sign-msix.ps1 -Package "dist/DrillForge-$semver-windows-x64.msix" -PfxPath $pfx -Password $password
+              ./scripts/test-msix.ps1 -Package "dist/DrillForge-$semver-windows-x64.msix" -Release
+            } finally {
+              if (Test-Path -LiteralPath $pfx) { Remove-Item -Force -LiteralPath $pfx }
+            }
+          } else {
+            ./scripts/package-msix.ps1
+            ./scripts/test-msix.ps1
+          }
+        env:
+          DRILLFORGE_MSIX_IDENTITY: ${{ secrets.DRILLFORGE_MSIX_IDENTITY }}
+          DRILLFORGE_MSIX_PUBLISHER: ${{ secrets.DRILLFORGE_MSIX_PUBLISHER }}
+          DRILLFORGE_PFX_BASE64: ${{ secrets.DRILLFORGE_PFX_BASE64 }}
+          DRILLFORGE_PFX_PASSWORD: ${{ secrets.DRILLFORGE_PFX_PASSWORD }}
+          DRILLFORGE_UPDATE_HOST: ${{ secrets.DRILLFORGE_UPDATE_HOST }}
+          DRILLFORGE_UPDATE_PATH: ${{ secrets.DRILLFORGE_UPDATE_PATH }}
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/*.zip
+            dist/*.msix
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: DrillForge-windows-x64
+          path: |
+            dist/*.zip
+            dist/*.msix
+            dist/*.sha256
+          if-no-files-found: error

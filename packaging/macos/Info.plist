@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key><string>ja</string>
+  <key>CFBundleDisplayName</key><string>DrillForge</string>
+  <key>CFBundleExecutable</key><string>drill-app</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>CFBundleIdentifier</key><string>__BUNDLE_ID__</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>CFBundleName</key><string>DrillForge</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>__VERSION__</string>
+  <key>CFBundleVersion</key><string>__BUILD_NUMBER__</string>
+  <key>CFBundleDocumentTypes</key>
+  <array><dict>
+    <key>CFBundleTypeName</key><string>DrillForge Project</string>
+    <key>CFBundleTypeRole</key><string>Editor</string>
+    <key>LSHandlerRank</key><string>Owner</string>
+    <key>LSItemContentTypes</key><array><string>com.drillforge.project</string></array>
+  </dict></array>
+  <key>LSApplicationCategoryType</key><string>public.app-category.music</string>
+  <key>LSMinimumSystemVersion</key><string>12.0</string>
+  <key>NSMicrophoneUsageDescription</key><string>音声入力を録音・同期するためにマイクを使用します。</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSHumanReadableCopyright</key><string>Copyright © 2026 DrillForge contributors</string>
+  <key>UTExportedTypeDeclarations</key>
+  <array><dict>
+    <key>UTTypeConformsTo</key><array><string>public.data</string></array>
+    <key>UTTypeDescription</key><string>DrillForge Project</string>
+    <key>UTTypeIdentifier</key><string>com.drillforge.project</string>
+    <key>UTTypeTagSpecification</key><dict>
+      <key>public.filename-extension</key><array><string>drillproj</string></array>
+      <key>public.mime-type</key><string>application/vnd.drillforge.project</string>
+    </dict>
+  </dict></array>
+</dict>
+</plist>

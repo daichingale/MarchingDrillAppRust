@@ -64,15 +64,26 @@ pub fn count_sheet(doc: &Document, beats_per_measure: u16) -> Vec<SetTiming> {
         let start_seconds = doc.tempo.seconds_at(start_count as f32);
         timings.push(SetTiming {
             index,
-            name: set.name.clone(),
-            rehearsal_mark: rehearsal_mark(index),
+            name: if set.annotation.title.trim().is_empty() {
+                set.name.clone()
+            } else {
+                set.annotation.title.clone()
+            },
+            rehearsal_mark: if set.annotation.rehearsal_mark.trim().is_empty() {
+                rehearsal_mark(index)
+            } else {
+                set.annotation.rehearsal_mark.clone()
+            },
             start_count,
             counts: set.counts,
             start_measure,
             start_beat,
-            start_seconds,
+            start_seconds: set
+                .annotation
+                .sync_time_seconds
+                .map_or(start_seconds, |v| v as f32),
         });
-        start_count += u32::from(set.counts);
+        start_count += u32::from(set.counts) + u32::from(set.hold);
     }
     timings
 }
@@ -178,5 +189,17 @@ mod tests {
         assert!(lines[0].contains("Mark"));
         assert!(lines[1].contains('A'));
         assert!(lines[2].contains('B'));
+    }
+
+    #[test]
+    fn production_annotations_override_presentation_without_changing_geometry() {
+        let mut doc = Document::demo(1, 1);
+        doc.sets[0].annotation.title = "Opening hit".into();
+        doc.sets[0].annotation.rehearsal_mark = "I".into();
+        doc.sets[0].annotation.sync_time_seconds = Some(12.5);
+        let row = &count_sheet(&doc, 4)[0];
+        assert_eq!(row.name, "Opening hit");
+        assert_eq!(row.rehearsal_mark, "I");
+        assert_eq!(row.start_seconds, 12.5);
     }
 }
