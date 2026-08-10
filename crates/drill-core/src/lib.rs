@@ -17,6 +17,7 @@ pub mod pathing;
 pub mod playback;
 pub mod production;
 pub mod roster;
+pub mod rhythm_sync;
 pub mod route_suggestions;
 pub mod shapes;
 pub mod snapshot;
