@@ -4,6 +4,10 @@
 /fuzz/artifacts
 /fuzz/target
 
+# Local Claude Code state: per-machine settings and worktrees spawned for
+# parallel agent tasks. Never shared, never fixtures.
+/.claude/
+
 # Files the app writes while editing. These are never fixtures.
 *.autosave.drill.json
 *.backup.drill.json
