@@ -16,3 +16,12 @@ lto = "thin"
 codegen-units = 1
 strip = "symbols"
 overflow-checks = true
+
+# `cargo bench` uses a separate default profile that does NOT inherit
+# `[profile.release]` unless explicitly told to. Without this, benches ran
+# with lto=false, codegen-units=16 and overflow-checks=false: a materially
+# different (and generally faster) build than what actually ships, so
+# documented "release profile" bench numbers were not measuring the shipped
+# binary's configuration. Mirror release exactly so bench numbers are honest.
+[profile.bench]
+inherits = "release"
