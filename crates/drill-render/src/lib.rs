@@ -3,6 +3,7 @@
 //! Builders own no GPU or UI state. A display list can therefore be consumed by
 //! the live renderer, SVG/PDF exporters, and the offline video rasterizer.
 
+use drill_core::show_heatmap::FieldOccupancy;
 use drill_core::{Document, GridStyle, Point};
 use std::fmt::Write as _;
 
@@ -551,6 +552,75 @@ pub fn build_field_camera(
     }
 }
 
+/// "Show DNA": renders a `drill_core::show_heatmap::FieldOccupancy` as
+/// semi-transparent, color-graded rectangles appended to the display list's
+/// `Overlay` layer (cold/blue = lightly used, hot/red = heavily used).
+///
+/// Analysis and drawing are kept separate on purpose: `drill-core` computes
+/// the grid of occupancy values with no knowledge of screen space, and this
+/// function is the only place that knows how to turn a cell into a rect
+/// through the shared [`FieldMap`] (so it always agrees with where dots and
+/// the grid itself are drawn). Cells with zero dwell time are skipped
+/// entirely so the field underneath stays fully visible.
+///
+/// Must be called after the base scene (e.g. [`build_field_2d`]) has built
+/// `out`, since it extends the already-closed `Overlay` layer range rather
+/// than replacing it.
+pub fn append_heatmap(occupancy: &FieldOccupancy, field_map: &FieldMap, out: &mut DisplayList) {
+    let start = out.layer_ranges[Layer::Overlay as usize].start as usize;
+    for cy in 0..occupancy.cells_y {
+        for cx in 0..occupancy.cells_x {
+            let value = occupancy.get(cx, cy);
+            if value <= 0.0 {
+                continue;
+            }
+            let (min_field, max_field) = occupancy.cell_bounds(cx, cy);
+            // `FieldMap::map` flips the y axis (field y=0 is the bottom of
+            // the screen rect), so the mapped corners must be re-sorted into
+            // a proper min/max screen rect rather than assumed to preserve
+            // corner order.
+            let a = field_map.map(min_field);
+            let b = field_map.map(max_field);
+            let rect = Rect {
+                min: Vec2 {
+                    x: a.x.min(b.x),
+                    y: a.y.min(b.y),
+                },
+                max: Vec2 {
+                    x: a.x.max(b.x),
+                    y: a.y.max(b.y),
+                },
+            };
+            out.commands.push(DrawCmd::FieldFill {
+                rect,
+                fill: heat_color(occupancy.normalized(cx, cy)),
+            });
+        }
+    }
+    out.close_layer(Layer::Overlay, start);
+}
+
+/// Cold (blue) -> warm (red) gradient through cyan/yellow, with alpha rising
+/// alongside intensity so lightly-used cells stay faint overlays instead of
+/// fully opaque blocks.
+fn heat_color(t: f32) -> Rgba {
+    let t = t.clamp(0.0, 1.0);
+    let (r, g, b) = if t < 0.5 {
+        let u = t * 2.0;
+        (0.0, u, 1.0 - u) // blue -> green
+    } else {
+        let u = (t - 0.5) * 2.0;
+        (u, 1.0 - u, 0.0) // green -> red
+    };
+    let alpha = 70.0 + t * 130.0; // 70..=200
+    Rgba(
+        (r * 255.0).round() as u8,
+        (g * 255.0).round() as u8,
+        (b * 255.0).round() as u8,
+        alpha.round() as u8,
+    )
+}
+
 /// Serialize a backend-neutral display list as standalone SVG. This is the
 /// canonical vector export path: it applies no independent field transform.
 pub fn display_list_svg(list: &DisplayList) -> String {
@@ -820,5 +890,73 @@ mod tests {
 <circle cx=\"2.5\" cy=\"3\" r=\"1.25\" fill=\"#ff8000\" stroke=\"#000000\"/>\n\
 </svg>"
         );
+    }
+
+    fn single_hot_cell_occupancy() -> FieldOccupancy {
+        // 100x53.333 field (drill_core::GridConfig default), sampled once so
+        // performer at (5, 5) lands in the bottom-left-most cell.
+        let doc = Document::demo(1, 1);
+        let params = drill_core::show_heatmap::HeatmapParams {
+            cells_x: 10,
+            cells_y: 10,
+            samples_per_count: 1.0,
+        };
+        drill_core::show_heatmap::analyze_show_occupancy(&doc, &params)
+    }
+
+    #[test]
+    fn append_heatmap_only_draws_occupied_cells() {
+        let occupancy = single_hot_cell_occupancy();
+        let occupied_cells = (0..occupancy.cells_y)
+            .flat_map(|cy| (0..occupancy.cells_x).map(move |cx| (cx, cy)))
+            .filter(|&(cx, cy)| occupancy.get(cx, cy) > 0.0)
+            .count();
+        assert!(occupied_cells > 0);
+
+        let mut out = DisplayList::new();
+        build_demo(&mut out);
+        let field_map = FieldMap::new(100.0, 53.333, Vec2 { x: 1280.0, y: 720.0 }, 16.0);
+        append_heatmap(&occupancy, &field_map, &mut out);
+
+        let overlay_fills = out
+            .layer(Layer::Overlay)
+            .iter()
+            .filter(|cmd| matches!(cmd, DrawCmd::FieldFill { .. }))
+            .count();
+        assert_eq!(overlay_fills, occupied_cells);
+    }
+
+    #[test]
+    fn append_heatmap_rects_stay_within_field_bounds_and_have_alpha() {
+        let occupancy = single_hot_cell_occupancy();
+        let mut out = DisplayList::new();
+        build_demo(&mut out);
+        let field_map = FieldMap::new(100.0, 53.333, Vec2 { x: 1280.0, y: 720.0 }, 16.0);
+        let field_min = field_map.origin;
+        let field_max = Vec2 {
+            x: field_map.origin.x + 100.0 * field_map.scale,
+            y: field_map.origin.y + 53.333 * field_map.scale,
+        };
+        append_heatmap(&occupancy, &field_map, &mut out);
+
+        for cmd in out.layer(Layer::Overlay) {
+            let DrawCmd::FieldFill { rect, fill } = cmd else {
+                continue;
+            };
+            assert!(rect.min.x >= field_min.x - 0.01 && rect.max.x <= field_max.x + 0.01);
+            assert!(rect.min.y >= field_min.y - 0.01 && rect.max.y <= field_max.y + 0.01);
+            assert!(rect.min.x <= rect.max.x);
+            assert!(rect.min.y <= rect.max.y);
+            assert!(fill.3 > 0 && fill.3 < 255);
+        }
+    }
+
+    #[test]
+    fn heat_color_ranges_from_cold_to_hot() {
+        let cold = heat_color(0.0);
+        let hot = heat_color(1.0);
+        assert!(cold.2 > cold.0); // cold end leans blue
+        assert!(hot.0 > hot.2); // hot end leans red
+        assert!(hot.3 > cold.3); // more intense cells are less transparent
     }
 }

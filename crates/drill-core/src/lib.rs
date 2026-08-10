@@ -21,6 +21,7 @@ pub mod roster;
 pub mod rhythm_sync;
 pub mod route_suggestions;
 pub mod shapes;
+pub mod show_heatmap;
 pub mod snapshot;
 pub mod stadium;
 pub mod svg;
