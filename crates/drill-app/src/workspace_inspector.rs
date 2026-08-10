@@ -4,6 +4,7 @@
 
 use super::*;
 use drill_core::clinic;
+use drill_core::{aesthetics, rhythm_sync};
 
 impl DrillApp {
     pub(super) fn show_workspace_inspector(&mut self, ui: &mut egui::Ui, set_counts: f32) {
@@ -549,6 +550,8 @@ impl DrillApp {
                 });
             }
             ui.separator();
+            self.show_analytics_panel(ui);
+            ui.separator();
             let focus_grid = self.workspace_focus == Some(WorkspaceFocus::Grid);
             egui::CollapsingHeader::new(super::i18n::registered(self.locale, "workspace-inspector.058")).open(focus_grid.then_some(true)).show(ui, |ui| {
                 if focus_grid { ui.scroll_to_cursor(Some(egui::Align::Center)); }
@@ -809,5 +812,162 @@ impl DrillApp {
         },
     );
         ui.separator();
+    }
+
+    /// "Analytics" panel: rhythm-sync, aesthetic/symmetry scoring, and the
+    /// Show DNA heatmap toggle. Unlike the clinic scan above (cheap, reused
+    /// `ScanScratch`, safe to run every frame), all three analyses here are
+    /// heavier at 1,000-performer scale, so each is cached against
+    /// `history.revision()` (and, for the per-set aesthetic score, the
+    /// current set index too) and only recomputed when that key changes --
+    /// never unconditionally every repaint. See the cache fields'
+    /// doc comments on `DrillApp` for the exact invalidation rule.
+    fn show_analytics_panel(&mut self, ui: &mut egui::Ui) {
+        let revision = self.history.revision();
+        egui::CollapsingHeader::new(super::i18n::registered(self.locale, "analytics.001"))
+            .show(ui, |ui| {
+                ui.small(super::i18n::registered(self.locale, "analytics.002"));
+
+                // --- Rhythm sync -------------------------------------------------
+                ui.separator();
+                ui.heading(super::i18n::registered(self.locale, "analytics.003"));
+                ui.small(super::i18n::registered(self.locale, "analytics.004"));
+                if self.rhythm_sync_cache.as_ref().map(|(rev, _)| *rev) != Some(revision) {
+                    let params = rhythm_sync::RhythmSyncParams {
+                        beats_per_measure: self.beats_per_measure,
+                        ..rhythm_sync::RhythmSyncParams::default()
+                    };
+                    let report = rhythm_sync::analyze_show(&self.document, &params);
+                    self.rhythm_sync_cache = Some((revision, report));
+                }
+                if let Some((_, report)) = &self.rhythm_sync_cache {
+                    if report.events.is_empty() {
+                        ui.small(super::i18n::registered(self.locale, "analytics.010"));
+                    } else {
+                        let total = report.events.len() as f32;
+                        let on_downbeat = report
+                            .events
+                            .iter()
+                            .filter(|event| event.intent == rhythm_sync::RhythmicIntent::OnDownbeat)
+                            .count();
+                        let on_backbeat = report
+                            .events
+                            .iter()
+                            .filter(|event| event.intent == rhythm_sync::RhythmicIntent::OnBackbeat)
+                            .count();
+                        let syncopated = report
+                            .events
+                            .iter()
+                            .filter(|event| event.intent == rhythm_sync::RhythmicIntent::Syncopated)
+                            .count();
+                        let color = if report.show_score >= 70.0 {
+                            Color32::from_rgb(99, 210, 151)
+                        } else if report.show_score >= 40.0 {
+                            Color32::from_rgb(255, 184, 77)
+                        } else {
+                            Color32::from_rgb(255, 92, 92)
+                        };
+                        ui.colored_label(
+                            color,
+                            format!(
+                                "{} {:.0}%",
+                                super::i18n::registered(self.locale, "analytics.005"),
+                                report.on_beat_ratio * 100.0
+                            ),
+                        );
+                        ui.small(format!(
+                            "{}: {} {:.0}%  ・  {} {:.0}%  ・  {} {:.0}%",
+                            super::i18n::registered(self.locale, "analytics.006"),
+                            super::i18n::registered(self.locale, "analytics.007"),
+                            on_downbeat as f32 / total * 100.0,
+                            super::i18n::registered(self.locale, "analytics.008"),
+                            on_backbeat as f32 / total * 100.0,
+                            super::i18n::registered(self.locale, "analytics.009"),
+                            syncopated as f32 / total * 100.0,
+                        ));
+                    }
+                }
+
+                // --- Aesthetics / symmetry ---------------------------------------
+                ui.separator();
+                ui.heading(super::i18n::registered(self.locale, "analytics.011"));
+                ui.small(super::i18n::registered(self.locale, "analytics.012"));
+                let aesthetics_key = (revision, self.current_set);
+                if self
+                    .aesthetics_cache
+                    .as_ref()
+                    .map(|(rev, set_index, _)| (*rev, *set_index))
+                    != Some(aesthetics_key)
+                {
+                    let score = aesthetics::analyze_set(
+                        &self.document,
+                        self.current_set,
+                        &aesthetics::AestheticParams::default(),
+                    );
+                    self.aesthetics_cache =
+                        score.map(|score| (revision, self.current_set, score));
+                }
+                if let Some((_, _, score)) = &self.aesthetics_cache {
+                    ui.small(format!(
+                        "{}: {:.0}  ・  {}: {:.0}  ・  {}: {:.0}",
+                        super::i18n::registered(self.locale, "analytics.013"),
+                        score.overall,
+                        super::i18n::registered(self.locale, "analytics.014"),
+                        score.symmetry.score,
+                        super::i18n::registered(self.locale, "analytics.015"),
+                        score.density_uniformity,
+                    ));
+                    if !score.symmetry.worst_offenders.is_empty() {
+                        ui.small(super::i18n::registered(self.locale, "analytics.016"));
+                        for &(performer_id, distance) in &score.symmetry.worst_offenders {
+                            let label = self
+                                .document
+                                .performers
+                                .iter()
+                                .find(|performer| performer.id == performer_id)
+                                .map(|performer| performer.label.as_str())
+                                .unwrap_or("?");
+                            ui.small(format!("    {label}  ·  {distance:.2}"));
+                        }
+                    }
+                } else {
+                    ui.small(super::i18n::registered(self.locale, "analytics.017"));
+                }
+
+                // --- Show DNA heatmap ---------------------------------------------
+                ui.separator();
+                ui.heading(super::i18n::registered(self.locale, "analytics.018"));
+                ui.small(super::i18n::registered(self.locale, "analytics.019"));
+                ui.checkbox(
+                    &mut self.heatmap_enabled,
+                    super::i18n::registered(self.locale, "analytics.020"),
+                );
+                if !self.heatmap_enabled {
+                    self.heatmap_cache = None;
+                }
+
+                // --- Trails ---------------------------------------------------------
+                ui.separator();
+                ui.heading(super::i18n::registered(self.locale, "analytics.021"));
+                ui.small(super::i18n::registered(self.locale, "analytics.022"));
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(super::i18n::registered(self.locale, "analytics.023"));
+                    ui.selectable_value(
+                        &mut self.trail_selection,
+                        drill_render::TrailSelection::None,
+                        super::i18n::registered(self.locale, "analytics.024"),
+                    );
+                    ui.selectable_value(
+                        &mut self.trail_selection,
+                        drill_render::TrailSelection::Selected,
+                        super::i18n::registered(self.locale, "analytics.025"),
+                    );
+                    ui.selectable_value(
+                        &mut self.trail_selection,
+                        drill_render::TrailSelection::All,
+                        super::i18n::registered(self.locale, "analytics.026"),
+                    );
+                });
+            });
     }
 }

@@ -63,7 +63,7 @@ use drill_core::route_suggestions::{
 };
 use drill_core::video::{ExportPreset, VideoExportConfig};
 use drill_core::{
-    Document, Edit, GridConfig, GridLine, GridStyle, History, Point, Set, Unit,
+    Document, Edit, GridConfig, GridLine, GridStyle, History, PerformerId, Point, Set, Unit,
     camera::Camera, clinic, continuity, coordinates, editing, evenly_spaced_arc,
     evenly_spaced_line, pathing, shapes,
 };
@@ -178,6 +178,29 @@ pub(crate) struct DrillApp {
     free_draw_raw: Vec<Point>,
     formation_text: String,
     underlay_state: underlay_state::UnderlayState,
+    /// Cached whole-show rhythm-sync report, keyed by the `History` revision
+    /// it was computed against. `analyze_show` is `O(performers *
+    /// transitions)`, too heavy to re-run every frame at 1,000-performer
+    /// scale, so the analytics panel only recomputes it when the document
+    /// has actually changed (i.e. `history.revision()` no longer matches),
+    /// not on every repaint. See `workspace_inspector::show_workspace_inspector`.
+    rhythm_sync_cache: Option<(drill_core::Revision, drill_core::rhythm_sync::RhythmSyncReport)>,
+    /// Cached aesthetic score for one set, keyed by `(revision, set_index)`
+    /// so switching sets or editing the document both invalidate it. Same
+    /// re-render-every-frame cost concern as `rhythm_sync_cache`.
+    aesthetics_cache: Option<(drill_core::Revision, usize, drill_core::aesthetics::AestheticScore)>,
+    /// Whether the "Show DNA" field-usage heatmap overlay is drawn. The
+    /// underlying `FieldOccupancy` is only computed while this is on (and
+    /// only recomputed when `heatmap_cache`'s revision goes stale), so
+    /// leaving it off costs nothing per frame.
+    heatmap_enabled: bool,
+    heatmap_cache: Option<(drill_core::Revision, drill_core::show_heatmap::FieldOccupancy)>,
+    /// Which performers' movement trails to overlay on the field view; see
+    /// `drill_render::TrailSelection`. Trails are cheap to resample (backed
+    /// by a warm thread-local scratch buffer in `drill_render`), so unlike
+    /// the three caches above this is not cached -- it is recomputed from
+    /// `frame_positions`-adjacent state every frame it is visible.
+    trail_selection: drill_render::TrailSelection,
 }
 
 impl Default for DrillApp {
@@ -257,6 +280,11 @@ impl Default for DrillApp {
             free_draw_raw: Vec::with_capacity(512),
             formation_text: "DRILL".into(),
             underlay_state: underlay_state::UnderlayState::default(),
+            rhythm_sync_cache: None,
+            aesthetics_cache: None,
+            heatmap_enabled: false,
+            heatmap_cache: None,
+            trail_selection: drill_render::TrailSelection::None,
         }
     }
 }

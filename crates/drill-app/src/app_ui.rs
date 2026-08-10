@@ -1301,6 +1301,66 @@ impl eframe::App for DrillApp {
                     &mut self.render_scratch,
                     &mut self.display_list,
                 );
+                // Must stay in lockstep with the mapping `build_field_2d` used to
+                // place the dots this frame (same grid, viewport, and margin) —
+                // otherwise the heatmap overlay, trails, selection ring, and
+                // hit-testing all drift away from where the performer is
+                // actually drawn whenever the viewport's aspect ratio doesn't
+                // match the field's. See FieldMap's docs.
+                let field_map = drill_render::FieldMap::new(
+                    self.document.grid.width,
+                    self.document.grid.height,
+                    drill_render::Vec2 {
+                        x: rect.width(),
+                        y: rect.height(),
+                    },
+                    render_options.margin,
+                );
+                // Show DNA heatmap overlay: recomputed only when the document
+                // changes (see `heatmap_cache`'s doc comment on `DrillApp`),
+                // and only while the toggle in the Analytics panel is on.
+                if self.heatmap_enabled {
+                    let revision = self.history.revision();
+                    if self.heatmap_cache.as_ref().map(|(rev, _)| *rev) != Some(revision) {
+                        let occupancy = drill_core::show_heatmap::analyze_show_occupancy(
+                            &self.document,
+                            &drill_core::show_heatmap::HeatmapParams::default(),
+                        );
+                        self.heatmap_cache = Some((revision, occupancy));
+                    }
+                    if let Some((_, occupancy)) = &self.heatmap_cache {
+                        drill_render::append_heatmap(occupancy, &field_map, &mut self.display_list);
+                    }
+                }
+                // Movement trails for the transition leaving the current set,
+                // scoped by the Analytics panel's "Show for" selector. Cheap
+                // enough (warm thread-local scratch in `drill_render`) to
+                // resample every visible frame rather than cache.
+                if self.trail_selection != drill_render::TrailSelection::None
+                    && let Some(set) = self.document.sets.get(self.current_set)
+                {
+                    let trail_performer_ids: Vec<PerformerId> = match self.trail_selection {
+                        drill_render::TrailSelection::All => {
+                            self.document.performers.iter().map(|p| p.id).collect()
+                        }
+                        drill_render::TrailSelection::Selected => self
+                            .selected
+                            .iter()
+                            .filter_map(|&index| self.document.performers.get(index).map(|p| p.id))
+                            .collect(),
+                        drill_render::TrailSelection::None => Vec::new(),
+                    };
+                    if !trail_performer_ids.is_empty() {
+                        drill_render::append_trails(
+                            &self.document,
+                            set.id,
+                            &trail_performer_ids,
+                            &field_map,
+                            24,
+                            &mut self.display_list,
+                        );
+                    }
+                }
                 if let Some(gpu) = self.gpu.as_ref().filter(|gpu| gpu.active()) {
                     gpu.update(&self.display_list);
                     egui_backend::paint_gpu_background(&painter, rect.min, &self.display_list);
@@ -1346,20 +1406,6 @@ impl eframe::App for DrillApp {
                 }
                 let grid_width = self.document.grid.width;
                 let grid_height = self.document.grid.height;
-                // Must stay in lockstep with the mapping `build_field_2d` used to
-                // place the dots this frame (same grid, viewport, and margin) —
-                // otherwise the selection ring and hit-testing drift away from
-                // where the performer is actually drawn whenever the viewport's
-                // aspect ratio doesn't match the field's. See FieldMap's docs.
-                let field_map = drill_render::FieldMap::new(
-                    grid_width,
-                    grid_height,
-                    drill_render::Vec2 {
-                        x: rect.width(),
-                        y: rect.height(),
-                    },
-                    render_options.margin,
-                );
                 let to_screen = |point: Point| {
                     let v = field_map.map(point);
                     Pos2::new(rect.left() + v.x, rect.top() + v.y)

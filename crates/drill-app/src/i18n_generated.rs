@@ -1182,6 +1182,78 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "app-ui.072") => "Audio error",
         (Locale::Ja, "app-ui.073") => "音源解析をキャンセルしました",
         (Locale::En, "app-ui.073") => "Audio analysis cancelled",
+        (Locale::Ja, "analytics.001") => "アナリティクス",
+        (Locale::En, "analytics.001") => "Analytics",
+        (Locale::Ja, "analytics.002") => {
+            "ショーの評価指標をまとめて確認できます。数値は目安であり、最終判断は演出担当が行ってください。"
+        }
+        (Locale::En, "analytics.002") => {
+            "Review the show's evaluation metrics in one place. These are reference numbers, not a final verdict — the design staff should always have the last word."
+        }
+        (Locale::Ja, "analytics.003") => "リズム同期",
+        (Locale::En, "analytics.003") => "Rhythm Sync",
+        (Locale::Ja, "analytics.004") => {
+            "出発・到着が音楽の拍にどれだけ合っているかを解析します（曲全体・全セット対象）"
+        }
+        (Locale::En, "analytics.004") => {
+            "Analyzes how closely every departure and arrival lands on the musical beat, across the whole show"
+        }
+        (Locale::Ja, "analytics.005") => "オンビート率",
+        (Locale::En, "analytics.005") => "On-beat rate",
+        (Locale::Ja, "analytics.006") => "内訳",
+        (Locale::En, "analytics.006") => "Breakdown",
+        (Locale::Ja, "analytics.007") => "強拍到着",
+        (Locale::En, "analytics.007") => "On downbeat",
+        (Locale::Ja, "analytics.008") => "弱拍到着",
+        (Locale::En, "analytics.008") => "On backbeat",
+        (Locale::Ja, "analytics.009") => "シンコペーション",
+        (Locale::En, "analytics.009") => "Syncopated",
+        (Locale::Ja, "analytics.010") => "分析対象がありません（セットが2つ以上必要です）",
+        (Locale::En, "analytics.010") => "Nothing to analyze yet (at least two sets are needed)",
+        (Locale::Ja, "analytics.011") => "審美・対称性スコア",
+        (Locale::En, "analytics.011") => "Aesthetics & Symmetry Score",
+        (Locale::Ja, "analytics.012") => {
+            "現在のセットの左右対称性と密度の均一性を採点します（美醜の絶対的な判定ではありません）"
+        }
+        (Locale::En, "analytics.012") => {
+            "Scores the current set's left-right symmetry and density evenness (a reference indicator, not an absolute beauty judgement)"
+        }
+        (Locale::Ja, "analytics.013") => "総合スコア",
+        (Locale::En, "analytics.013") => "Overall score",
+        (Locale::Ja, "analytics.014") => "対称性",
+        (Locale::En, "analytics.014") => "Symmetry",
+        (Locale::Ja, "analytics.015") => "密度均一性",
+        (Locale::En, "analytics.015") => "Density evenness",
+        (Locale::Ja, "analytics.016") => "対称性を崩している演者 トップ5",
+        (Locale::En, "analytics.016") => "Top 5 performers breaking symmetry",
+        (Locale::Ja, "analytics.017") => "このセットは採点できません（演者または座標がありません）",
+        (Locale::En, "analytics.017") => "This set can't be scored (no performers or positions)",
+        (Locale::Ja, "analytics.018") => "ショーDNA（ヒートマップ）",
+        (Locale::En, "analytics.018") => "Show DNA (Heatmap)",
+        (Locale::Ja, "analytics.019") => {
+            "ショー全体でフィールドのどこが多く使われたかを色の濃さで重ねて表示します（青=少ない、赤=多い）"
+        }
+        (Locale::En, "analytics.019") => {
+            "Overlays how much each part of the field was used across the whole show (blue = light use, red = heavy use)"
+        }
+        (Locale::Ja, "analytics.020") => "フィールド使用頻度を表示",
+        (Locale::En, "analytics.020") => "Show field usage heatmap",
+        (Locale::Ja, "analytics.021") => "軌跡（トレイル）",
+        (Locale::En, "analytics.021") => "Trails",
+        (Locale::Ja, "analytics.022") => {
+            "現在のセットから次のセットへ向かう演者の移動経路を、速度で色分けして表示します（青=遅い、赤=速い）"
+        }
+        (Locale::En, "analytics.022") => {
+            "Shows the movement path from the current set to the next, color-coded by speed (blue = slow, red = fast)"
+        }
+        (Locale::Ja, "analytics.023") => "表示対象",
+        (Locale::En, "analytics.023") => "Show for",
+        (Locale::Ja, "analytics.024") => "非表示",
+        (Locale::En, "analytics.024") => "Hidden",
+        (Locale::Ja, "analytics.025") => "選択中の演者のみ",
+        (Locale::En, "analytics.025") => "Selected performers only",
+        (Locale::Ja, "analytics.026") => "全員",
+        (Locale::En, "analytics.026") => "Everyone",
         _ => "[missing message]",
     }
 }
