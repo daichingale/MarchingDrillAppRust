@@ -24,6 +24,8 @@ mod import_state;
 mod inspector_media;
 #[path = "legal_notices.rs"]
 mod legal_notices;
+#[path = "mobile_viewer_state.rs"]
+mod mobile_viewer_state;
 #[path = "onboarding.rs"]
 mod onboarding;
 #[path = "plugin_state.rs"]
@@ -144,6 +146,7 @@ pub(crate) struct DrillApp {
     locale: Locale,
     crash_notice_dismissed: bool,
     print_state: print_state::PrintState,
+    mobile_viewer_state: mobile_viewer_state::MobileViewerState,
     workspace_focus: Option<WorkspaceFocus>,
     show_legal_notices: bool,
     update_state: update_state::UpdateState,
@@ -220,6 +223,7 @@ impl Default for DrillApp {
             locale: Locale::Ja,
             crash_notice_dismissed: false,
             print_state: print_state::PrintState::default(),
+            mobile_viewer_state: mobile_viewer_state::MobileViewerState::default(),
             workspace_focus: None,
             show_legal_notices: false,
             update_state: update_state::UpdateState::default(),

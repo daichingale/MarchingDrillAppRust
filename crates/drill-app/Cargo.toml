@@ -15,6 +15,7 @@ drill-project = { path = "../drill-project" }
 drill-updater = { path = "../drill-updater" }
 drill-interop = { path = "../drill-interop" }
 drill-plugin = { path = "../drill-plugin" }
+drill-mobile-viewer = { path = "../drill-mobile-viewer" }
 eframe = { version = "0.35.0", default-features = false, features = ["accesskit", "wgpu", "glow", "__screenshot", "wayland", "x11"] }
 rfd = "0.17.2"
 blake3 = "1.8.2"

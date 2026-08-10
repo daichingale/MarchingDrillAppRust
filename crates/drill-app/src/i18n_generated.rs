@@ -1136,6 +1136,18 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "inspector-media.063") => "Count Sheet (TXT)",
         (Locale::Ja, "inspector-media.064") => "キャンセル",
         (Locale::En, "inspector-media.064") => "Cancel",
+        (Locale::Ja, "inspector-media.065") => "個人練習ビューア (HTML)",
+        (Locale::En, "inspector-media.065") => "Practice Viewer (HTML)",
+        (Locale::Ja, "inspector-media.066") => {
+            "スマホのブラウザでオフライン再生できる、演者ごとの自主練習用ページを書き出します"
+        }
+        (Locale::En, "inspector-media.066") => {
+            "Exports an offline, phone-friendly self-practice page for each performer"
+        }
+        (Locale::Ja, "inspector-media.067") => "練習ビューアを書き出せません",
+        (Locale::En, "inspector-media.067") => "Could not export the practice viewer",
+        (Locale::Ja, "inspector-media.068") => "前回書き出した演者数",
+        (Locale::En, "inspector-media.068") => "Performers in last export",
         (Locale::Ja, "import-status.001") => "音楽タイムラインを安全に解析中…",
         (Locale::En, "import-status.001") => "Safely analyzing musical timeline…",
         (Locale::Ja, "import-status.002") => "表を安全に検査中…",
