@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, VecDeque};
 
+pub mod aesthetics;
 pub mod audio;
 pub mod camera;
 pub mod clinic;
