@@ -305,6 +305,11 @@ impl eframe::App for DrillApp {
             self.execute_command(command, ui.ctx());
         }
 
+        if self.simple_mode.enabled {
+            self.simple_ui(ui);
+            return;
+        }
+
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button(text(self.locale, Text::File), |ui| {
                 if ui.button(text(self.locale, Text::OpenJson)).clicked() {
@@ -558,6 +563,16 @@ impl eframe::App for DrillApp {
                 ui.checkbox(&mut self.loop_playback, text(self.locale, Text::Loop));
             });
             ui.menu_button(text(self.locale, Text::View), |ui| {
+                let simple_mode_label = match self.locale {
+                    Locale::Ja => "簡単モード",
+                    Locale::En => "Simple Mode",
+                };
+                if ui
+                    .checkbox(&mut self.simple_mode.enabled, simple_mode_label)
+                    .changed()
+                {
+                    ui.close();
+                }
                 ui.checkbox(&mut self.show_guidance, text(self.locale, Text::Guidance));
                 let mut show_grid = self.document.grid.show_step_grid;
                 if ui
