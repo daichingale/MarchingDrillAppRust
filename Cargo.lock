@@ -877,6 +877,7 @@ dependencies = [
  "drill-gpu",
  "drill-interop",
  "drill-jobs",
+ "drill-mobile-viewer",
  "drill-plugin",
  "drill-project",
  "drill-render",
@@ -960,6 +961,14 @@ dependencies = [
  "blake3",
  "drill-core",
  "drill-project",
+]
+
+[[package]]
+name = "drill-mobile-viewer"
+version = "0.1.0"
+dependencies = [
+ "drill-core",
+ "drill-render",
 ]
 
 [[package]]

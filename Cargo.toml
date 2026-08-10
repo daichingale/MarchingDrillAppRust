@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/drill-core", "crates/drill-app", "crates/drill-jobs", "crates/drill-render", "crates/drill-gpu", "crates/drill-project", "crates/drill-audio", "crates/drill-export", "crates/drill-updater", "crates/drill-interop", "crates/drill-plugin", "crates/drill-conformance"]
+members = ["crates/drill-core", "crates/drill-app", "crates/drill-jobs", "crates/drill-render", "crates/drill-gpu", "crates/drill-project", "crates/drill-audio", "crates/drill-export", "crates/drill-updater", "crates/drill-interop", "crates/drill-plugin", "crates/drill-conformance", "crates/drill-mobile-viewer"]
 resolver = "2"
 
 [workspace.package]

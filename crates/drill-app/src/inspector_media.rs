@@ -434,6 +434,45 @@ impl DrillApp {
         {
             self.print_state.open = true;
         }
+        if ui
+            .button(super::i18n::registered(self.locale, "inspector-media.065"))
+            .on_hover_text(super::i18n::registered(self.locale, "inspector-media.066"))
+            .clicked()
+        {
+            let performer_ids: Vec<_> = self
+                .selected
+                .iter()
+                .filter_map(|&index| self.document.performers.get(index).map(|p| p.id))
+                .collect();
+            match drill_mobile_viewer::build_practice_viewer(
+                &self.document,
+                &performer_ids,
+                self.locale,
+            ) {
+                Ok(html) => {
+                    self.mobile_viewer_state.last_performer_count = if performer_ids.is_empty() {
+                        self.document.performers.len()
+                    } else {
+                        performer_ids.len()
+                    };
+                    self.export_text("practice_viewer.html", "HTML", "html", html);
+                }
+                Err(error) => {
+                    self.status = format!(
+                        "{}: {}",
+                        super::i18n::registered(self.locale, "inspector-media.067"),
+                        error.message(self.locale)
+                    );
+                }
+            }
+        }
+        if self.mobile_viewer_state.last_performer_count > 0 {
+            ui.small(format!(
+                "{}: {}",
+                super::i18n::registered(self.locale, "inspector-media.068"),
+                self.mobile_viewer_state.last_performer_count
+            ));
+        }
         ui.small("従来形式");
         if ui
             .button(super::i18n::registered(self.locale, "inspector-media.060"))
