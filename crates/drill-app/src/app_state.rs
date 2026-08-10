@@ -63,9 +63,9 @@ use drill_core::route_suggestions::{
 };
 use drill_core::video::{ExportPreset, VideoExportConfig};
 use drill_core::{
-    Document, Edit, GridConfig, GridLine, GridStyle, History, Point, Set, Unit, analyze_transition,
-    camera::Camera, continuity, coordinates, editing, evenly_spaced_arc, evenly_spaced_line,
-    pathing, shapes,
+    Document, Edit, GridConfig, GridLine, GridStyle, History, Point, Set, Unit,
+    camera::Camera, clinic, continuity, coordinates, editing, evenly_spaced_arc,
+    evenly_spaced_line, pathing, shapes,
 };
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 use i18n::{Text, text};
@@ -122,6 +122,11 @@ pub(crate) struct DrillApp {
     click_settings: drill_audio::ClickSettings,
     display_list: drill_render::DisplayList,
     render_scratch: drill_render::BuildScratch,
+    /// Reused across frames so the collision/stride clinic never reallocates
+    /// its spatial-hash buffers in the UI hot path (see `analyze_transition`'s
+    /// doc comment: it makes a fresh `ScanScratch` per call, which is fine for
+    /// one-off callers but wrong for something drawn every frame).
+    clinic_scratch: clinic::ScanScratch,
     selected: BTreeSet<usize>,
     history: History,
     drag_before: Option<Vec<Point>>,
@@ -186,6 +191,7 @@ impl Default for DrillApp {
             click_settings: drill_audio::ClickSettings::default(),
             display_list: drill_render::DisplayList::new(),
             render_scratch: drill_render::BuildScratch,
+            clinic_scratch: clinic::ScanScratch::default(),
             view_mode: ViewMode::Field2D,
             camera,
             camera_program_preview: true,

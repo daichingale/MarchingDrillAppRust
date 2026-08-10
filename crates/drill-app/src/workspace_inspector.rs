@@ -3,6 +3,7 @@
 //! This module owns no document state. Mutations still flow through DrillApp and History.
 
 use super::*;
+use drill_core::clinic;
 
 impl DrillApp {
     pub(super) fn show_workspace_inspector(&mut self, ui: &mut egui::Ui, set_counts: f32) {
@@ -417,7 +418,32 @@ impl DrillApp {
                     });
                 }
             }
-            let analysis = analyze_transition(&self.document, self.current_set, 0.75, 1.0);
+            // Calls the spatial-hash clinic directly (instead of the
+            // `analyze_transition` compatibility wrapper) so the reusable
+            // `ScanScratch` on `DrillApp` carries its allocation across
+            // frames. `analyze_transition` allocates a fresh `ScanScratch`
+            // per call, which is correct for occasional callers but would
+            // reallocate every frame here.
+            let report = clinic::scan_transition(
+                &self.document,
+                self.current_set,
+                clinic::ClinicParams {
+                    style: clinic::StepStyle::Custom { units_per_step: 1.0 },
+                    collision_radius: 0.75,
+                    danger_radius: 0.75,
+                    crowded_radius: 0.75,
+                    aggressive_above: 1.0,
+                    impossible_above: f32::MAX,
+                    ..clinic::ClinicParams::default()
+                },
+                &mut self.clinic_scratch,
+            );
+            let collisions = report.collisions.len();
+            let excessive_strides = report
+                .strides
+                .iter()
+                .filter(|stride| stride.rating > clinic::StrideRating::Comfortable)
+                .count();
             ui.separator();
             if self.workspace_focus == Some(WorkspaceFocus::Clinic) {
                 ui.scroll_to_cursor(Some(egui::Align::Center));
@@ -425,23 +451,23 @@ impl DrillApp {
             }
             ui.heading(super::i18n::registered(self.locale, "workspace-inspector.095"));
             ui.small(super::i18n::registered(self.locale, "workspace-inspector.049"));
-            let collision_color = if analysis.collisions == 0 {
+            let collision_color = if collisions == 0 {
                 Color32::from_rgb(99, 210, 151)
             } else {
                 Color32::from_rgb(255, 92, 92)
             };
             ui.colored_label(
                 collision_color,
-                format!("● {}: {}", super::i18n::registered(self.locale, "workspace-inspector.106"), analysis.collisions),
+                format!("● {}: {}", super::i18n::registered(self.locale, "workspace-inspector.106"), collisions),
             );
-            let stride_color = if analysis.excessive_strides == 0 {
+            let stride_color = if excessive_strides == 0 {
                 Color32::from_rgb(99, 210, 151)
             } else {
                 Color32::from_rgb(255, 184, 77)
             };
             ui.colored_label(
                 stride_color,
-                format!("● {}: {}", super::i18n::registered(self.locale, "workspace-inspector.107"), analysis.excessive_strides),
+                format!("● {}: {}", super::i18n::registered(self.locale, "workspace-inspector.107"), excessive_strides),
             );
             let stats = pathing::transition_stats(&self.document, self.current_set);
             let unit_label = match self.document.grid.unit {
