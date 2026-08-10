@@ -34,6 +34,8 @@ mod print_state;
 mod project_state;
 #[path = "section_manager.rs"]
 mod section_manager;
+#[path = "simple_mode.rs"]
+mod simple_mode;
 #[path = "stadium_inspector.rs"]
 mod stadium_inspector;
 #[path = "subset_snapshot_state.rs"]
@@ -140,6 +142,7 @@ pub(crate) struct DrillApp {
     timeline_view: TimelineViewport,
     timeline_follow: bool,
     onboarding: onboarding::OnboardingState,
+    simple_mode: simple_mode::SimpleModeState,
     ever_played: bool,
     locale: Locale,
     crash_notice_dismissed: bool,
@@ -216,6 +219,7 @@ impl Default for DrillApp {
             timeline_view: TimelineViewport::fit(playback_end),
             timeline_follow: true,
             onboarding: onboarding::OnboardingState::default(),
+            simple_mode: simple_mode::SimpleModeState::default(),
             ever_played: false,
             locale: Locale::Ja,
             crash_notice_dismissed: false,

@@ -384,6 +384,7 @@ mod tests {
             ("inspector_media.rs", include_str!("inspector_media.rs")),
             ("import_state.rs", include_str!("import_state.rs")),
             ("formation field", include_str!("field_view.rs")),
+            ("simple_mode.rs", include_str!("simple_mode.rs")),
         ];
         for (name, source) in sources {
             assert!(
