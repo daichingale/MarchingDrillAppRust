@@ -15,8 +15,17 @@ fn rectangle(origin: Pos2, value: drill_render::Rect) -> Rect {
     Rect::from_min_max(position(origin, value.min), position(origin, value.max))
 }
 
+/// Paints the whole display list for the CPU-only path (no GPU dot
+/// instancing). Iterates layer-by-layer in `Layer::ALL`'s semantic order
+/// rather than `list.commands()`'s raw insertion order, so a layer that was
+/// appended late in the frame (e.g. `drill_render::append_trails`, called
+/// after `build_field_2d` has already emitted the `Dot`/`DotLabel` commands)
+/// still paints underneath layers that are semantically "above" it, matching
+/// what the GPU path already does via `paint_gpu_background` /
+/// `paint_gpu_foreground`. See `append_trails`'s doc comment for the
+/// insertion-order-vs-layer-order distinction this works around.
 pub(crate) fn paint(painter: &egui::Painter, origin: Pos2, list: &DisplayList) {
-    paint_filtered(painter, origin, list, true);
+    paint_layers(painter, origin, list, &Layer::ALL);
 }
 
 pub(crate) fn paint_gpu_background(painter: &egui::Painter, origin: Pos2, list: &DisplayList) {
@@ -47,15 +56,6 @@ pub(crate) fn paint_gpu_foreground(painter: &egui::Painter, origin: Pos2, list: 
 
 fn paint_layers(painter: &egui::Painter, origin: Pos2, list: &DisplayList, layers: &[Layer]) {
     for command in layers.iter().flat_map(|layer| list.layer(*layer)) {
-        paint_command(painter, origin, list, command);
-    }
-}
-
-fn paint_filtered(painter: &egui::Painter, origin: Pos2, list: &DisplayList, dots: bool) {
-    for command in list.commands() {
-        if !dots && matches!(command, DrawCmd::Dot { .. }) {
-            continue;
-        }
         paint_command(painter, origin, list, command);
     }
 }
