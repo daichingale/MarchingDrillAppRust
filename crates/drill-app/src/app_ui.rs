@@ -1331,11 +1331,29 @@ impl eframe::App for DrillApp {
                 }
                 let grid_width = self.document.grid.width;
                 let grid_height = self.document.grid.height;
+                // Must stay in lockstep with the mapping `build_field_2d` used to
+                // place the dots this frame (same grid, viewport, and margin) —
+                // otherwise the selection ring and hit-testing drift away from
+                // where the performer is actually drawn whenever the viewport's
+                // aspect ratio doesn't match the field's. See FieldMap's docs.
+                let field_map = drill_render::FieldMap::new(
+                    grid_width,
+                    grid_height,
+                    drill_render::Vec2 {
+                        x: rect.width(),
+                        y: rect.height(),
+                    },
+                    render_options.margin,
+                );
                 let to_screen = |point: Point| {
-                    Pos2::new(
-                        rect.left() + point.x / grid_width * rect.width(),
-                        rect.bottom() - point.y / grid_height * rect.height(),
-                    )
+                    let v = field_map.map(point);
+                    Pos2::new(rect.left() + v.x, rect.top() + v.y)
+                };
+                let from_screen = |pos: Pos2| {
+                    field_map.unmap(drill_render::Vec2 {
+                        x: pos.x - rect.left(),
+                        y: pos.y - rect.top(),
+                    })
                 };
                 if !self.formation_preview_points.is_empty() {
                     for pair in self.formation_preview_points.windows(2) {
@@ -1378,11 +1396,10 @@ impl eframe::App for DrillApp {
                 }
                 if let Some(pointer) = response.interact_pointer_pos() {
                     if self.free_draw_active && (response.drag_started() || response.dragged()) {
+                        let unclamped = from_screen(pointer);
                         let point = Point {
-                            x: ((pointer.x - rect.left()) / rect.width() * grid_width)
-                                .clamp(0.0, grid_width),
-                            y: ((rect.bottom() - pointer.y) / rect.height() * grid_height)
-                                .clamp(0.0, grid_height),
+                            x: unclamped.x.clamp(0.0, grid_width),
+                            y: unclamped.y.clamp(0.0, grid_height),
                         };
                         let sufficiently_far = self
                             .free_draw_raw
@@ -1476,7 +1493,7 @@ impl eframe::App for DrillApp {
                             preview.push(controller::drag_point(
                                 start,
                                 (pointer.x - origin.x, pointer.y - origin.y),
-                                (rect.width(), rect.height()),
+                                field_map.scale,
                                 &self.document,
                             ));
                         }

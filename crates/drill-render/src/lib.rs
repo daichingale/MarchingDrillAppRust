@@ -221,6 +221,78 @@ pub struct Scene<'a> {
 #[derive(Debug, Default)]
 pub struct BuildScratch;
 
+/// The single field<->screen mapping every consumer of a 2D field must share:
+/// the live egui view, the SVG/PDF exporters, and hit-testing/dragging in the
+/// app layer. Computing this independently in more than one place is how the
+/// dot the user sees and the dot the app hit-tests against drift apart.
+///
+/// Aspect ratio is preserved (`scale` is the smaller of the two axis scales)
+/// and the field is centered in any letterboxed remainder, matching how
+/// [`build_field_2d`] has always rendered it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FieldMap {
+    pub scale: f32,
+    pub origin: Vec2,
+    pub grid_height: f32,
+}
+
+impl FieldMap {
+    /// `viewport_size` and `margin` are in the same units as the `Vec2`s this
+    /// map produces (typically screen pixels). `grid_width`/`grid_height` are
+    /// document units (yards/meters). Falls back to `scale = 1.0` centered at
+    /// the origin if the grid dimensions are non-finite or non-positive, so
+    /// callers never divide by zero.
+    pub fn new(grid_width: f32, grid_height: f32, viewport_size: Vec2, margin: f32) -> Self {
+        if !grid_width.is_finite()
+            || !grid_height.is_finite()
+            || grid_width <= 0.0
+            || grid_height <= 0.0
+        {
+            return Self {
+                scale: 1.0,
+                origin: Vec2 { x: 0.0, y: 0.0 },
+                grid_height: grid_height.max(f32::EPSILON),
+            };
+        }
+        let margin = margin.max(0.0);
+        let available = Vec2 {
+            x: (viewport_size.x - margin * 2.0).max(1.0),
+            y: (viewport_size.y - margin * 2.0).max(1.0),
+        };
+        let scale = (available.x / grid_width).min(available.y / grid_height);
+        let origin = Vec2 {
+            x: (viewport_size.x - grid_width * scale) * 0.5,
+            y: (viewport_size.y - grid_height * scale) * 0.5,
+        };
+        Self {
+            scale,
+            origin,
+            grid_height,
+        }
+    }
+
+    /// Field units -> viewport-local pixels. Front sideline (`y = 0`) maps to
+    /// the bottom edge of the field rect.
+    pub fn map(&self, p: Point) -> Vec2 {
+        Vec2 {
+            x: self.origin.x + p.x * self.scale,
+            y: self.origin.y + (self.grid_height - p.y) * self.scale,
+        }
+    }
+
+    /// Inverse of [`map`](Self::map): viewport-local pixels -> field units.
+    /// Not clamped to the field bounds; callers that need points confined to
+    /// the field should clamp/snap the result themselves (e.g. via
+    /// `GridConfig::snap`).
+    pub fn unmap(&self, screen: Vec2) -> Point {
+        let scale = self.scale.max(f32::EPSILON);
+        Point {
+            x: (screen.x - self.origin.x) / scale,
+            y: self.grid_height - (screen.y - self.origin.y) / scale,
+        }
+    }
+}
+
 /// Builds a 2D field using index multiplication, never cumulative floating-point stepping.
 pub fn build_field_2d(scene: &Scene<'_>, _scratch: &mut BuildScratch, out: &mut DisplayList) {
     out.clear();
@@ -235,25 +307,18 @@ pub fn build_field_2d(scene: &Scene<'_>, _scratch: &mut BuildScratch, out: &mut 
         out.stats.dropped_nonfinite = 1;
         return;
     }
-    let margin = scene.options.margin.max(0.0);
-    let available = Vec2 {
-        x: (scene.viewport.size.x - margin * 2.0).max(1.0),
-        y: (scene.viewport.size.y - margin * 2.0).max(1.0),
-    };
-    let scale = (available.x / grid.width).min(available.y / grid.height);
-    let origin = Vec2 {
-        x: (scene.viewport.size.x - grid.width * scale) * 0.5,
-        y: (scene.viewport.size.y - grid.height * scale) * 0.5,
-    };
-    let map = |p: Point| Vec2 {
-        x: origin.x + p.x * scale,
-        y: origin.y + (grid.height - p.y) * scale,
-    };
+    let field_map = FieldMap::new(
+        grid.width,
+        grid.height,
+        scene.viewport.size,
+        scene.options.margin,
+    );
+    let map = |p: Point| field_map.map(p);
     let field = Rect {
-        min: origin,
+        min: field_map.origin,
         max: Vec2 {
-            x: origin.x + grid.width * scale,
-            y: origin.y + grid.height * scale,
+            x: field_map.origin.x + grid.width * field_map.scale,
+            y: field_map.origin.y + grid.height * field_map.scale,
         },
     };
 
