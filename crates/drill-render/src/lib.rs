@@ -4,7 +4,9 @@
 //! the live renderer, SVG/PDF exporters, and the offline video rasterizer.
 
 use drill_core::show_heatmap::FieldOccupancy;
-use drill_core::{Document, GridStyle, Point};
+use drill_core::transition::{self, TransitionPlan};
+use drill_core::{Document, GridStyle, PerformerId, Point, SetId};
+use std::cell::RefCell;
 use std::fmt::Write as _;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -34,6 +36,17 @@ pub struct TextSpan {
     pub len: u32,
 }
 
+/// Design note (trails): a trail is represented as a run of plain
+/// [`DrawCmd::Line`] segments rather than a dedicated `DrawCmd::Trail { .. }`
+/// variant. Adding a new `DrawCmd` variant would force every consumer of this
+/// enum (the live egui/wgpu painter, the SVG exporter, and eventually a PDF
+/// backend) to grow a matching match-arm before it could render anything
+/// again, which is a lot of blast radius for what is, structurally, just a
+/// polyline with a color per segment. Reusing `Line` keeps every existing
+/// backend working with zero changes -- see [`append_trails`] for how the
+/// per-segment color is chosen. If a future need arises for something a
+/// sequence of colored lines cannot express (e.g. a single GPU-instanced
+/// gradient stroke for very long trails), revisit this decision then.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum DrawCmd {
     FieldFill {
@@ -186,6 +199,22 @@ impl Theme {
     };
 }
 
+/// Which performers' movement trails a caller wants drawn this frame.
+/// Consumed by callers that invoke [`append_trails`] (not by
+/// [`build_field_2d`] itself, which does not yet call `append_trails` --
+/// see that function's doc comment for why). Lives on `RenderOptions` now so
+/// the on/off + scope knob has one obvious home once that wiring lands.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TrailSelection {
+    /// Draw no trails.
+    #[default]
+    None,
+    /// Draw a trail only for the currently-selected performer(s).
+    Selected,
+    /// Draw a trail for every performer.
+    All,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RenderOptions {
     pub margin: f32,
@@ -195,6 +224,10 @@ pub struct RenderOptions {
     pub dot_radius: f32,
     pub label_size: f32,
     pub max_minor_lines: u32,
+    /// Trail visibility scope; see [`TrailSelection`]. Defaults to `None`,
+    /// so existing callers built via `..RenderOptions::default()` keep
+    /// today's behavior (no trails) unchanged.
+    pub show_trails_for: TrailSelection,
 }
 
 impl Default for RenderOptions {
@@ -207,6 +240,7 @@ impl Default for RenderOptions {
             dot_radius: 5.0,
             label_size: 11.0,
             max_minor_lines: 240,
+            show_trails_for: TrailSelection::None,
         }
     }
 }
@@ -292,6 +326,221 @@ impl FieldMap {
             y: self.grid_height - (screen.y - self.origin.y) / scale,
         }
     }
+}
+
+/// Reusable scratch for [`append_trails`], kept warm across calls in a
+/// `thread_local` rather than a caller-supplied parameter so the public
+/// function signature stays exactly `(document, set_id, performer_ids,
+/// field_map, samples_per_trail, out)`. Every `Vec` here is grown with
+/// `reserve`/`resize` against its *current* capacity, never replaced with a
+/// fresh `Vec::new()`, so repeated calls with the same performer-count and
+/// sample-count settle into zero additional heap traffic.
+#[derive(Default)]
+struct TrailCache {
+    plan: TransitionPlan,
+    /// Scratch for one `transition::eval` call: every lane's position at a
+    /// single sampled count, index-aligned with `Document::performers`.
+    all_positions: Vec<Point>,
+    /// `performer_ids[i]` -> its index into `Document::performers`/the
+    /// compiled plan's lanes, or `usize::MAX` for an id that no longer
+    /// exists. Resolved once per `append_trails` call, not once per sample.
+    lane_indices: Vec<usize>,
+    /// Column-major `[performer][sample]` matrix of sampled points, sized
+    /// `performer_ids.len() * point_count`.
+    samples: Vec<Point>,
+}
+
+thread_local! {
+    static TRAIL_CACHE: RefCell<TrailCache> = RefCell::new(TrailCache::default());
+}
+
+/// Cool(slow) -> mid -> warm(fast) color ramp for trail speed shading, hand
+/// rolled to avoid pulling in a colormap crate for three lerps. `t` should
+/// already be normalized to `0.0..=1.0`; non-finite input is treated as
+/// `0.0` (the cool end) so a stray NaN speed never produces a NaN color.
+fn trail_speed_color(t: f32) -> Rgba {
+    const COOL: Rgba = Rgba(66, 133, 244, 255);
+    const MID: Rgba = Rgba(52, 199, 89, 255);
+    const WARM: Rgba = Rgba(234, 67, 53, 255);
+    let t = if t.is_finite() { t.clamp(0.0, 1.0) } else { 0.0 };
+    if t < 0.5 {
+        lerp_rgba(COOL, MID, t * 2.0)
+    } else {
+        lerp_rgba(MID, WARM, (t - 0.5) * 2.0)
+    }
+}
+
+fn lerp_rgba(a: Rgba, b: Rgba, u: f32) -> Rgba {
+    let u = u.clamp(0.0, 1.0);
+    let channel =
+        |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * u).round().clamp(0.0, 255.0) as u8;
+    Rgba(
+        channel(a.0, b.0),
+        channel(a.1, b.1),
+        channel(a.2, b.2),
+        channel(a.3, b.3),
+    )
+}
+
+/// Samples each requested performer's travel path for the transition leaving
+/// `set_id`, and appends it to `out`'s `Trail` layer as speed-shaded
+/// [`DrawCmd::Line`] segments (see the `DrawCmd` doc comment for why a new
+/// variant was not introduced instead).
+///
+/// Positions come from [`Document::plan_transition`] +
+/// [`transition::eval`], the same compiled-plan path real-time playback
+/// uses, so curved/path/arc routes are sampled faithfully rather than
+/// re-derived as a straight-line lerp between the two sets' dots. `moves`
+/// (the pure-movement count, excluding any ensemble hold) is sampled evenly
+/// `samples_per_trail.max(2)` times from `0` to `moves` inclusive, so the
+/// trail always includes both the departure and arrival positions.
+///
+/// `field_map` must be the exact [`FieldMap`] the caller used to place this
+/// frame's dots and grid lines -- building an independent one here is
+/// exactly the kind of coordinate drift this type exists to prevent.
+///
+/// Each performer's segment colors are a cool(slow)/warm(fast) gradient
+/// normalized against *that performer's own* min/max segment speed within
+/// this one trail, not against the whole cast. That is a deliberate
+/// trade-off: it makes gate accelerations/decelerations and curve easing
+/// pop visually for every performer, including ones whose absolute speed is
+/// unremarkable next to the rest of the ensemble. A performer moving at a
+/// perfectly constant speed (however fast) therefore renders in a single
+/// neutral mid-gradient color rather than pegged to one extreme.
+///
+/// This function appends to `out` without clearing it first -- call it
+/// after [`build_field_2d`] has built the rest of the frame's scene so both
+/// share one [`DisplayList`], then it updates the `Trail` layer's span to
+/// point at what it just pushed. That span is correct for any layer-aware
+/// painter (i.e. one that iterates `out.layer(Layer::X)` per layer, as the
+/// GPU backend does) regardless of where in the underlying command vector
+/// the bytes physically land. A painter that instead ignores layers and
+/// replays `out.commands()` strictly in insertion order will draw these
+/// trails *after* (visually: on top of) the dots, since `build_field_2d`
+/// already appended its Dot/Label commands earlier in the vector. Fixing
+/// that for such a painter means having `build_field_2d` call this
+/// function itself while the `Trail` layer slot is still open -- left as
+/// follow-up integration work, since that requires plumbing a `SetId` and a
+/// performer selection into `Scene`/`RenderOptions`.
+///
+/// Never panics: an empty `performer_ids`, a `set_id` that names no set (or
+/// the last set, which has no "next" to move toward), an unknown performer
+/// id, or non-finite/degenerate positions all degrade to skipping that
+/// performer/segment rather than trapping.
+pub fn append_trails(
+    document: &Document,
+    set_id: SetId,
+    performer_ids: &[PerformerId],
+    field_map: &FieldMap,
+    samples_per_trail: u16,
+    out: &mut DisplayList,
+) {
+    if performer_ids.is_empty() {
+        return;
+    }
+    let point_count = samples_per_trail.max(2) as usize;
+
+    TRAIL_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let TrailCache {
+            plan,
+            all_positions,
+            lane_indices,
+            samples,
+        } = &mut *cache;
+
+        document.plan_transition(set_id, plan);
+        let lane_count = plan.performer_count();
+        if lane_count == 0 {
+            return;
+        }
+        let moves = f32::from(plan.counts().moves);
+
+        lane_indices.clear();
+        lane_indices.reserve(performer_ids.len().saturating_sub(lane_indices.capacity()));
+        lane_indices.extend(performer_ids.iter().map(|id| {
+            document
+                .performers
+                .iter()
+                .position(|performer| performer.id == *id)
+                .filter(|&index| index < lane_count)
+                .unwrap_or(usize::MAX)
+        }));
+
+        let needed = performer_ids.len().saturating_mul(point_count);
+        samples.clear();
+        samples.reserve(needed.saturating_sub(samples.capacity()));
+        samples.resize(
+            needed,
+            Point {
+                x: f32::NAN,
+                y: f32::NAN,
+            },
+        );
+
+        let last_sample = (point_count - 1) as f32;
+        for s in 0..point_count {
+            let local_count = (s as f32 / last_sample) * moves;
+            transition::eval(plan, local_count, all_positions);
+            for (local_idx, &lane_index) in lane_indices.iter().enumerate() {
+                if lane_index == usize::MAX {
+                    continue;
+                }
+                if let Some(&p) = all_positions.get(lane_index) {
+                    samples[local_idx * point_count + s] = p;
+                }
+            }
+        }
+
+        let start = out.commands.len();
+        for (local_idx, &lane_index) in lane_indices.iter().enumerate() {
+            if lane_index == usize::MAX {
+                continue;
+            }
+            let row = &samples[local_idx * point_count..(local_idx + 1) * point_count];
+            let finite_segment = |a: Point, b: Point| {
+                a.x.is_finite() && a.y.is_finite() && b.x.is_finite() && b.y.is_finite()
+            };
+            let mut min_len = f32::INFINITY;
+            let mut max_len = f32::NEG_INFINITY;
+            for pair in row.windows(2) {
+                if finite_segment(pair[0], pair[1]) {
+                    let d = distance(pair[0], pair[1]);
+                    if d.is_finite() {
+                        min_len = min_len.min(d);
+                        max_len = max_len.max(d);
+                    }
+                }
+            }
+            let span = max_len - min_len;
+            for pair in row.windows(2) {
+                let (a, b) = (pair[0], pair[1]);
+                if !finite_segment(a, b) {
+                    continue;
+                }
+                let d = distance(a, b);
+                let t = if span > f32::EPSILON && d.is_finite() {
+                    (d - min_len) / span
+                } else {
+                    0.5
+                };
+                out.commands.push(DrawCmd::Line {
+                    a: field_map.map(a),
+                    b: field_map.map(b),
+                    width: 2.0,
+                    color: trail_speed_color(t),
+                });
+            }
+        }
+        out.close_layer(Layer::Trail, start);
+    });
+}
+
+#[inline]
+fn distance(a: Point, b: Point) -> f32 {
+    let dx = b.x - a.x;
+    let dy = b.y - a.y;
+    (dx * dx + dy * dy).sqrt()
 }
 
 /// Builds a 2D field using index multiplication, never cumulative floating-point stepping.
@@ -958,5 +1207,145 @@ mod tests {
         assert!(cold.2 > cold.0); // cold end leans blue
         assert!(hot.0 > hot.2); // hot end leans red
         assert!(hot.3 > cold.3); // more intense cells are less transparent
+    }
+
+    fn identity_field_map() -> FieldMap {
+        // scale = 1.0, origin = (0, 0), so map() is easy to reason about by
+        // hand: (x, y) -> (x, grid_height - y).
+        FieldMap::new(100.0, 100.0, Vec2 { x: 100.0, y: 100.0 }, 0.0)
+    }
+
+    fn straight_two_set_doc(start: Point, end: Point, counts: u16) -> Document {
+        let mut doc = Document::demo(1, 1);
+        doc.sets[0].counts = counts;
+        doc.sets[0].positions = vec![start];
+        doc.sets[1].positions = vec![end];
+        doc
+    }
+
+    #[test]
+    fn trail_includes_endpoints_and_matches_sample_count() {
+        let doc = straight_two_set_doc(Point { x: 0.0, y: 0.0 }, Point { x: 8.0, y: 0.0 }, 8);
+        let performer_id = doc.performers[0].id;
+        let set_id = doc.sets[0].id;
+        let field_map = identity_field_map();
+
+        let mut out = DisplayList::new();
+        append_trails(&doc, set_id, &[performer_id], &field_map, 5, &mut out);
+
+        let lines = out.layer(Layer::Trail);
+        assert_eq!(lines.len(), 4, "5 sampled points make 4 segments");
+        let DrawCmd::Line { a, .. } = lines[0] else {
+            panic!("expected a Line command");
+        };
+        let DrawCmd::Line { b, .. } = lines[3] else {
+            panic!("expected a Line command");
+        };
+        assert_eq!(a, field_map.map(Point { x: 0.0, y: 0.0 }));
+        assert_eq!(b, field_map.map(Point { x: 8.0, y: 0.0 }));
+    }
+
+    #[test]
+    fn constant_speed_is_uniform_and_gated_speed_varies() {
+        let mut doc = straight_two_set_doc(Point { x: 0.0, y: 0.0 }, Point { x: 16.0, y: 0.0 }, 16);
+        let performer_id = doc.performers[0].id;
+        let set_id = doc.sets[0].id;
+        let field_map = identity_field_map();
+
+        let colors_of = |doc: &Document, out: &DisplayList| -> Vec<Rgba> {
+            let _ = doc;
+            out.layer(Layer::Trail)
+                .iter()
+                .map(|cmd| match cmd {
+                    DrawCmd::Line { color, .. } => *color,
+                    other => panic!("expected a Line command, got {other:?}"),
+                })
+                .collect()
+        };
+
+        let mut uniform = DisplayList::new();
+        append_trails(&doc, set_id, &[performer_id], &field_map, 9, &mut uniform);
+        let uniform_colors = colors_of(&doc, &uniform);
+        assert!(
+            uniform_colors.windows(2).all(|pair| pair[0] == pair[1]),
+            "constant-speed straight move should color every segment the same: {uniform_colors:?}"
+        );
+
+        // A mid-transition gate makes the performer hold, then cover the
+        // same ground in less time -- a sharp, unmistakable speed change.
+        doc.sets[0].routes.default.gate = transition::Gate {
+            depart: 4.0,
+            arrive: Some(16.0),
+        };
+        let mut gated = DisplayList::new();
+        append_trails(&doc, set_id, &[performer_id], &field_map, 9, &mut gated);
+        let gated_colors = colors_of(&doc, &gated);
+        assert!(
+            gated_colors.windows(2).any(|pair| pair[0] != pair[1]),
+            "gated accel/decel should produce varying segment colors: {gated_colors:?}"
+        );
+    }
+
+    #[test]
+    fn empty_selection_and_unknown_ids_never_panic() {
+        let doc = Document::demo(2, 2);
+        let field_map = identity_field_map();
+        let mut out = DisplayList::new();
+
+        append_trails(&doc, doc.sets[0].id, &[], &field_map, 4, &mut out);
+        assert!(out.layer(Layer::Trail).is_empty());
+
+        let bogus_set = SetId::new(999_999).unwrap();
+        let all_ids: Vec<PerformerId> = doc.performers.iter().map(|p| p.id).collect();
+        append_trails(&doc, bogus_set, &all_ids, &field_map, 4, &mut out);
+        assert!(out.layer(Layer::Trail).is_empty());
+
+        let unknown_performer = PerformerId::new(999_999).unwrap();
+        append_trails(
+            &doc,
+            doc.sets[0].id,
+            &[unknown_performer],
+            &field_map,
+            4,
+            &mut out,
+        );
+        assert!(out.layer(Layer::Trail).is_empty());
+    }
+
+    #[test]
+    fn warm_trails_reuse_allocations() {
+        let mut doc = Document::demo(4, 10);
+        doc.sets[0].counts = 16;
+        let ids: Vec<PerformerId> = doc.performers.iter().map(|p| p.id).collect();
+        let set_id = doc.sets[0].id;
+        let field_map = identity_field_map();
+        let options = RenderOptions::default();
+        let scene = Scene {
+            positions: &doc.sets[0].positions,
+            document: &doc,
+            viewport: Viewport {
+                size: Vec2 {
+                    x: 1280.0,
+                    y: 720.0,
+                },
+                ui_scale: 1.0,
+            },
+            options: &options,
+            theme: &Theme::SCREEN_DARK,
+        };
+        let mut scratch = BuildScratch;
+        let mut out = DisplayList::new();
+
+        let mut run = |out: &mut DisplayList| {
+            build_field_2d(&scene, &mut scratch, out);
+            append_trails(&doc, set_id, &ids, &field_map, 12, out);
+        };
+
+        run(&mut out);
+        let capacity = out.capacities();
+        for _ in 0..50 {
+            run(&mut out);
+            assert_eq!(out.capacities(), capacity);
+        }
     }
 }
