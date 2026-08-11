@@ -1,5 +1,35 @@
+# One-shot migration snapshot, NOT a routinely-regenerated artifact.
+#
+# docs/MESSAGE_CATALOG.md records the Japanese/English pairing exactly as it
+# existed when the product still wrote UI text as literal tr(locale, "ja",
+# "en") calls and `if locale == Locale::Ja { "..." } else { "..." }`
+# conditionals. scripts/test-message-catalog.ps1 treats that file as the
+# authoritative record of what each migrated call site used to mean, and
+# diffs it against crates/drill-app/src/i18n_generated.rs to prove the
+# tr()/if-else -> registered(locale, "id") migration preserved meaning.
+#
+# The product has since finished migrating almost every call site to the ID
+# form, so this scanner's two textual patterns now match almost nothing in
+# current sources. Rerunning it against today's code and overwriting
+# docs/MESSAGE_CATALOG.md with that near-empty result destroys the only
+# record test-message-catalog.ps1 checks against -- there is no way to
+# recover the original mapping from git history alone once the source lines
+# have moved. Do not add new UI text by reintroducing tr()/if-Locale::Ja
+# literals to make this scanner pick them up; add a new ID pair directly to
+# i18n_generated.rs instead (see i18n.rs's docs).
+#
+# The -MinPairs guard below exists so an accidental rerun fails loudly
+# instead of silently truncating the file.
 [CmdletBinding()]
-param([string]$Output = "docs/MESSAGE_CATALOG.md", [switch]$Check)
+param(
+    [string]$Output = "docs/MESSAGE_CATALOG.md",
+    [switch]$Check,
+    # Refuses to overwrite $Output if the freshly-scanned pair count would
+    # shrink by more than this fraction. Set lower only if you are
+    # deliberately re-snapshotting after removing legacy call sites, and
+    # have confirmed nothing still depends on the entries being dropped.
+    [double]$MaxShrinkFraction = 0.05
+)
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $sourceRoot = Join-Path $root "crates/drill-app/src"
@@ -39,8 +69,33 @@ $path = Join-Path $root $Output
 if ($Check) {
     if (-not (Test-Path $path)) { throw "$Output is missing" }
     $existing = [IO.File]::ReadAllText($path).Replace("`r`n", "`n")
-    if ($existing -ne $content) { throw "$Output is stale; regenerate it" }
+    if ($existing -ne $content) {
+        throw "$Output does not match a fresh scan of crates/drill-app/src. " +
+            "If the product has migrated call sites to i18n_generated.rs (the " +
+            "usual case), that is expected and $Output should NOT be " +
+            "regenerated -- see this script's header comment. Only rerun " +
+            "without -Check if you intend to replace the historical snapshot."
+    }
 } else {
+    if (Test-Path $path) {
+        $existingCount = @(Get-Content $path | Where-Object { $_ -match '^\| legacy\.\d+ \|' }).Count
+        if ($existingCount -gt 0) {
+            $shrink = 1.0 - ($rows.Count / [double]$existingCount)
+            if ($shrink -gt $MaxShrinkFraction) {
+                throw ("Refusing to overwrite $Output`: a fresh scan found $($rows.Count) " +
+                    "pairs versus $existingCount currently recorded (a " +
+                    "$([math]::Round($shrink * 100))% drop, over the " +
+                    "$([math]::Round($MaxShrinkFraction * 100))% guard). This almost " +
+                    "always means product code has moved from tr()/if-else literals to " +
+                    "registered(locale, `"id`") calls, which this textual scanner cannot " +
+                    "see -- NOT that those UI strings were removed. Overwriting now would " +
+                    "destroy the historical mapping scripts/test-message-catalog.ps1 relies " +
+                    "on. See this script's header comment before proceeding, and pass a " +
+                    "lower -MaxShrinkFraction only if you have confirmed the drop is " +
+                    "intentional.")
+            }
+        }
+    }
     [IO.File]::WriteAllText($path, $content, [Text.UTF8Encoding]::new($false))
     Write-Host "Generated $Output ($($rows.Count) localized pairs)"
 }
