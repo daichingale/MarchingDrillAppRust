@@ -17,8 +17,8 @@ pub mod ids;
 pub mod pathing;
 pub mod playback;
 pub mod production;
-pub mod roster;
 pub mod rhythm_sync;
+pub mod roster;
 pub mod route_suggestions;
 pub mod shapes;
 pub mod show_heatmap;
@@ -32,15 +32,15 @@ pub mod video;
 pub mod visibility;
 
 pub use error::{DrillError, Locale};
-pub use ids::{CameraId, IdAllocator, PerformerId, SectionId, SetId, SubsetId};
-pub use production::SetAnnotation;
+pub use ids::{CameraId, IdAllocator, PerformerId, ProductionMarkerId, SectionId, SetId, SubsetId};
+pub use production::{ProductionMarker, ProductionMarkerKind, SetAnnotation};
 pub use roster::{OptionalColor, PerformerKind, PerformerMetadata, Section, Subset, Symbol};
 pub use transition::{
     ArcTable, ChordPoint, Easing, Gate, PathVia, Route, RouteShape, RouteTable, SetCounts,
     TransitionPlan, eval as eval_transition,
 };
 
-pub const SCHEMA_VERSION: u16 = 4;
+pub const SCHEMA_VERSION: u16 = 5;
 pub const MAX_PERFORMERS: usize = 4_000;
 pub const MAX_SETS: usize = 256;
 pub const MAX_SUBSETS: usize = 4_000;
@@ -317,6 +317,9 @@ pub struct Document {
     pub subsets: Vec<Subset>,
     pub performers: Vec<Performer>,
     pub sets: Vec<Set>,
+    /// Rehearsal and production landmarks addressed by stable IDs.
+    #[serde(default)]
+    pub production_markers: Vec<ProductionMarker>,
 }
 
 impl Document {
@@ -388,6 +391,7 @@ impl Document {
                     positions: arc,
                 },
             ],
+            production_markers: Vec::new(),
         }
     }
 
@@ -412,6 +416,12 @@ impl Document {
                 field: "sets",
                 limit: MAX_SETS,
             });
+        }
+        let mut marker_ids = BTreeSet::new();
+        for marker in &self.production_markers {
+            if !marker_ids.insert(marker.id) || !marker.validate(self.timeline_counts()) {
+                return Err(DrillError::InvalidEdit);
+            }
         }
         if self.subsets.len() > MAX_SUBSETS {
             return Err(DrillError::LimitExceeded {
@@ -695,7 +705,7 @@ impl Document {
                     }
                 }
             }
-            2 | 3 => value["schema_version"] = serde_json::Value::from(SCHEMA_VERSION),
+            2..=4 => value["schema_version"] = serde_json::Value::from(SCHEMA_VERSION),
             v if v == u64::from(SCHEMA_VERSION) => {}
             v => {
                 return Err(DrillError::UnsupportedSchema {
@@ -790,6 +800,15 @@ pub enum Edit {
         set_id: SetId,
         annotation: SetAnnotation,
     },
+    InsertProductionMarker {
+        marker: ProductionMarker,
+    },
+    SetProductionMarker {
+        marker: ProductionMarker,
+    },
+    RemoveProductionMarker {
+        id: ProductionMarkerId,
+    },
     ReplaceGrid {
         grid: GridConfig,
         scale_positions: bool,
@@ -880,6 +899,7 @@ pub enum EditCoalesceKey {
     Routes(SetId),
     Shape(SetId),
     Annotation(SetId),
+    ProductionMarker(ProductionMarkerId),
     MoveSyncAnchor(audio::AnchorId),
     DocumentTitle,
     Grid,
@@ -902,6 +922,9 @@ impl Edit {
             Self::SetRoutes { set_id, .. } => Some(EditCoalesceKey::Routes(*set_id)),
             Self::SetShape { set_id, .. } => Some(EditCoalesceKey::Shape(*set_id)),
             Self::SetAnnotation { set_id, .. } => Some(EditCoalesceKey::Annotation(*set_id)),
+            Self::SetProductionMarker { marker } => {
+                Some(EditCoalesceKey::ProductionMarker(marker.id))
+            }
             Self::SetCounts { .. } => None,
             Self::MoveSyncAnchor { id, .. } => Some(EditCoalesceKey::MoveSyncAnchor(*id)),
             Self::RenameDocument { .. } => Some(EditCoalesceKey::DocumentTitle),
@@ -930,6 +953,7 @@ impl Edit {
             | Self::RemoveSubset { .. }
             | Self::InsertCameraCut { .. }
             | Self::RemoveCameraCut { .. } => None,
+            Self::InsertProductionMarker { .. } | Self::RemoveProductionMarker { .. } => None,
         }
     }
 
@@ -1054,6 +1078,39 @@ impl Edit {
                     set_id,
                     annotation: previous,
                 })
+            }
+            Self::InsertProductionMarker { marker } => {
+                if !marker.validate(document.timeline_counts())
+                    || document
+                        .production_markers
+                        .iter()
+                        .any(|existing| existing.id == marker.id)
+                {
+                    return Err(DrillError::InvalidEdit);
+                }
+                document.production_markers.push(marker.clone());
+                Ok(Self::RemoveProductionMarker { id: marker.id })
+            }
+            Self::SetProductionMarker { marker } => {
+                if !marker.validate(document.timeline_counts()) {
+                    return Err(DrillError::InvalidEdit);
+                }
+                let existing = document
+                    .production_markers
+                    .iter_mut()
+                    .find(|existing| existing.id == marker.id)
+                    .ok_or(DrillError::InvalidEdit)?;
+                let previous = std::mem::replace(existing, marker);
+                Ok(Self::SetProductionMarker { marker: previous })
+            }
+            Self::RemoveProductionMarker { id } => {
+                let index = document
+                    .production_markers
+                    .iter()
+                    .position(|marker| marker.id == id)
+                    .ok_or(DrillError::InvalidEdit)?;
+                let marker = document.production_markers.remove(index);
+                Ok(Self::InsertProductionMarker { marker })
             }
             Self::ReplaceGrid {
                 grid,
@@ -2382,6 +2439,54 @@ mod tests {
         assert_eq!(doc.sets[0].annotation, annotation);
         let loaded = Document::from_json(&doc.to_json().unwrap()).unwrap();
         assert_eq!(loaded.sets[0].annotation, doc.sets[0].annotation);
+    }
+
+    #[test]
+    fn production_markers_are_stable_persistent_and_undoable() {
+        let mut doc = Document::demo(1, 1);
+        let marker = ProductionMarker {
+            id: ProductionMarkerId::new(41).unwrap(),
+            count: 7,
+            kind: ProductionMarkerKind::Rehearsal,
+            label: "Letter B".into(),
+            detail: "Reset interval".into(),
+        };
+        let mut history = History::with_limit(8);
+        history
+            .execute(
+                &mut doc,
+                Edit::InsertProductionMarker {
+                    marker: marker.clone(),
+                },
+            )
+            .unwrap();
+        assert_eq!(doc.production_markers, vec![marker.clone()]);
+        history
+            .execute(
+                &mut doc,
+                Edit::SetProductionMarker {
+                    marker: ProductionMarker {
+                        label: "B".into(),
+                        ..marker.clone()
+                    },
+                },
+            )
+            .unwrap();
+        assert_eq!(doc.production_markers[0].id, marker.id);
+        assert!(history.undo(&mut doc));
+        assert_eq!(doc.production_markers[0], marker);
+        assert!(history.undo(&mut doc));
+        assert!(doc.production_markers.is_empty());
+        assert!(history.redo(&mut doc));
+        let loaded = Document::from_json(&doc.to_json().unwrap()).unwrap();
+        assert_eq!(loaded.production_markers, doc.production_markers);
+
+        let mut legacy = serde_json::to_value(&doc).unwrap();
+        legacy["schema_version"] = serde_json::json!(4);
+        legacy.as_object_mut().unwrap().remove("production_markers");
+        let migrated = Document::from_json(&serde_json::to_string(&legacy).unwrap()).unwrap();
+        assert!(migrated.production_markers.is_empty());
+        assert_eq!(migrated.schema_version, SCHEMA_VERSION);
     }
 
     #[test]

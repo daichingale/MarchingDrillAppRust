@@ -39,6 +39,7 @@ pub(crate) fn paint_gpu_background(painter: &egui::Painter, origin: Pos2, list: 
             Layer::GridMajor,
             Layer::Hash,
             Layer::FieldText,
+            Layer::Heatmap,
             Layer::Trail,
             Layer::Highlight,
         ],

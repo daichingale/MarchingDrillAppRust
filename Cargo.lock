@@ -895,6 +895,8 @@ dependencies = [
  "cpal",
  "drill-core",
  "rtrb",
+ "serde",
+ "serde_json",
  "symphonia",
 ]
 
@@ -967,6 +969,7 @@ dependencies = [
 name = "drill-mobile-viewer"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "drill-core",
  "drill-render",
 ]

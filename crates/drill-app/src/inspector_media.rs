@@ -444,26 +444,39 @@ impl DrillApp {
                 .iter()
                 .filter_map(|&index| self.document.performers.get(index).map(|p| p.id))
                 .collect();
-            match drill_mobile_viewer::build_practice_viewer(
+            self.mobile_viewer_state.start(
                 &self.document,
-                &performer_ids,
+                performer_ids,
                 self.locale,
-            ) {
-                Ok(html) => {
-                    self.mobile_viewer_state.last_performer_count = if performer_ids.is_empty() {
-                        self.document.performers.len()
-                    } else {
-                        performer_ids.len()
-                    };
+                self.history.revision(),
+            );
+        }
+        if let Some(progress) = self.mobile_viewer_state.progress() {
+            ui.horizontal(|ui| {
+                ui.add(egui::ProgressBar::new(progress).show_percentage());
+                if ui
+                    .button(super::i18n::registered(self.locale, "inspector-media.064"))
+                    .clicked()
+                {
+                    self.mobile_viewer_state.cancel();
+                }
+            });
+        }
+        if let Some(event) = self.mobile_viewer_state.poll(self.history.revision()) {
+            match event {
+                super::mobile_viewer_state::MobileViewerEvent::Ready {
+                    html,
+                    performer_count,
+                } => {
+                    self.mobile_viewer_state.last_performer_count = performer_count;
                     self.export_text("practice_viewer.html", "HTML", "html", html);
                 }
-                Err(error) => {
-                    self.status = format!(
-                        "{}: {}",
-                        super::i18n::registered(self.locale, "inspector-media.067"),
-                        error.message(self.locale)
-                    );
+                super::mobile_viewer_state::MobileViewerEvent::Failed => {
+                    self.status =
+                        super::i18n::registered(self.locale, "inspector-media.067").into();
                 }
+                super::mobile_viewer_state::MobileViewerEvent::Cancelled => {}
+                super::mobile_viewer_state::MobileViewerEvent::Stale => {}
             }
         }
         if self.mobile_viewer_state.last_performer_count > 0 {
@@ -833,7 +846,7 @@ impl DrillApp {
                         .text(super::i18n::registered(self.locale, "inspector-media.055")),
                 );
                 if ui
-                    .small_button(super::i18n::registered(self.locale, "inspector-media.064"))
+                    .small_button(super::i18n::registered(self.locale, "inspector-media.069"))
                     .clicked()
                 {
                     self.text_export_state.cancel();

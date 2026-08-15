@@ -81,6 +81,7 @@ pub enum Layer {
     GridMajor,
     Hash,
     FieldText,
+    Heatmap,
     Trail,
     Highlight,
     Dot,
@@ -90,13 +91,14 @@ pub enum Layer {
 }
 
 impl Layer {
-    pub const COUNT: usize = 11;
+    pub const COUNT: usize = 12;
     pub const ALL: [Self; Self::COUNT] = [
         Self::FieldFill,
         Self::GridMinor,
         Self::GridMajor,
         Self::Hash,
         Self::FieldText,
+        Self::Heatmap,
         Self::Trail,
         Self::Highlight,
         Self::Dot,
@@ -142,6 +144,14 @@ impl DisplayList {
     }
     pub fn commands(&self) -> &[DrawCmd] {
         &self.commands
+    }
+    /// Commands in semantic paint order. Late-appended analytical overlays
+    /// (heatmaps and trails) therefore remain below performers in every
+    /// backend, rather than only in the live egui painter.
+    pub fn paint_order(&self) -> impl Iterator<Item = &DrawCmd> {
+        Layer::ALL
+            .iter()
+            .flat_map(move |layer| self.layer(*layer).iter())
     }
     pub fn layer(&self, layer: Layer) -> &[DrawCmd] {
         let span = self.layer_ranges[layer as usize];
@@ -224,6 +234,13 @@ pub struct RenderOptions {
     pub dot_radius: f32,
     pub label_size: f32,
     pub max_minor_lines: u32,
+    /// Session viewport centre in field units. `None` keeps the complete
+    /// field fitted, which is the stable default for exports and previews.
+    pub field_center: Option<Point>,
+    /// Session-only magnification of the 2D field. This deliberately lives
+    /// in render options rather than the document: changing the view must not
+    /// create an edit or affect another collaborator's saved drill.
+    pub field_zoom: f32,
     /// Trail visibility scope; see [`TrailSelection`]. Defaults to `None`,
     /// so existing callers built via `..RenderOptions::default()` keep
     /// today's behavior (no trails) unchanged.
@@ -240,6 +257,8 @@ impl Default for RenderOptions {
             dot_radius: 5.0,
             label_size: 11.0,
             max_minor_lines: 240,
+            field_center: None,
+            field_zoom: 1.0,
             show_trails_for: TrailSelection::None,
         }
     }
@@ -306,6 +325,35 @@ impl FieldMap {
         }
     }
 
+    /// Constructs the same aspect-preserving map as [`Self::new`], but pins a
+    /// field-space centre to the viewport centre and applies magnification.
+    /// This is the one map used by painting and all direct manipulation.
+    pub fn with_view(
+        grid_width: f32,
+        grid_height: f32,
+        viewport_size: Vec2,
+        margin: f32,
+        center: Option<Point>,
+        zoom: f32,
+    ) -> Self {
+        let mut map = Self::new(grid_width, grid_height, viewport_size, margin);
+        let zoom = if zoom.is_finite() {
+            zoom.clamp(0.25, 8.0)
+        } else {
+            1.0
+        };
+        let center = center.unwrap_or(Point {
+            x: grid_width * 0.5,
+            y: grid_height * 0.5,
+        });
+        map.scale *= zoom;
+        map.origin = Vec2 {
+            x: viewport_size.x * 0.5 - center.x * map.scale,
+            y: viewport_size.y * 0.5 - (grid_height - center.y) * map.scale,
+        };
+        map
+    }
+
     /// Field units -> viewport-local pixels. Front sideline (`y = 0`) maps to
     /// the bottom edge of the field rect.
     pub fn map(&self, p: Point) -> Vec2 {
@@ -362,7 +410,11 @@ fn trail_speed_color(t: f32) -> Rgba {
     const COOL: Rgba = Rgba(66, 133, 244, 255);
     const MID: Rgba = Rgba(52, 199, 89, 255);
     const WARM: Rgba = Rgba(234, 67, 53, 255);
-    let t = if t.is_finite() { t.clamp(0.0, 1.0) } else { 0.0 };
+    let t = if t.is_finite() {
+        t.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
     if t < 0.5 {
         lerp_rgba(COOL, MID, t * 2.0)
     } else {
@@ -372,8 +424,11 @@ fn trail_speed_color(t: f32) -> Rgba {
 
 fn lerp_rgba(a: Rgba, b: Rgba, u: f32) -> Rgba {
     let u = u.clamp(0.0, 1.0);
-    let channel =
-        |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * u).round().clamp(0.0, 255.0) as u8;
+    let channel = |x: u8, y: u8| {
+        (f32::from(x) + (f32::from(y) - f32::from(x)) * u)
+            .round()
+            .clamp(0.0, 255.0) as u8
+    };
     Rgba(
         channel(a.0, b.0),
         channel(a.1, b.1),
@@ -557,11 +612,13 @@ pub fn build_field_2d(scene: &Scene<'_>, _scratch: &mut BuildScratch, out: &mut 
         out.stats.dropped_nonfinite = 1;
         return;
     }
-    let field_map = FieldMap::new(
+    let field_map = FieldMap::with_view(
         grid.width,
         grid.height,
         scene.viewport.size,
         scene.options.margin,
+        scene.options.field_center,
+        scene.options.field_zoom,
     );
     let map = |p: Point| field_map.map(p);
     let field = Rect {
@@ -803,7 +860,8 @@ pub fn build_field_camera(
 
 /// "Show DNA": renders a `drill_core::show_heatmap::FieldOccupancy` as
 /// semi-transparent, color-graded rectangles appended to the display list's
-/// `Overlay` layer (cold/blue = lightly used, hot/red = heavily used).
+/// `Heatmap` layer (cold/blue = lightly used, hot/red = heavily used). This
+/// layer is below trails, selection highlights, performers and labels.
 ///
 /// Analysis and drawing are kept separate on purpose: `drill-core` computes
 /// the grid of occupancy values with no knowledge of screen space, and this
@@ -813,10 +871,9 @@ pub fn build_field_camera(
 /// entirely so the field underneath stays fully visible.
 ///
 /// Must be called after the base scene (e.g. [`build_field_2d`]) has built
-/// `out`, since it extends the already-closed `Overlay` layer range rather
-/// than replacing it.
+/// `out`, since it fills the late-appended `Heatmap` layer range.
 pub fn append_heatmap(occupancy: &FieldOccupancy, field_map: &FieldMap, out: &mut DisplayList) {
-    let start = out.layer_ranges[Layer::Overlay as usize].start as usize;
+    let start = out.commands.len();
     for cy in 0..occupancy.cells_y {
         for cx in 0..occupancy.cells_x {
             let value = occupancy.get(cx, cy);
@@ -846,7 +903,7 @@ pub fn append_heatmap(occupancy: &FieldOccupancy, field_map: &FieldMap, out: &mu
             });
         }
     }
-    out.close_layer(Layer::Overlay, start);
+    out.close_layer(Layer::Heatmap, start);
 }
 
 /// Cold (blue) -> warm (red) gradient through cyan/yellow, with alpha rising
@@ -885,7 +942,7 @@ pub fn display_list_svg(list: &DisplayList) -> String {
         svg_number(width),
         svg_number(height)
     );
-    for command in list.commands() {
+    for command in list.paint_order() {
         match *command {
             DrawCmd::FieldFill { rect, fill } => {
                 let _ = writeln!(
@@ -1133,6 +1190,7 @@ mod tests {
             fill: Rgba(255, 128, 0, 255),
             stroke: Rgba(0, 0, 0, 255),
         });
+        list.close_layer(Layer::Dot, 0);
         assert_eq!(
             display_list_svg(&list),
             "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"20\" height=\"10\" viewBox=\"0 0 20 10\">\n\
@@ -1164,11 +1222,19 @@ mod tests {
 
         let mut out = DisplayList::new();
         build_demo(&mut out);
-        let field_map = FieldMap::new(100.0, 53.333, Vec2 { x: 1280.0, y: 720.0 }, 16.0);
+        let field_map = FieldMap::new(
+            100.0,
+            53.333,
+            Vec2 {
+                x: 1280.0,
+                y: 720.0,
+            },
+            16.0,
+        );
         append_heatmap(&occupancy, &field_map, &mut out);
 
         let overlay_fills = out
-            .layer(Layer::Overlay)
+            .layer(Layer::Heatmap)
             .iter()
             .filter(|cmd| matches!(cmd, DrawCmd::FieldFill { .. }))
             .count();
@@ -1180,7 +1246,15 @@ mod tests {
         let occupancy = single_hot_cell_occupancy();
         let mut out = DisplayList::new();
         build_demo(&mut out);
-        let field_map = FieldMap::new(100.0, 53.333, Vec2 { x: 1280.0, y: 720.0 }, 16.0);
+        let field_map = FieldMap::new(
+            100.0,
+            53.333,
+            Vec2 {
+                x: 1280.0,
+                y: 720.0,
+            },
+            16.0,
+        );
         let field_min = field_map.origin;
         let field_max = Vec2 {
             x: field_map.origin.x + 100.0 * field_map.scale,
@@ -1188,7 +1262,7 @@ mod tests {
         };
         append_heatmap(&occupancy, &field_map, &mut out);
 
-        for cmd in out.layer(Layer::Overlay) {
+        for cmd in out.layer(Layer::Heatmap) {
             let DrawCmd::FieldFill { rect, fill } = cmd else {
                 continue;
             };
@@ -1198,6 +1272,55 @@ mod tests {
             assert!(rect.min.y <= rect.max.y);
             assert!(fill.3 > 0 && fill.3 < 255);
         }
+    }
+
+    #[test]
+    fn late_appended_heatmap_paints_below_performers_in_every_backend() {
+        let doc = Document::demo(2, 2);
+        let positions = doc.sets[0].positions.clone();
+        let options = RenderOptions::default();
+        let scene = Scene {
+            document: &doc,
+            positions: &positions,
+            viewport: Viewport {
+                size: Vec2 { x: 800.0, y: 450.0 },
+                ui_scale: 1.0,
+            },
+            options: &options,
+            theme: &Theme::SCREEN_DARK,
+        };
+        let mut out = DisplayList::new();
+        build_field_2d(&scene, &mut BuildScratch, &mut out);
+        let map = FieldMap::new(
+            doc.grid.width,
+            doc.grid.height,
+            scene.viewport.size,
+            options.margin,
+        );
+        let occupancy = drill_core::show_heatmap::analyze_show_occupancy(
+            &doc,
+            &drill_core::show_heatmap::HeatmapParams::default(),
+        );
+        append_heatmap(&occupancy, &map, &mut out);
+
+        let ordered: Vec<_> = out.paint_order().collect();
+        let heatmap = out
+            .layer(Layer::Heatmap)
+            .first()
+            .expect("occupied heatmap cell");
+        let dot = out.layer(Layer::Dot).first().expect("performer dot");
+        let heatmap_index = ordered
+            .iter()
+            .position(|command| std::ptr::eq(*command, heatmap))
+            .unwrap();
+        let dot_index = ordered
+            .iter()
+            .position(|command| std::ptr::eq(*command, dot))
+            .unwrap();
+        assert!(
+            heatmap_index < dot_index,
+            "heatmap must never obscure performers"
+        );
     }
 
     #[test]

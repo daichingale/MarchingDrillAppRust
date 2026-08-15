@@ -16,8 +16,8 @@ pub use click::{
 pub use clock::{ClockSample, PlaybackClock};
 pub use decode::{DecodeOutput, NullProgress, ProgressSink, SourceInfo, decode_bytes, decode_file};
 pub use output::{
-    AudioOutput, Block, MixerState, OutputDeviceInfo, OutputError, probe_default_output,
-    render_block,
+    AudioOutput, Block, MixerState, OutputDeviceInfo, OutputDiagnostics, OutputError,
+    probe_default_output, render_block,
 };
 pub use peaks::{PEAK_LEVEL_SHIFTS, PEAK_LEVELS, Peak, PeakPyramid};
 pub use rate::{

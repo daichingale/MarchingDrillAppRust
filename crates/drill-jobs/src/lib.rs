@@ -180,6 +180,7 @@ pub enum JobKind {
     AudioDecode,
     UpdateCheck,
     Import,
+    Analytics,
 }
 
 impl JobKind {
@@ -194,6 +195,7 @@ impl JobKind {
             Self::AudioDecode => "drill-job-audio-decode",
             Self::UpdateCheck => "drill-job-update-check",
             Self::Import => "drill-job-import",
+            Self::Analytics => "drill-job-analytics",
         }
     }
 }

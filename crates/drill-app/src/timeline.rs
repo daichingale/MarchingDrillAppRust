@@ -1,4 +1,4 @@
-use drill_core::Document;
+use drill_core::{Document, Edit, ProductionMarker, ProductionMarkerId, ProductionMarkerKind};
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
 
 #[derive(Default)]
@@ -6,6 +6,7 @@ pub(crate) struct TimelineChange {
     pub(crate) seek: Option<(usize, f32)>,
     pub(crate) range: Option<(u32, u32)>,
     pub(crate) viewport_interacted: bool,
+    pub(crate) marker_edit: Option<Edit>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -109,6 +110,92 @@ pub(crate) struct TimelineLabelLayout {
     pub(crate) now_pos: Pos2,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TimelineWaypoint {
+    pub(crate) set_index: usize,
+    pub(crate) count: u32,
+    pub(crate) label: String,
+    pub(crate) detail: String,
+}
+
+/// Existing production annotations are already persistent, undoable set-start
+/// landmarks. Present them as timeline waypoints rather than introducing a
+/// second marker model that could drift from rehearsal paperwork.
+pub(crate) fn timeline_waypoints(document: &Document) -> Vec<TimelineWaypoint> {
+    let mut count = 0_u32;
+    document
+        .sets
+        .iter()
+        .enumerate()
+        .filter_map(|(set_index, set)| {
+            let annotation = &set.annotation;
+            let label = if !annotation.rehearsal_mark.trim().is_empty() {
+                annotation.rehearsal_mark.trim().to_owned()
+            } else if !annotation.title.trim().is_empty() {
+                annotation.title.trim().to_owned()
+            } else {
+                String::new()
+            };
+            let current = count;
+            count = count.saturating_add(u32::from(set.counts));
+            (!label.is_empty()).then(|| TimelineWaypoint {
+                set_index,
+                count: current,
+                detail: if annotation.notes.trim().is_empty() {
+                    set.name.clone()
+                } else {
+                    annotation.notes.trim().to_owned()
+                },
+                label,
+            })
+        })
+        .collect()
+}
+
+fn marker_kind_name(kind: ProductionMarkerKind, locale: drill_core::Locale) -> &'static str {
+    match kind {
+        ProductionMarkerKind::Hit => super::i18n::registered(locale, "timeline.010"),
+        ProductionMarkerKind::Rehearsal => super::i18n::registered(locale, "timeline.011"),
+        ProductionMarkerKind::Note => super::i18n::registered(locale, "timeline.012"),
+    }
+}
+
+fn next_marker_id(document: &Document) -> Option<ProductionMarkerId> {
+    document
+        .production_markers
+        .iter()
+        .map(|marker| marker.id.get())
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .and_then(ProductionMarkerId::new)
+}
+
+/// Finds the adjacent production landmark around an exact global count.
+/// Markers at the current count are deliberately skipped: repeated navigation
+/// always advances instead of getting stuck on the same rehearsal event.
+pub(crate) fn adjacent_production_marker_count(
+    document: &Document,
+    current_count: u32,
+    forward: bool,
+) -> Option<u32> {
+    if forward {
+        document
+            .production_markers
+            .iter()
+            .filter(|marker| marker.count > current_count)
+            .map(|marker| marker.count)
+            .min()
+    } else {
+        document
+            .production_markers
+            .iter()
+            .filter(|marker| marker.count < current_count)
+            .map(|marker| marker.count)
+            .max()
+    }
+}
+
 impl TimelineLabelLayout {
     pub(crate) fn calculate(
         rect: Rect,
@@ -176,10 +263,18 @@ pub(crate) fn draw_count_track(
         .global_count(current_set, local_count)
         .clamp(0.0, total);
     let (response, painter) = ui.allocate_painter(
-        Vec2::new(ui.available_width(), 64.0),
+        Vec2::new(ui.available_width(), 84.0),
         Sense::click_and_drag(),
     );
-    let rect = response.rect.shrink2(Vec2::new(8.0, 5.0));
+    let waypoint_lane = Rect::from_min_max(
+        response.rect.left_top() + Vec2::new(8.0, 5.0),
+        Pos2::new(response.rect.right() - 8.0, response.rect.top() + 25.0),
+    );
+    let rect = Rect::from_min_max(
+        Pos2::new(response.rect.left() + 8.0, response.rect.top() + 29.0),
+        response.rect.right_bottom() - Vec2::new(8.0, 5.0),
+    );
+    painter.rect_filled(waypoint_lane, 5.0, Color32::from_rgb(22, 29, 40));
     painter.rect_filled(rect, 5.0, Color32::from_rgb(18, 23, 31));
 
     let scroll = ui.input(|input| input.smooth_scroll_delta);
@@ -207,6 +302,95 @@ pub(crate) fn draw_count_track(
             -response.drag_delta().x / rect.width().max(1.0) * viewport.span,
             total_counts,
         );
+    }
+
+    let waypoints = timeline_waypoints(document);
+    let mut waypoint_hit = false;
+    let mut previous_label_right = waypoint_lane.left();
+    for waypoint in waypoints
+        .iter()
+        .filter(|waypoint| viewport.visible_range().contains(&(waypoint.count as f32)))
+    {
+        let x = viewport.count_to_x(waypoint.count as f32, rect.left(), rect.width());
+        let flag = [
+            Pos2::new(x, waypoint_lane.top() + 3.0),
+            Pos2::new(x + 8.0, waypoint_lane.top() + 7.0),
+            Pos2::new(x, waypoint_lane.top() + 11.0),
+        ];
+        painter.add(egui::Shape::convex_polygon(
+            flag.to_vec(),
+            Color32::from_rgb(132, 171, 255),
+            Stroke::new(1.0, Color32::WHITE),
+        ));
+        let label_width = waypoint.label.chars().count() as f32 * 7.0 + 12.0;
+        if x + 10.0 >= previous_label_right + 8.0 {
+            painter.text(
+                Pos2::new(x + 10.0, waypoint_lane.center().y),
+                egui::Align2::LEFT_CENTER,
+                &waypoint.label,
+                egui::FontId::proportional(11.0),
+                Color32::from_rgb(208, 222, 255),
+            );
+            previous_label_right = x + 10.0 + label_width;
+        }
+        let hit_rect = Rect::from_center_size(
+            Pos2::new(x, waypoint_lane.center().y),
+            Vec2::new(24.0, waypoint_lane.height()),
+        );
+        let marker_response = ui
+            .interact(
+                hit_rect,
+                response.id.with(("waypoint", waypoint.set_index)),
+                Sense::click(),
+            )
+            .on_hover_text(format!(
+                "{} · {} {}\n{}",
+                waypoint.label,
+                super::i18n::registered(locale, "timeline.018"),
+                waypoint.count,
+                waypoint.detail
+            ));
+        if marker_response.clicked() {
+            change.seek = Some(document.locate_count(waypoint.count as f32));
+            waypoint_hit = true;
+        }
+    }
+    for marker in document
+        .production_markers
+        .iter()
+        .filter(|marker| viewport.visible_range().contains(&(marker.count as f32)))
+    {
+        let x = viewport.count_to_x(marker.count as f32, rect.left(), rect.width());
+        let color = match marker.kind {
+            ProductionMarkerKind::Hit => Color32::from_rgb(255, 198, 72),
+            ProductionMarkerKind::Rehearsal => Color32::from_rgb(126, 216, 172),
+            ProductionMarkerKind::Note => Color32::from_rgb(181, 160, 255),
+        };
+        painter.circle_filled(Pos2::new(x, waypoint_lane.center().y), 5.0, color);
+        let marker_response = ui
+            .interact(
+                Rect::from_center_size(
+                    Pos2::new(x, waypoint_lane.center().y),
+                    Vec2::new(18.0, waypoint_lane.height()),
+                ),
+                response.id.with(("production-marker", marker.id.get())),
+                Sense::click(),
+            )
+            .on_hover_text(format!(
+                "{} · {} {}\n{}",
+                marker_kind_name(marker.kind, locale),
+                super::i18n::registered(locale, "timeline.009"),
+                marker.count,
+                if marker.detail.trim().is_empty() {
+                    &marker.label
+                } else {
+                    &marker.detail
+                }
+            ));
+        if marker_response.clicked() {
+            change.seek = Some(document.locate_count(marker.count as f32));
+            waypoint_hit = true;
+        }
     }
 
     let mut start_count = 0.0;
@@ -463,6 +647,7 @@ pub(crate) fn draw_count_track(
         || in_response.dragged()
         || out_response.dragged();
     if !handles_active
+        && !waypoint_hit
         && (response.clicked() || response.dragged())
         && let Some(pointer) = response.interact_pointer_pos()
     {
@@ -509,6 +694,88 @@ pub(crate) fn draw_count_track(
                 ));
                 ui.close();
             }
+            ui.separator();
+            let existing = document
+                .production_markers
+                .iter()
+                .find(|marker| marker.count == target);
+            if let Some(marker) = existing {
+                ui.label(super::i18n::registered(locale, "timeline.013"));
+                // Context menus are rebuilt each frame. Keep an explicit
+                // transient draft in egui memory so typing never creates a
+                // history entry per character (or loses text between frames).
+                let draft_id = response
+                    .id
+                    .with(("production-marker-draft", marker.id.get()));
+                let mut edited = ui
+                    .data_mut(|data| data.get_temp::<Option<ProductionMarker>>(draft_id))
+                    .flatten()
+                    .unwrap_or_else(|| marker.clone());
+                ui.horizontal(|ui| {
+                    for kind in [
+                        ProductionMarkerKind::Hit,
+                        ProductionMarkerKind::Rehearsal,
+                        ProductionMarkerKind::Note,
+                    ] {
+                        if ui
+                            .selectable_label(edited.kind == kind, marker_kind_name(kind, locale))
+                            .clicked()
+                        {
+                            edited.kind = kind;
+                        }
+                    }
+                });
+                ui.label(super::i18n::registered(locale, "timeline.014"));
+                ui.text_edit_singleline(&mut edited.label);
+                ui.label(super::i18n::registered(locale, "timeline.015"));
+                ui.add(egui::TextEdit::multiline(&mut edited.detail).desired_rows(2));
+                let save = ui
+                    .button(super::i18n::registered(locale, "timeline.019"))
+                    .clicked();
+                let cancel = ui
+                    .button(super::i18n::registered(locale, "timeline.020"))
+                    .clicked();
+                if save {
+                    if edited != *marker {
+                        change.marker_edit = Some(Edit::SetProductionMarker { marker: edited });
+                    }
+                    ui.data_mut(|data| data.remove_temp::<Option<ProductionMarker>>(draft_id));
+                    ui.close();
+                } else if cancel {
+                    ui.data_mut(|data| data.remove_temp::<Option<ProductionMarker>>(draft_id));
+                    ui.close();
+                } else {
+                    ui.data_mut(|data| data.insert_temp(draft_id, Some(edited)));
+                }
+                if ui
+                    .button(super::i18n::registered(locale, "timeline.016"))
+                    .clicked()
+                {
+                    change.marker_edit = Some(Edit::RemoveProductionMarker { id: marker.id });
+                    ui.data_mut(|data| data.remove_temp::<Option<ProductionMarker>>(draft_id));
+                    ui.close();
+                }
+            } else if let Some(id) = next_marker_id(document) {
+                ui.label(super::i18n::registered(locale, "timeline.017"));
+                for kind in [
+                    ProductionMarkerKind::Hit,
+                    ProductionMarkerKind::Rehearsal,
+                    ProductionMarkerKind::Note,
+                ] {
+                    if ui.button(marker_kind_name(kind, locale)).clicked() {
+                        change.marker_edit = Some(Edit::InsertProductionMarker {
+                            marker: ProductionMarker {
+                                id,
+                                count: target,
+                                kind,
+                                label: marker_kind_name(kind, locale).into(),
+                                detail: String::new(),
+                            },
+                        });
+                        ui.close();
+                    }
+                }
+            }
         }
     });
     change
@@ -517,6 +784,68 @@ pub(crate) fn draw_count_track(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn production_annotations_become_set_start_waypoints_only_when_named() {
+        let mut document = Document::demo(1, 3);
+        let mut third = document.sets[1].clone();
+        third.name = "Set 3".into();
+        document.sets.push(third);
+        document.sets[0].counts = 8;
+        document.sets[1].counts = 12;
+        document.sets[1].annotation.rehearsal_mark = "B".into();
+        document.sets[2].annotation.title = "Impact".into();
+        document.sets[2].annotation.notes = "Hold picture".into();
+
+        let waypoints = timeline_waypoints(&document);
+        assert_eq!(waypoints.len(), 2);
+        assert_eq!(waypoints[0].count, 8);
+        assert_eq!(waypoints[0].label, "B");
+        assert_eq!(waypoints[1].count, 20);
+        assert_eq!(waypoints[1].label, "Impact");
+        assert_eq!(waypoints[1].detail, "Hold picture");
+    }
+
+    #[test]
+    fn production_markers_can_land_inside_a_set() {
+        let mut document = Document::demo(1, 1);
+        document.production_markers.push(ProductionMarker {
+            id: ProductionMarkerId::new(1).unwrap(),
+            count: 5,
+            kind: ProductionMarkerKind::Hit,
+            label: "Impact".into(),
+            detail: String::new(),
+        });
+        assert_eq!(next_marker_id(&document), ProductionMarkerId::new(2));
+        assert_eq!(
+            document.locate_count(document.production_markers[0].count as f32),
+            (0, 5.0)
+        );
+    }
+
+    #[test]
+    fn adjacent_marker_navigation_skips_the_current_marker() {
+        let mut document = Document::demo(1, 1);
+        for (id, count) in [(1, 4), (2, 8), (3, 12)] {
+            document.production_markers.push(ProductionMarker {
+                id: ProductionMarkerId::new(id).unwrap(),
+                count,
+                kind: ProductionMarkerKind::Hit,
+                label: String::new(),
+                detail: String::new(),
+            });
+        }
+        assert_eq!(
+            adjacent_production_marker_count(&document, 8, false),
+            Some(4)
+        );
+        assert_eq!(
+            adjacent_production_marker_count(&document, 8, true),
+            Some(12)
+        );
+        assert_eq!(adjacent_production_marker_count(&document, 0, false), None);
+        assert_eq!(adjacent_production_marker_count(&document, 12, true), None);
+    }
 
     #[test]
     fn count_snaps_to_integer() {

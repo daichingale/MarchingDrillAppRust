@@ -133,9 +133,6 @@ mod tests {
         // performer the same document-unit distance on both axes.
         let document = Document::demo(2, 2);
         let point = drag_point(Point { x: 10.0, y: 10.0 }, (20.0, 20.0), 4.0, &document);
-        assert_eq!(
-            point,
-            document.grid.snap(Point { x: 15.0, y: 5.0 })
-        );
+        assert_eq!(point, document.grid.snap(Point { x: 15.0, y: 5.0 }));
     }
 }

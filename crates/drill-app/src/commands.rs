@@ -3,7 +3,9 @@ use eframe::egui;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Menu {
+    File,
     Edit,
+    Arrange,
     Set,
     Playback,
     Workspace,
@@ -13,16 +15,42 @@ pub(crate) enum Menu {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Command {
+    OpenDocument,
+    OpenProject,
+    OpenRecent,
+    Save,
+    SaveAs,
+    SaveProjectAs,
+    ImportCoordinates,
+    ImportMusicalTimeline,
+    LoadImageUnderlay,
     Undo,
     Redo,
     SelectAll,
     ClearSelection,
+    RestoreRecentSelection,
+    CopyFormation,
+    PasteFormation,
+    AlignHorizontal,
+    AlignVertical,
+    DistributeHorizontal,
+    DistributeVertical,
+    FlipHorizontal,
+    FlipVertical,
+    MakeLine,
+    LockSelection,
+    HideSelection,
     DuplicateSet,
     ManageSections,
     PlayPause,
     RangeStart,
     RangeCurrentSet,
     RangeWholeShow,
+    PreviousProductionMarker,
+    NextProductionMarker,
+    PreviousSet,
+    NextSet,
+    GoToGlobalCount,
     FocusPerformerTools,
     FocusClinic,
     FocusGrid,
@@ -30,8 +58,13 @@ pub(crate) enum Command {
     FocusVideo,
     OpenPrint,
     FocusAudio,
+    OpenProductionSheet,
     View2d,
     View3d,
+    ToggleFocusField,
+    WorkspaceDesign,
+    WorkspaceReview,
+    WorkspacePresent,
     ToggleGuidance,
     GettingStarted,
     LegalNotices,
@@ -43,7 +76,15 @@ pub(crate) struct Context {
     pub can_redo: bool,
     pub has_performers: bool,
     pub has_selection: bool,
+    pub has_recent_selection: bool,
+    pub has_formation_clipboard: bool,
+    pub has_multiple_selection: bool,
+    pub can_edit_selection: bool,
     pub has_sets: bool,
+    pub has_previous_production_marker: bool,
+    pub has_next_production_marker: bool,
+    pub has_previous_set: bool,
+    pub has_next_set: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -56,6 +97,9 @@ pub(crate) struct Spec {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Shortcut {
     Command(egui::Key),
+    CommandShift(egui::Key),
+    CommandAlt(egui::Key),
+    Alt(egui::Key),
     Plain(egui::Key),
 }
 
@@ -63,6 +107,13 @@ impl Shortcut {
     pub(crate) fn value(self) -> egui::KeyboardShortcut {
         match self {
             Self::Command(key) => egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, key),
+            Self::CommandShift(key) => {
+                egui::KeyboardShortcut::new(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, key)
+            }
+            Self::CommandAlt(key) => {
+                egui::KeyboardShortcut::new(egui::Modifiers::COMMAND | egui::Modifiers::ALT, key)
+            }
+            Self::Alt(key) => egui::KeyboardShortcut::new(egui::Modifiers::ALT, key),
             Self::Plain(key) => egui::KeyboardShortcut::new(egui::Modifiers::NONE, key),
         }
     }
@@ -75,6 +126,9 @@ impl Shortcut {
         expected.logical_key == key
             && match self {
                 Self::Command(_) => modifiers.command && !modifiers.alt && !modifiers.shift,
+                Self::CommandShift(_) => modifiers.command && modifiers.shift && !modifiers.alt,
+                Self::CommandAlt(_) => modifiers.command && modifiers.alt && !modifiers.shift,
+                Self::Alt(_) => modifiers.alt && !modifiers.command && !modifiers.shift,
                 Self::Plain(_) => modifiers.is_none(),
             }
     }
@@ -122,6 +176,51 @@ pub(crate) fn consume_shortcut(
 
 pub(crate) const SPECS: &[Spec] = &[
     Spec {
+        command: Command::OpenDocument,
+        menu: Menu::File,
+        shortcut: Some(Shortcut::Command(egui::Key::O)),
+    },
+    Spec {
+        command: Command::OpenProject,
+        menu: Menu::File,
+        shortcut: None,
+    },
+    Spec {
+        command: Command::OpenRecent,
+        menu: Menu::File,
+        shortcut: None,
+    },
+    Spec {
+        command: Command::Save,
+        menu: Menu::File,
+        shortcut: Some(Shortcut::Command(egui::Key::S)),
+    },
+    Spec {
+        command: Command::SaveAs,
+        menu: Menu::File,
+        shortcut: Some(Shortcut::CommandShift(egui::Key::S)),
+    },
+    Spec {
+        command: Command::SaveProjectAs,
+        menu: Menu::File,
+        shortcut: None,
+    },
+    Spec {
+        command: Command::ImportCoordinates,
+        menu: Menu::File,
+        shortcut: None,
+    },
+    Spec {
+        command: Command::ImportMusicalTimeline,
+        menu: Menu::File,
+        shortcut: None,
+    },
+    Spec {
+        command: Command::LoadImageUnderlay,
+        menu: Menu::File,
+        shortcut: None,
+    },
+    Spec {
         command: Command::Undo,
         menu: Menu::Edit,
         shortcut: Some(Shortcut::Command(egui::Key::Z)),
@@ -129,7 +228,9 @@ pub(crate) const SPECS: &[Spec] = &[
     Spec {
         command: Command::Redo,
         menu: Menu::Edit,
-        shortcut: Some(Shortcut::Command(egui::Key::Y)),
+        // Cmd+Shift+Z is the native macOS redo chord. `COMMAND` maps to Ctrl
+        // on Windows/Linux, so the same discoverable gesture remains portable.
+        shortcut: Some(Shortcut::CommandShift(egui::Key::Z)),
     },
     Spec {
         command: Command::SelectAll,
@@ -140,6 +241,66 @@ pub(crate) const SPECS: &[Spec] = &[
         command: Command::ClearSelection,
         menu: Menu::Edit,
         shortcut: Some(Shortcut::Plain(egui::Key::Escape)),
+    },
+    Spec {
+        command: Command::RestoreRecentSelection,
+        menu: Menu::Edit,
+        shortcut: None,
+    },
+    Spec {
+        command: Command::CopyFormation,
+        menu: Menu::Arrange,
+        shortcut: Some(Shortcut::Command(egui::Key::C)),
+    },
+    Spec {
+        command: Command::PasteFormation,
+        menu: Menu::Arrange,
+        shortcut: Some(Shortcut::Command(egui::Key::V)),
+    },
+    Spec {
+        command: Command::AlignHorizontal,
+        menu: Menu::Arrange,
+        shortcut: None,
+    },
+    Spec {
+        command: Command::AlignVertical,
+        menu: Menu::Arrange,
+        shortcut: None,
+    },
+    Spec {
+        command: Command::DistributeHorizontal,
+        menu: Menu::Arrange,
+        shortcut: None,
+    },
+    Spec {
+        command: Command::DistributeVertical,
+        menu: Menu::Arrange,
+        shortcut: None,
+    },
+    Spec {
+        command: Command::FlipHorizontal,
+        menu: Menu::Arrange,
+        shortcut: None,
+    },
+    Spec {
+        command: Command::FlipVertical,
+        menu: Menu::Arrange,
+        shortcut: None,
+    },
+    Spec {
+        command: Command::MakeLine,
+        menu: Menu::Arrange,
+        shortcut: None,
+    },
+    Spec {
+        command: Command::LockSelection,
+        menu: Menu::Arrange,
+        shortcut: None,
+    },
+    Spec {
+        command: Command::HideSelection,
+        menu: Menu::Arrange,
+        shortcut: None,
     },
     Spec {
         command: Command::FocusPerformerTools,
@@ -177,6 +338,31 @@ pub(crate) const SPECS: &[Spec] = &[
         shortcut: None,
     },
     Spec {
+        command: Command::PreviousProductionMarker,
+        menu: Menu::Playback,
+        shortcut: Some(Shortcut::Alt(egui::Key::ArrowLeft)),
+    },
+    Spec {
+        command: Command::NextProductionMarker,
+        menu: Menu::Playback,
+        shortcut: Some(Shortcut::Alt(egui::Key::ArrowRight)),
+    },
+    Spec {
+        command: Command::PreviousSet,
+        menu: Menu::Playback,
+        shortcut: Some(Shortcut::CommandAlt(egui::Key::ArrowLeft)),
+    },
+    Spec {
+        command: Command::NextSet,
+        menu: Menu::Playback,
+        shortcut: Some(Shortcut::CommandAlt(egui::Key::ArrowRight)),
+    },
+    Spec {
+        command: Command::GoToGlobalCount,
+        menu: Menu::Playback,
+        shortcut: Some(Shortcut::Command(egui::Key::G)),
+    },
+    Spec {
         command: Command::FocusGrid,
         menu: Menu::Workspace,
         shortcut: None,
@@ -188,6 +374,11 @@ pub(crate) const SPECS: &[Spec] = &[
     },
     Spec {
         command: Command::FocusAudio,
+        menu: Menu::Workspace,
+        shortcut: None,
+    },
+    Spec {
+        command: Command::OpenProductionSheet,
         menu: Menu::Workspace,
         shortcut: None,
     },
@@ -217,6 +408,26 @@ pub(crate) const SPECS: &[Spec] = &[
         shortcut: None,
     },
     Spec {
+        command: Command::ToggleFocusField,
+        menu: Menu::View,
+        shortcut: Some(Shortcut::CommandShift(egui::Key::F)),
+    },
+    Spec {
+        command: Command::WorkspaceDesign,
+        menu: Menu::View,
+        shortcut: None,
+    },
+    Spec {
+        command: Command::WorkspaceReview,
+        menu: Menu::View,
+        shortcut: None,
+    },
+    Spec {
+        command: Command::WorkspacePresent,
+        menu: Menu::View,
+        shortcut: None,
+    },
+    Spec {
         command: Command::ToggleGuidance,
         menu: Menu::View,
         shortcut: None,
@@ -237,6 +448,15 @@ impl Command {
     pub(crate) fn label(self, locale: Locale) -> &'static str {
         use Command::*;
         match (locale, self) {
+            (_, OpenDocument) => super::i18n::registered(locale, "commands.115"),
+            (_, OpenProject) => super::i18n::registered(locale, "commands.116"),
+            (_, OpenRecent) => super::i18n::registered(locale, "recent-projects.013"),
+            (_, Save) => super::i18n::registered(locale, "commands.117"),
+            (_, SaveAs) => super::i18n::registered(locale, "commands.118"),
+            (_, SaveProjectAs) => super::i18n::registered(locale, "commands.119"),
+            (_, ImportCoordinates) => super::i18n::registered(locale, "commands.120"),
+            (_, ImportMusicalTimeline) => super::i18n::registered(locale, "commands.121"),
+            (_, LoadImageUnderlay) => super::i18n::registered(locale, "commands.122"),
             (Locale::Ja, Undo) => "元に戻す",
             (Locale::En, Undo) => "Undo",
             (Locale::Ja, Redo) => "やり直す",
@@ -245,6 +465,19 @@ impl Command {
             (Locale::En, SelectAll) => "Select All",
             (Locale::Ja, ClearSelection) => "選択を解除",
             (Locale::En, ClearSelection) => "Clear Selection",
+            (Locale::Ja, RestoreRecentSelection) => "直前の選択を復元",
+            (Locale::En, RestoreRecentSelection) => "Restore Previous Selection",
+            (_, CopyFormation) => super::i18n::registered(locale, "clipboard.009"),
+            (_, PasteFormation) => super::i18n::registered(locale, "clipboard.010"),
+            (_, AlignHorizontal) => super::i18n::registered(locale, "commands.123"),
+            (_, AlignVertical) => super::i18n::registered(locale, "commands.124"),
+            (_, DistributeHorizontal) => super::i18n::registered(locale, "commands.125"),
+            (_, DistributeVertical) => super::i18n::registered(locale, "commands.126"),
+            (_, FlipHorizontal) => super::i18n::registered(locale, "commands.127"),
+            (_, FlipVertical) => super::i18n::registered(locale, "commands.128"),
+            (_, MakeLine) => super::i18n::registered(locale, "commands.129"),
+            (_, LockSelection) => super::i18n::registered(locale, "commands.130"),
+            (_, HideSelection) => super::i18n::registered(locale, "commands.131"),
             (Locale::Ja, DuplicateSet) => "現在のセットを複製",
             (Locale::En, DuplicateSet) => "Duplicate Current Set",
             (Locale::Ja, ManageSections) => "セクション管理…",
@@ -257,6 +490,11 @@ impl Command {
             (Locale::En, RangeCurrentSet) => "Range: Current Set",
             (Locale::Ja, RangeWholeShow) => "曲全体を再生範囲に",
             (Locale::En, RangeWholeShow) => "Range: Whole Show",
+            (_, PreviousProductionMarker) => super::i18n::registered(locale, "commands.101"),
+            (_, NextProductionMarker) => super::i18n::registered(locale, "commands.102"),
+            (_, PreviousSet) => super::i18n::registered(locale, "commands.106"),
+            (_, NextSet) => super::i18n::registered(locale, "commands.107"),
+            (_, GoToGlobalCount) => super::i18n::registered(locale, "commands.108"),
             (Locale::Ja, FocusPerformerTools) => "隊形編集ツールを表示",
             (Locale::En, FocusPerformerTools) => "Show Formation Tools",
             (Locale::Ja, FocusClinic) => "LIVE CLINICを表示",
@@ -271,10 +509,15 @@ impl Command {
             (Locale::En, OpenPrint) => "Print & PDF Workspace…",
             (Locale::Ja, FocusAudio) => "音源・クリックを表示",
             (Locale::En, FocusAudio) => "Show Audio & Click",
+            (_, OpenProductionSheet) => super::i18n::registered(locale, "commands.105"),
             (Locale::Ja, View2d) => "2Dフィールド",
             (Locale::En, View2d) => "2D Field",
             (Locale::Ja, View3d) => "3Dスタジアム",
             (Locale::En, View3d) => "3D Stadium",
+            (_, ToggleFocusField) => super::i18n::registered(locale, "focus-field.001"),
+            (_, WorkspaceDesign) => super::i18n::registered(locale, "workspace-preset.001"),
+            (_, WorkspaceReview) => super::i18n::registered(locale, "workspace-preset.002"),
+            (_, WorkspacePresent) => super::i18n::registered(locale, "workspace-preset.003"),
             (Locale::Ja, ToggleGuidance) => "操作ガイドを切替",
             (Locale::En, ToggleGuidance) => "Toggle Guidance",
             (Locale::Ja, GettingStarted) => "はじめかた・全ショートカット…",
@@ -303,10 +546,52 @@ impl Command {
                 Locale::Ja => "先に演者を選択してください",
                 Locale::En => "Select performers first",
             }),
+            RestoreRecentSelection if !context.has_recent_selection => Err(match locale {
+                Locale::Ja => "復元できる選択がありません",
+                Locale::En => "No previous selection to restore",
+            }),
+            CopyFormation if !context.has_selection => {
+                Err(super::i18n::registered(locale, "clipboard.011"))
+            }
+            PasteFormation if !context.has_formation_clipboard => {
+                Err(super::i18n::registered(locale, "clipboard.012"))
+            }
+            DistributeHorizontal | DistributeVertical | MakeLine
+                if !context.has_multiple_selection =>
+            {
+                Err(super::i18n::registered(locale, "commands.132"))
+            }
+            AlignHorizontal | AlignVertical | DistributeHorizontal | DistributeVertical
+            | FlipHorizontal | FlipVertical | MakeLine
+                if !context.has_selection =>
+            {
+                Err(super::i18n::registered(locale, "commands.133"))
+            }
+            AlignHorizontal | AlignVertical | DistributeHorizontal | DistributeVertical
+            | FlipHorizontal | FlipVertical | MakeLine
+                if !context.can_edit_selection =>
+            {
+                Err(super::i18n::registered(locale, "commands.134"))
+            }
+            LockSelection | HideSelection if !context.has_selection => {
+                Err(super::i18n::registered(locale, "commands.136"))
+            }
             DuplicateSet | RangeCurrentSet if !context.has_sets => Err(match locale {
                 Locale::Ja => "セットがありません",
                 Locale::En => "No sets",
             }),
+            PreviousProductionMarker if !context.has_previous_production_marker => {
+                Err(super::i18n::registered(locale, "commands.103"))
+            }
+            NextProductionMarker if !context.has_next_production_marker => {
+                Err(super::i18n::registered(locale, "commands.104"))
+            }
+            PreviousSet if !context.has_previous_set => {
+                Err(super::i18n::registered(locale, "commands.109"))
+            }
+            NextSet if !context.has_next_set => {
+                Err(super::i18n::registered(locale, "commands.110"))
+            }
             _ => Ok(()),
         }
     }
@@ -389,18 +674,69 @@ mod tests {
     #[test]
     fn every_product_workspace_is_discoverable() {
         for command in [
+            Command::OpenDocument,
+            Command::Save,
+            Command::SaveAs,
+            Command::ImportCoordinates,
+            Command::ImportMusicalTimeline,
             Command::FocusPerformerTools,
             Command::ManageSections,
             Command::FocusGrid,
             Command::FocusAudio,
             Command::OpenPrint,
+            Command::OpenProductionSheet,
             Command::FocusVideo,
             Command::FocusClinic,
             Command::View2d,
             Command::View3d,
+            Command::ToggleFocusField,
         ] {
             assert!(SPECS.iter().any(|spec| spec.command == command));
         }
+    }
+
+    #[test]
+    fn arrange_surface_keeps_all_selection_actions_discoverable() {
+        let arrange = [
+            Command::AlignHorizontal,
+            Command::AlignVertical,
+            Command::DistributeHorizontal,
+            Command::DistributeVertical,
+            Command::FlipHorizontal,
+            Command::FlipVertical,
+            Command::MakeLine,
+            Command::CopyFormation,
+            Command::PasteFormation,
+            Command::LockSelection,
+            Command::HideSelection,
+        ];
+        for command in arrange {
+            assert!(
+                SPECS
+                    .iter()
+                    .any(|spec| { spec.command == command && spec.menu == Menu::Arrange })
+            );
+        }
+        let no_selection = Context {
+            has_formation_clipboard: true,
+            can_edit_selection: true,
+            ..Context::default()
+        };
+        assert!(
+            Command::AlignHorizontal
+                .enabled(no_selection, Locale::En)
+                .is_err()
+        );
+        let not_at_set_start = Context {
+            has_selection: true,
+            has_multiple_selection: true,
+            ..Context::default()
+        };
+        assert!(
+            Command::MakeLine
+                .enabled(not_at_set_start, Locale::En)
+                .is_err()
+        );
     }
 
     #[test]
@@ -411,6 +747,9 @@ mod tests {
             assert!(chords.insert(shortcut), "duplicate chord: {shortcut:?}");
             let modifiers = match shortcut {
                 Shortcut::Command(_) => egui::Modifiers::COMMAND,
+                Shortcut::CommandShift(_) => egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                Shortcut::CommandAlt(_) => egui::Modifiers::COMMAND | egui::Modifiers::ALT,
+                Shortcut::Alt(_) => egui::Modifiers::ALT,
                 Shortcut::Plain(_) => egui::Modifiers::NONE,
             };
             let key = shortcut.value().logical_key;
@@ -427,7 +766,15 @@ mod tests {
             can_redo: true,
             has_performers: true,
             has_selection: true,
+            has_recent_selection: true,
+            has_formation_clipboard: true,
+            has_multiple_selection: true,
+            can_edit_selection: true,
             has_sets: true,
+            has_previous_production_marker: true,
+            has_next_production_marker: true,
+            has_previous_set: true,
+            has_next_set: true,
         };
         for spec in SPECS {
             assert!(spec.command.enabled(available, Locale::Ja).is_ok());

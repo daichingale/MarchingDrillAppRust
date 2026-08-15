@@ -1,9 +1,13 @@
+#[path = "analytics_state.rs"]
+mod analytics_state;
 #[path = "app_ui.rs"]
 mod app_ui;
 #[path = "audio_state.rs"]
 mod audio_state;
 #[path = "bootstrap.rs"]
 mod bootstrap;
+#[path = "command_palette.rs"]
+mod command_palette;
 #[path = "commands.rs"]
 mod commands;
 #[path = "controller.rs"]
@@ -14,6 +18,8 @@ mod egui_backend;
 mod export_state;
 #[path = "field_view.rs"]
 mod field_view;
+#[path = "go_to_count.rs"]
+mod go_to_count;
 #[path = "gpu_bridge.rs"]
 mod gpu_bridge;
 #[path = "i18n.rs"]
@@ -32,10 +38,18 @@ mod onboarding;
 mod plugin_state;
 #[path = "print_state.rs"]
 mod print_state;
+#[path = "production_markers_panel.rs"]
+mod production_markers_panel;
+#[path = "production_sheet_workspace.rs"]
+mod production_sheet_workspace;
 #[path = "project_state.rs"]
 mod project_state;
+#[path = "recent_projects.rs"]
+mod recent_projects;
 #[path = "section_manager.rs"]
 mod section_manager;
+#[path = "set_navigator.rs"]
+mod set_navigator;
 #[path = "simple_mode.rs"]
 mod simple_mode;
 #[path = "stadium_inspector.rs"]
@@ -61,6 +75,7 @@ use drill_core::Locale;
 use drill_core::route_suggestions::{
     RouteSuggestion, SuggestionConstraints, SuggestionLimits, SuggestionReason, suggest_routes,
 };
+use drill_core::transition::SetCounts;
 use drill_core::video::{ExportPreset, VideoExportConfig};
 use drill_core::{
     Document, Edit, GridConfig, GridLine, GridStyle, History, PerformerId, Point, Set, Unit,
@@ -72,7 +87,7 @@ use i18n::{Text, text};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-use timeline::{TimelineViewport, draw_count_track};
+use timeline::{TimelineViewport, adjacent_production_marker_count, draw_count_track};
 
 #[inline]
 pub(crate) fn tr(locale: Locale, japanese: &'static str, english: &'static str) -> &'static str {
@@ -82,14 +97,202 @@ pub(crate) fn tr(locale: Locale, japanese: &'static str, english: &'static str) 
     }
 }
 
+/// A range endpoint expressed in the terms a drill writer uses at rehearsal,
+/// rather than as an opaque global timeline number. `end` is deliberately the
+/// first count *not* played: playback uses the half-open interval [start, end).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PlaybackRangeSummary {
+    pub(crate) start_set: String,
+    pub(crate) start_count: u32,
+    pub(crate) end_set: String,
+    pub(crate) end_count: u32,
+    pub(crate) length: u32,
+}
+
+pub(crate) fn playback_range_summary(
+    document: &Document,
+    playback_start: u32,
+    playback_end: u32,
+) -> PlaybackRangeSummary {
+    let total = document.timeline_counts();
+    let start = playback_start.min(total);
+    let end = playback_end.clamp(start, total);
+    let endpoint = |global| {
+        let (set_index, local_count) = document.locate_count(global as f32);
+        let name = document
+            .sets
+            .get(set_index)
+            .map(|set| set.name.clone())
+            .unwrap_or_default();
+        // Counts are presented to people as one-based positions. At a set
+        // boundary the exclusive OUT endpoint therefore reads "next set · 1".
+        (name, local_count as u32 + 1)
+    };
+    let (start_set, start_count) = endpoint(start);
+    let (end_set, end_count) = endpoint(end);
+    PlaybackRangeSummary {
+        start_set,
+        start_count,
+        end_set,
+        end_count,
+        length: end.saturating_sub(start),
+    }
+}
+
+#[cfg(test)]
+mod playback_range_summary_tests {
+    use super::*;
+
+    #[test]
+    fn summary_uses_named_one_based_set_endpoints_and_an_exclusive_out() {
+        let mut document = Document::demo(1, 3);
+        document.sets[0].name = "Opening".into();
+        document.sets[1].name = "Impact".into();
+        document.sets[0].counts = 8;
+        document.sets[1].counts = 12;
+
+        let summary = playback_range_summary(&document, 3, 8);
+
+        assert_eq!(summary.start_set, "Opening");
+        assert_eq!(summary.start_count, 4);
+        assert_eq!(summary.end_set, "Impact");
+        assert_eq!(summary.end_count, 1);
+        assert_eq!(summary.length, 5);
+    }
+
+    #[test]
+    fn summary_clamps_endpoints_to_the_integer_timeline_contract() {
+        let document = Document::demo(1, 2);
+        let total = document.timeline_counts();
+        let summary = playback_range_summary(&document, total + 9, total + 20);
+
+        assert_eq!(summary.length, 0);
+        assert_eq!(summary.end_count, 1);
+    }
+}
+
+#[cfg(test)]
+mod comparison_session_tests {
+    use super::*;
+
+    #[test]
+    fn comparison_reference_is_session_only_and_never_changes_document_history() {
+        let mut app = DrillApp::default();
+        let before = app.document.clone();
+        let revision = app.history.revision();
+
+        app.set_comparison = Some(SetComparison {
+            reference_set: 1,
+            show_paths: true,
+        });
+        app.set_comparison = None;
+
+        assert_eq!(app.document, before);
+        assert_eq!(app.history.revision(), revision);
+        assert!(!app.dirty);
+    }
+}
+
+#[cfg(test)]
+mod workspace_preset_tests {
+    use super::*;
+
+    #[test]
+    fn workspace_presets_are_session_only_and_apply_a_predictable_working_surface() {
+        let mut app = DrillApp::default();
+        let document = app.document.clone();
+        let revision = app.history.revision();
+
+        app.apply_workspace_preset(WorkspacePreset::Review);
+        assert_eq!(app.workspace_preset, WorkspacePreset::Review);
+        assert_eq!(app.view_mode, ViewMode::Field2D);
+        assert!(app.show_inspector);
+        assert!(app.heatmap_enabled);
+        assert_eq!(app.workspace_focus, Some(WorkspaceFocus::Clinic));
+
+        app.apply_workspace_preset(WorkspacePreset::Present);
+        assert_eq!(app.workspace_preset, WorkspacePreset::Present);
+        assert_eq!(app.view_mode, ViewMode::Stadium3D);
+        assert!(!app.show_inspector);
+        assert!(!app.heatmap_enabled);
+        assert_eq!(app.workspace_focus, None);
+        assert_eq!(app.document, document);
+        assert_eq!(app.history.revision(), revision);
+        assert!(!app.dirty);
+    }
+}
+
+#[cfg(test)]
+mod focus_field_tests {
+    use super::*;
+
+    #[test]
+    fn focus_field_is_session_only_and_keeps_playback_state_intact() {
+        let context = eframe::egui::Context::default();
+        let mut app = DrillApp::default();
+        let document = app.document.clone();
+        let revision = app.history.revision();
+        app.current_set = 1;
+        app.count_position = 3.0;
+        app.playing = true;
+
+        app.execute_command(commands::Command::ToggleFocusField, &context);
+        assert!(app.focus_field);
+        assert!(app.playing);
+        assert_eq!(app.current_set, 1);
+        assert_eq!(app.count_position, 3.0);
+        assert_eq!(app.document, document);
+        assert_eq!(app.history.revision(), revision);
+        assert!(!app.dirty);
+
+        app.execute_command(commands::Command::ToggleFocusField, &context);
+        assert!(!app.focus_field);
+        assert!(app.playing);
+    }
+}
+
+#[cfg(test)]
+mod document_open_guard_tests {
+    use super::*;
+
+    #[test]
+    fn dirty_document_defers_open_until_the_writer_chooses() {
+        let mut app = DrillApp::default();
+        let before = app.document.clone();
+        let revision = app.history.revision();
+        app.dirty = true;
+
+        app.request_open_document(DocumentOpenKind::Project);
+
+        assert_eq!(
+            app.document_open_guard,
+            DocumentOpenGuard::Prompt(DocumentOpenTarget::Dialog(DocumentOpenKind::Project))
+        );
+        assert_eq!(app.document, before);
+        assert_eq!(app.history.revision(), revision);
+        assert!(app.dirty);
+    }
+}
+
 pub(crate) fn run() -> eframe::Result {
     bootstrap::run()
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ViewMode {
     Field2D,
     Stadium3D,
+}
+
+/// A familiar, task-oriented arrangement of the working surface.  This is
+/// intentionally session state: switching between writing, checking, and
+/// presenting a show must never create an edit, affect exports, or alter undo.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum WorkspacePreset {
+    #[default]
+    Design,
+    Review,
+    Present,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,12 +303,96 @@ pub(crate) enum WorkspaceFocus {
     Tempo,
     Video,
     Audio,
+    ProductionSheet,
+}
+
+/// A session-only A/B reference for judging a form without changing the show.
+/// It deliberately holds only a set index: the source dots remain canonical in
+/// `Document`, so opening, changing, or closing comparison cannot affect save
+/// state or undo history.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SetComparison {
+    pub(crate) reference_set: usize,
+    pub(crate) show_paths: bool,
+}
+
+/// A deliberately small, session-only formation clipboard.  The first slice
+/// only pastes onto the same stable performer IDs: this makes Copy/Paste a
+/// reliable way to recover a known picture without pretending that a guessed
+/// correspondence between two groups is safe.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct FormationClipboard {
+    entries: Vec<(PerformerId, Point)>,
+}
+
+fn clipboard_centre(entries: &[(PerformerId, Point)]) -> Point {
+    let count = entries.len() as f32;
+    Point {
+        x: entries.iter().map(|(_, point)| point.x).sum::<f32>() / count,
+        y: entries.iter().map(|(_, point)| point.y).sum::<f32>() / count,
+    }
+}
+
+/// A field-order sort makes target correspondence repeatable regardless of
+/// which order the user shift-clicked the performers. Rows are ordered first,
+/// then files, which reads naturally in the conventional drill field view.
+fn point_field_order(left: &Point, right: &Point) -> std::cmp::Ordering {
+    left.y
+        .total_cmp(&right.y)
+        .then_with(|| left.x.total_cmp(&right.x))
+}
+
+/// Exit is deliberately a small state machine instead of a boolean. A native
+/// save is asynchronous, so the app must keep the close request cancelled
+/// until `ProjectEvent::Saved` confirms the bytes reached disk.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum CloseGuard {
+    #[default]
+    Idle,
+    Prompt,
+    Saving,
+}
+
+/// The document picker is deferred until the writer has decided what to do
+/// with their current edits, matching the native Save / Don't Save / Cancel
+/// flow instead of replacing work as soon as Cmd+O is pressed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) enum DocumentOpenGuard {
+    #[default]
+    Idle,
+    Prompt(DocumentOpenTarget),
+    Saving(DocumentOpenTarget),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DocumentOpenKind {
+    LegacyJson,
+    Project,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum DocumentOpenTarget {
+    Dialog(DocumentOpenKind),
+    Recent(PathBuf),
+}
+
+/// A deliberately session-only draft for timing changes.  Count changes can
+/// alter every later global count, so the inspector never writes while a
+/// slider is being dragged; the writer sees the exact shift first, then makes
+/// one normal undoable `Edit::SetCounts` decision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SetCountDraft {
+    pub(crate) set_id: drill_core::SetId,
+    pub(crate) moves: u16,
 }
 
 pub(crate) struct DrillApp {
     document: Document,
     view_mode: ViewMode,
+    workspace_preset: WorkspacePreset,
     camera: Camera,
+    /// Desktop 2D pan/zoom is session UI, never a document edit.
+    field_viewport: field_view::FieldViewport,
     camera_program_preview: bool,
     beats_per_measure: u16,
     current_set: usize,
@@ -128,6 +415,27 @@ pub(crate) struct DrillApp {
     /// one-off callers but wrong for something drawn every frame).
     clinic_scratch: clinic::ScanScratch,
     selected: BTreeSet<usize>,
+    /// Per-performer presentation and interaction filters.  These intentionally
+    /// use stable IDs and live outside `Document`: a writer can focus a
+    /// rehearsal working group without changing a file, export, or undo stack.
+    locked_performers: BTreeSet<PerformerId>,
+    hidden_performers: BTreeSet<PerformerId>,
+    /// Latest session-only filter action, kept for one-click recovery.
+    last_filtered_performers: BTreeSet<PerformerId>,
+    /// Last Real View diagnostic target. This is a stable ID because diagnostic
+    /// focus is navigation state, never part of the saved production.
+    visibility_focus: Option<PerformerId>,
+    command_palette: command_palette::CommandPalette,
+    /// A compact, keyboard-first jump surface for navigating a long show.
+    /// This is session UI only: opening or searching it never edits the drill.
+    set_navigator: set_navigator::SetNavigator,
+    /// Modal, accessible exact-count navigation. Kept out of `Document` so
+    /// opening it never creates an edit or changes undo history.
+    go_to_count: go_to_count::GoToCount,
+    /// Session-only selection stack. It is deliberately outside Document and
+    /// History: restoring a working group must never dirty the drill or alter
+    /// an undo transaction.
+    selection_stack: Vec<BTreeSet<usize>>,
     history: History,
     drag_before: Option<Vec<Point>>,
     drag_preview: Option<Vec<Point>>,
@@ -135,9 +443,20 @@ pub(crate) struct DrillApp {
     marquee_origin: Option<Pos2>,
     current_path: Option<PathBuf>,
     dirty: bool,
+    close_guard: CloseGuard,
+    document_open_guard: DocumentOpenGuard,
+    recent_projects: recent_projects::RecentProjects,
+    show_recent_projects: bool,
     status: String,
     last_autosave: Instant,
     show_guidance: bool,
+    /// Keeps the document canvas spacious during hands-on design. A focused
+    /// workspace command always reopens this inspector so no command can lead
+    /// to a hidden destination.
+    show_inspector: bool,
+    /// A session-only canvas-first arrangement. It deliberately changes no
+    /// document state and does not replace the user's workspace preference.
+    focus_field: bool,
     video_export: VideoExportConfig,
     video_preset: ExportPreset,
     video_advanced: bool,
@@ -165,6 +484,8 @@ pub(crate) struct DrillApp {
     subset_snapshot_state: subset_snapshot_state::SubsetSnapshotState,
     route_suggestions: Vec<RouteSuggestion>,
     route_suggestion_selected: usize,
+    production_markers_panel: production_markers_panel::ProductionMarkersPanel,
+    production_sheet_workspace: production_sheet_workspace::ProductionSheetWorkspace,
     grid_draft: Option<GridConfig>,
     grid_draft_dirty: bool,
     tempo_draft: Option<drill_core::tempo::TempoMap>,
@@ -178,29 +499,30 @@ pub(crate) struct DrillApp {
     free_draw_raw: Vec<Point>,
     formation_text: String,
     underlay_state: underlay_state::UnderlayState,
-    /// Cached whole-show rhythm-sync report, keyed by the `History` revision
-    /// it was computed against. `analyze_show` is `O(performers *
-    /// transitions)`, too heavy to re-run every frame at 1,000-performer
-    /// scale, so the analytics panel only recomputes it when the document
-    /// has actually changed (i.e. `history.revision()` no longer matches),
-    /// not on every repaint. See `workspace_inspector::show_workspace_inspector`.
-    rhythm_sync_cache: Option<(drill_core::Revision, drill_core::rhythm_sync::RhythmSyncReport)>,
-    /// Cached aesthetic score for one set, keyed by `(revision, set_index)`
-    /// so switching sets or editing the document both invalidate it. Same
-    /// re-render-every-frame cost concern as `rhythm_sync_cache`.
-    aesthetics_cache: Option<(drill_core::Revision, usize, drill_core::aesthetics::AestheticScore)>,
+    /// Revision-gated background analytics; no heavy analysis executes in an
+    /// egui frame callback.
+    analytics_state: analytics_state::AnalyticsState,
     /// Whether the "Show DNA" field-usage heatmap overlay is drawn. The
-    /// underlying `FieldOccupancy` is only computed while this is on (and
-    /// only recomputed when `heatmap_cache`'s revision goes stale), so
-    /// leaving it off costs nothing per frame.
+    /// underlying `FieldOccupancy` is computed by `analytics_state` only
+    /// while this is on, so leaving it off costs nothing per frame.
     heatmap_enabled: bool,
-    heatmap_cache: Option<(drill_core::Revision, drill_core::show_heatmap::FieldOccupancy)>,
     /// Which performers' movement trails to overlay on the field view; see
     /// `drill_render::TrailSelection`. Trails are cheap to resample (backed
     /// by a warm thread-local scratch buffer in `drill_render`), so unlike
     /// the three caches above this is not cached -- it is recomputed from
     /// `frame_positions`-adjacent state every frame it is visible.
     trail_selection: drill_render::TrailSelection,
+    /// Optional translucent reference form for A/B visual checks.
+    set_comparison: Option<SetComparison>,
+    set_count_draft: Option<SetCountDraft>,
+    formation_clipboard: FormationClipboard,
+    /// Pending positions, keyed by stable performer ID.  Like shape previews,
+    /// this never changes the document until the writer explicitly applies it.
+    clipboard_paste_preview: Option<Vec<(PerformerId, Point)>>,
+    /// True when a copied shape is being transplanted onto an explicitly
+    /// selected, equally-sized group rather than restored to its source IDs.
+    /// This is session state, deliberately kept out of undo and the document.
+    clipboard_paste_targets_selection: bool,
 }
 
 impl Default for DrillApp {
@@ -216,7 +538,9 @@ impl Default for DrillApp {
             render_scratch: drill_render::BuildScratch,
             clinic_scratch: clinic::ScanScratch::default(),
             view_mode: ViewMode::Field2D,
+            workspace_preset: WorkspacePreset::Design,
             camera,
+            field_viewport: field_view::FieldViewport::fit(&document.grid),
             camera_program_preview: true,
             beats_per_measure: 4,
             document,
@@ -230,6 +554,14 @@ impl Default for DrillApp {
             loop_playback: false,
             last_frame: Instant::now(),
             selected: BTreeSet::new(),
+            locked_performers: BTreeSet::new(),
+            hidden_performers: BTreeSet::new(),
+            last_filtered_performers: BTreeSet::new(),
+            visibility_focus: None,
+            command_palette: command_palette::CommandPalette::default(),
+            set_navigator: set_navigator::SetNavigator::default(),
+            go_to_count: go_to_count::GoToCount::default(),
+            selection_stack: Vec::new(),
             history: History::with_limit(500),
             drag_before: None,
             drag_preview: None,
@@ -237,9 +569,15 @@ impl Default for DrillApp {
             marquee_origin: None,
             current_path: None,
             dirty: false,
+            close_guard: CloseGuard::Idle,
+            document_open_guard: DocumentOpenGuard::Idle,
+            recent_projects: recent_projects::RecentProjects::load(),
+            show_recent_projects: false,
             status: text(Locale::Ja, Text::Ready).into(),
             last_autosave: Instant::now(),
             show_guidance: true,
+            show_inspector: true,
+            focus_field: false,
             video_export: VideoExportConfig::default(),
             video_preset: ExportPreset::Standard,
             video_advanced: false,
@@ -267,6 +605,9 @@ impl Default for DrillApp {
             subset_snapshot_state: subset_snapshot_state::SubsetSnapshotState::default(),
             route_suggestions: Vec::new(),
             route_suggestion_selected: 0,
+            production_markers_panel: production_markers_panel::ProductionMarkersPanel::default(),
+            production_sheet_workspace:
+                production_sheet_workspace::ProductionSheetWorkspace::default(),
             grid_draft: None,
             grid_draft_dirty: false,
             tempo_draft: None,
@@ -280,16 +621,319 @@ impl Default for DrillApp {
             free_draw_raw: Vec::with_capacity(512),
             formation_text: "DRILL".into(),
             underlay_state: underlay_state::UnderlayState::default(),
-            rhythm_sync_cache: None,
-            aesthetics_cache: None,
+            analytics_state: analytics_state::AnalyticsState::default(),
             heatmap_enabled: false,
-            heatmap_cache: None,
             trail_selection: drill_render::TrailSelection::None,
+            set_comparison: None,
+            set_count_draft: None,
+            formation_clipboard: FormationClipboard::default(),
+            clipboard_paste_preview: None,
+            clipboard_paste_targets_selection: false,
         }
     }
 }
 
 impl DrillApp {
+    const MAX_SELECTION_HISTORY: usize = 10;
+
+    fn begin_set_count_draft(&mut self) {
+        let set = &self.document.sets[self.current_set];
+        self.set_count_draft = Some(SetCountDraft {
+            set_id: set.id,
+            moves: set.counts,
+        });
+    }
+
+    fn discard_set_count_draft(&mut self) {
+        self.set_count_draft = None;
+    }
+
+    fn apply_set_count_draft(&mut self) {
+        let Some(draft) = self.set_count_draft else {
+            return;
+        };
+        let Some(index) = self
+            .document
+            .sets
+            .iter()
+            .position(|set| set.id == draft.set_id)
+        else {
+            self.set_count_draft = None;
+            return;
+        };
+        let set = &self.document.sets[index];
+        if draft.moves == set.counts {
+            self.set_count_draft = None;
+            return;
+        }
+        let edit = Edit::SetCounts {
+            set_id: draft.set_id,
+            counts: SetCounts {
+                moves: draft.moves,
+                hold: set.hold,
+            },
+        };
+        if self.execute_edit(edit, i18n::registered(self.locale, "count-adjust.008")) {
+            self.playback_end = self.document.timeline_counts();
+            self.timeline_view.normalize(self.playback_end);
+            self.set_count_draft = None;
+            self.status = i18n::registered(self.locale, "count-adjust.009").into();
+        }
+    }
+
+    fn remember_selection(&mut self) {
+        if self.selected.is_empty() || self.selection_stack.last() == Some(&self.selected) {
+            return;
+        }
+        self.selection_stack.push(self.selected.clone());
+        if self.selection_stack.len() > Self::MAX_SELECTION_HISTORY {
+            self.selection_stack.remove(0);
+        }
+    }
+
+    fn clear_selection(&mut self) {
+        self.remember_selection();
+        self.selected.clear();
+    }
+
+    fn replace_selection(&mut self, selection: BTreeSet<usize>) {
+        let selection = selection
+            .into_iter()
+            .filter(|&index| self.is_selectable_index(index))
+            .collect();
+        if self.selected != selection {
+            self.remember_selection();
+            self.selected = selection;
+        }
+    }
+
+    fn can_restore_selection(&self) -> bool {
+        !self.selection_stack.is_empty()
+    }
+
+    fn restore_recent_selection(&mut self) {
+        let Some(previous) = self.selection_stack.pop() else {
+            return;
+        };
+        // Filters are session state too.  A saved selection may predate a
+        // temporary lock/hide action, so restoring it must not resurrect
+        // performers that the writer deliberately took out of interaction.
+        self.selected = previous
+            .into_iter()
+            .filter(|&index| self.is_selectable_index(index))
+            .collect();
+    }
+
+    /// Restores an entry from the session-only working-group history.
+    /// `recency` is zero for the most recent group. The current selection is
+    /// retained as a history entry, allowing quick A/B group switching.
+    fn restore_selection_history_at(&mut self, recency: usize) {
+        let Some(index) = self
+            .selection_stack
+            .len()
+            .checked_sub(recency.saturating_add(1))
+        else {
+            return;
+        };
+        let previous = self.selection_stack.remove(index);
+        self.remember_selection();
+        self.selected = previous
+            .into_iter()
+            .filter(|&index| self.is_selectable_index(index))
+            .collect();
+    }
+
+    fn selection_history_label(&self, selection: &BTreeSet<usize>) -> String {
+        let mut labels = selection
+            .iter()
+            .filter_map(|&index| self.document.performers.get(index))
+            .map(|performer| performer.label.as_str());
+        let Some(first) = labels.next() else {
+            return "0".to_owned();
+        };
+        let remaining = labels.count();
+        if remaining == 0 {
+            format!("1 · {first}")
+        } else {
+            format!("{} · {first} +{remaining}", remaining + 1)
+        }
+    }
+
+    /// Performer indexes are document-local. A document replacement must also
+    /// discard the session-only restore stack, otherwise Restore Previous
+    /// Selection could target unrelated performers in the new production.
+    fn reset_selection_for_document(&mut self) {
+        self.selected.clear();
+        self.selection_stack.clear();
+        self.locked_performers.clear();
+        self.hidden_performers.clear();
+        self.last_filtered_performers.clear();
+        self.visibility_focus = None;
+    }
+
+    fn is_locked_index(&self, index: usize) -> bool {
+        self.document
+            .performers
+            .get(index)
+            .is_some_and(|performer| self.locked_performers.contains(&performer.id))
+    }
+
+    fn is_hidden_index(&self, index: usize) -> bool {
+        self.document
+            .performers
+            .get(index)
+            .is_some_and(|performer| self.hidden_performers.contains(&performer.id))
+    }
+
+    fn is_selectable_index(&self, index: usize) -> bool {
+        index < self.document.performers.len()
+            && !self.is_locked_index(index)
+            && !self.is_hidden_index(index)
+    }
+
+    fn lock_selected_performers(&mut self) {
+        let ids: Vec<_> = self
+            .selected
+            .iter()
+            .filter_map(|&index| self.document.performers.get(index).map(|p| p.id))
+            .collect();
+        self.last_filtered_performers = ids.iter().copied().collect();
+        self.locked_performers.extend(ids);
+        let performer_count = self.document.performers.len();
+        let locked = &self.locked_performers;
+        let hidden = &self.hidden_performers;
+        let performers = &self.document.performers;
+        self.selected.retain(|&index| {
+            performers.get(index).is_some_and(|performer| {
+                index < performer_count
+                    && !locked.contains(&performer.id)
+                    && !hidden.contains(&performer.id)
+            })
+        });
+        self.status = format!(
+            "{} {}",
+            self.last_filtered_performers.len(),
+            i18n::registered(self.locale, "app-ui.151")
+        );
+    }
+
+    fn hide_selected_performers(&mut self) {
+        let ids: Vec<_> = self
+            .selected
+            .iter()
+            .filter_map(|&index| self.document.performers.get(index).map(|p| p.id))
+            .collect();
+        self.last_filtered_performers = ids.iter().copied().collect();
+        self.hidden_performers.extend(ids);
+        let performer_count = self.document.performers.len();
+        let locked = &self.locked_performers;
+        let hidden = &self.hidden_performers;
+        let performers = &self.document.performers;
+        self.selected.retain(|&index| {
+            performers.get(index).is_some_and(|performer| {
+                index < performer_count
+                    && !locked.contains(&performer.id)
+                    && !hidden.contains(&performer.id)
+            })
+        });
+        self.status = format!(
+            "{} {}",
+            self.last_filtered_performers.len(),
+            i18n::registered(self.locale, "app-ui.152")
+        );
+    }
+
+    fn clear_performer_filters(&mut self) {
+        self.locked_performers.clear();
+        self.hidden_performers.clear();
+        self.last_filtered_performers.clear();
+    }
+
+    /// Restore one performer to the editable field. These presentation filters
+    /// intentionally live only in the app session, so recovery never creates
+    /// an undo entry or modifies the production document.
+    fn restore_filtered_performer(&mut self, id: PerformerId) {
+        self.locked_performers.remove(&id);
+        self.hidden_performers.remove(&id);
+        self.last_filtered_performers.remove(&id);
+    }
+
+    /// Reverses the latest filter action without changing the drill or history.
+    fn restore_last_filtered_performers(&mut self) -> usize {
+        let ids = std::mem::take(&mut self.last_filtered_performers);
+        let restored = ids
+            .iter()
+            .filter(|id| self.locked_performers.contains(id) || self.hidden_performers.contains(id))
+            .count();
+        for id in ids {
+            self.locked_performers.remove(&id);
+            self.hidden_performers.remove(&id);
+        }
+        restored
+    }
+
+    /// Restore every temporarily filtered performer belonging to a section.
+    /// Returning the count lets the UI give a concrete, reassuring status.
+    fn restore_filtered_section(&mut self, section: drill_core::SectionId) -> usize {
+        let ids: Vec<_> = self
+            .document
+            .performers
+            .iter()
+            .filter(|performer| performer.section == section)
+            .map(|performer| performer.id)
+            .collect();
+        let restored = ids
+            .iter()
+            .filter(|id| self.locked_performers.contains(id) || self.hidden_performers.contains(id))
+            .count();
+        for id in ids {
+            self.restore_filtered_performer(id);
+        }
+        restored
+    }
+
+    /// Select an eligible Real View diagnostic target. Locked and presentation-
+    /// hidden performers deliberately remain unavailable, matching pointer and
+    /// marquee selection elsewhere in the field editor.
+    fn focus_visibility_target(&mut self, candidates: &[usize], direction: i8) {
+        let eligible: Vec<_> = candidates
+            .iter()
+            .copied()
+            .filter(|&index| self.is_selectable_index(index))
+            .collect();
+        let Some(index) = (!eligible.is_empty()).then(|| {
+            let current = self.visibility_focus.and_then(|id| {
+                eligible
+                    .iter()
+                    .position(|&candidate| self.document.performers[candidate].id == id)
+            });
+            let position = match (current, direction.cmp(&0)) {
+                (Some(position), std::cmp::Ordering::Less) => {
+                    (position + eligible.len() - 1) % eligible.len()
+                }
+                (Some(position), _) => (position + 1) % eligible.len(),
+                (None, std::cmp::Ordering::Less) => eligible.len() - 1,
+                (None, _) => 0,
+            };
+            eligible[position]
+        }) else {
+            return;
+        };
+        self.visibility_focus = Some(self.document.performers[index].id);
+        self.replace_selection([index].into_iter().collect());
+        self.workspace_focus = Some(WorkspaceFocus::Performer);
+    }
+
+    fn select_visibility_targets(&mut self, candidates: &[usize]) {
+        let selection = candidates
+            .iter()
+            .copied()
+            .filter(|&index| self.is_selectable_index(index))
+            .collect();
+        self.visibility_focus = None;
+        self.replace_selection(selection);
+    }
+
     fn show_update_notice(&mut self, context: &egui::Context) {
         let Some(release) = self.update_state.available.clone() else {
             return;
@@ -338,12 +982,35 @@ impl DrillApp {
     }
 
     fn command_context(&self) -> commands::Context {
+        let current_count = self
+            .document
+            .global_count(self.current_set, self.count_position)
+            .round()
+            .clamp(0.0, self.document.timeline_counts() as f32) as u32;
         commands::Context {
             can_undo: self.history.can_undo(),
             can_redo: self.history.can_redo(),
             has_performers: !self.document.performers.is_empty(),
             has_selection: !self.selected.is_empty(),
+            has_recent_selection: self.can_restore_selection(),
+            has_formation_clipboard: !self.formation_clipboard.entries.is_empty(),
+            has_multiple_selection: self.selected.len() >= 2,
+            can_edit_selection: self.is_editable_set_start(),
             has_sets: !self.document.sets.is_empty(),
+            has_previous_production_marker: adjacent_production_marker_count(
+                &self.document,
+                current_count,
+                false,
+            )
+            .is_some(),
+            has_next_production_marker: adjacent_production_marker_count(
+                &self.document,
+                current_count,
+                true,
+            )
+            .is_some(),
+            has_previous_set: self.current_set > 0,
+            has_next_set: self.current_set.saturating_add(1) < self.document.sets.len(),
         }
     }
 
@@ -396,21 +1063,56 @@ impl DrillApp {
 
     fn execute_command(&mut self, command: UiCommand, context: &egui::Context) {
         match command {
+            UiCommand::OpenDocument => self.request_open_document(DocumentOpenKind::LegacyJson),
+            UiCommand::OpenProject => self.request_open_document(DocumentOpenKind::Project),
+            UiCommand::OpenRecent => self.show_recent_projects = true,
+            UiCommand::Save => self.save_dialog(),
+            UiCommand::SaveAs => self.save_as_dialog(),
+            UiCommand::SaveProjectAs => self.save_project_dialog(),
+            UiCommand::ImportCoordinates => self.import_coordinates_dialog(),
+            UiCommand::ImportMusicalTimeline => self.import_musical_dialog(),
+            UiCommand::LoadImageUnderlay => self.load_underlay_dialog(),
             UiCommand::Undo => {
-                self.history.undo(&mut self.document);
-                self.dirty = true;
+                if self.history.undo(&mut self.document) {
+                    self.dirty = true;
+                    self.status = i18n::registered(self.locale, "app-state.149").into();
+                }
             }
             UiCommand::Redo => {
-                self.history.redo(&mut self.document);
-                self.dirty = true;
+                if self.history.redo(&mut self.document) {
+                    self.dirty = true;
+                    self.status = i18n::registered(self.locale, "app-state.150").into();
+                }
             }
-            UiCommand::SelectAll => self.selected = (0..self.document.performers.len()).collect(),
-            UiCommand::ClearSelection => self.selected.clear(),
+            UiCommand::SelectAll => {
+                self.replace_selection((0..self.document.performers.len()).collect())
+            }
+            UiCommand::ClearSelection => {
+                if self.clipboard_paste_preview.is_some() {
+                    self.cancel_clipboard_paste_preview();
+                } else if self.formation_preview_spec.is_some() || self.free_draw_active {
+                    self.cancel_shape_preview();
+                } else {
+                    self.clear_selection();
+                }
+            }
+            UiCommand::RestoreRecentSelection => self.restore_recent_selection(),
+            UiCommand::CopyFormation => self.copy_selected_formation(),
+            UiCommand::PasteFormation => self.begin_clipboard_paste_preview(),
+            UiCommand::AlignHorizontal
+            | UiCommand::AlignVertical
+            | UiCommand::DistributeHorizontal
+            | UiCommand::DistributeVertical
+            | UiCommand::FlipHorizontal
+            | UiCommand::FlipVertical
+            | UiCommand::MakeLine => self.arrange_selection(command),
+            UiCommand::LockSelection => self.lock_selected_performers(),
+            UiCommand::HideSelection => self.hide_selected_performers(),
             UiCommand::DuplicateSet => self.duplicate_current_set(),
             UiCommand::ManageSections => self.section_manager.open = true,
             UiCommand::PlayPause => self.toggle_playback(context),
             UiCommand::RangeStart => {
-                self.seek_global(self.playback_start as f32);
+                self.seek_to_count(self.playback_start);
                 self.playing = false;
             }
             UiCommand::RangeCurrentSet => {
@@ -424,21 +1126,136 @@ impl DrillApp {
                 self.playback_start = 0;
                 self.playback_end = self.document.timeline_counts();
             }
+            UiCommand::PreviousProductionMarker => self.navigate_production_marker(false),
+            UiCommand::NextProductionMarker => self.navigate_production_marker(true),
+            UiCommand::PreviousSet => self.navigate_relative_set(-1),
+            UiCommand::NextSet => self.navigate_relative_set(1),
+            UiCommand::GoToGlobalCount => self.go_to_count.open(),
             UiCommand::FocusPerformerTools => {
+                self.show_inspector = true;
                 self.workspace_focus = Some(WorkspaceFocus::Performer)
             }
-            UiCommand::FocusClinic => self.workspace_focus = Some(WorkspaceFocus::Clinic),
-            UiCommand::FocusGrid => self.workspace_focus = Some(WorkspaceFocus::Grid),
-            UiCommand::FocusTempo => self.workspace_focus = Some(WorkspaceFocus::Tempo),
-            UiCommand::FocusVideo => self.workspace_focus = Some(WorkspaceFocus::Video),
+            UiCommand::FocusClinic => {
+                self.show_inspector = true;
+                self.workspace_focus = Some(WorkspaceFocus::Clinic);
+            }
+            UiCommand::FocusGrid => {
+                self.show_inspector = true;
+                self.workspace_focus = Some(WorkspaceFocus::Grid);
+            }
+            UiCommand::FocusTempo => {
+                self.show_inspector = true;
+                self.workspace_focus = Some(WorkspaceFocus::Tempo);
+            }
+            UiCommand::FocusVideo => {
+                self.show_inspector = true;
+                self.workspace_focus = Some(WorkspaceFocus::Video);
+            }
             UiCommand::OpenPrint => self.print_state.open = true,
-            UiCommand::FocusAudio => self.workspace_focus = Some(WorkspaceFocus::Audio),
+            UiCommand::FocusAudio => {
+                self.show_inspector = true;
+                self.workspace_focus = Some(WorkspaceFocus::Audio);
+            }
+            UiCommand::OpenProductionSheet => {
+                self.production_sheet_workspace.open = true;
+                self.workspace_focus = Some(WorkspaceFocus::ProductionSheet);
+            }
             UiCommand::View2d => self.view_mode = ViewMode::Field2D,
             UiCommand::View3d => self.view_mode = ViewMode::Stadium3D,
+            UiCommand::ToggleFocusField => {
+                self.focus_field = !self.focus_field;
+                self.status = i18n::registered(
+                    self.locale,
+                    if self.focus_field {
+                        "focus-field.002"
+                    } else {
+                        "focus-field.003"
+                    },
+                )
+                .into();
+            }
+            UiCommand::WorkspaceDesign => self.apply_workspace_preset(WorkspacePreset::Design),
+            UiCommand::WorkspaceReview => self.apply_workspace_preset(WorkspacePreset::Review),
+            UiCommand::WorkspacePresent => self.apply_workspace_preset(WorkspacePreset::Present),
             UiCommand::ToggleGuidance => self.show_guidance = !self.show_guidance,
             UiCommand::GettingStarted => self.onboarding.show_help = true,
             UiCommand::LegalNotices => self.show_legal_notices = true,
         }
+    }
+
+    /// Apply a workspace-only arrangement.  Keep this central so a palette,
+    /// menu, or future shortcut cannot accidentally make a document edit.
+    fn apply_workspace_preset(&mut self, preset: WorkspacePreset) {
+        self.workspace_preset = preset;
+        match preset {
+            WorkspacePreset::Design => {
+                self.view_mode = ViewMode::Field2D;
+                self.show_inspector = true;
+                self.show_guidance = true;
+                self.simple_mode.enabled = false;
+                self.heatmap_enabled = false;
+                self.workspace_focus = Some(WorkspaceFocus::Performer);
+            }
+            WorkspacePreset::Review => {
+                self.view_mode = ViewMode::Field2D;
+                self.show_inspector = true;
+                self.show_guidance = false;
+                self.simple_mode.enabled = false;
+                self.heatmap_enabled = true;
+                self.workspace_focus = Some(WorkspaceFocus::Clinic);
+            }
+            WorkspacePreset::Present => {
+                self.view_mode = ViewMode::Stadium3D;
+                self.show_inspector = false;
+                self.show_guidance = false;
+                self.simple_mode.enabled = false;
+                self.heatmap_enabled = false;
+                self.camera_program_preview = true;
+                self.workspace_focus = None;
+            }
+        }
+        self.status = match preset {
+            WorkspacePreset::Design => i18n::registered(self.locale, "workspace-preset.004"),
+            WorkspacePreset::Review => i18n::registered(self.locale, "workspace-preset.005"),
+            WorkspacePreset::Present => i18n::registered(self.locale, "workspace-preset.006"),
+        }
+        .into();
+    }
+
+    /// Stop at the exact integer count of the neighboring production marker.
+    /// This is intentionally separate from smooth playback: a navigation
+    /// command is a rehearsal editing action and must never land between beats.
+    fn navigate_production_marker(&mut self, forward: bool) {
+        let current_count = self
+            .document
+            .global_count(self.current_set, self.count_position)
+            .round()
+            .clamp(0.0, self.document.timeline_counts() as f32) as u32;
+        let Some(target_count) =
+            adjacent_production_marker_count(&self.document, current_count, forward)
+        else {
+            return;
+        };
+        self.seek_to_count(target_count);
+        self.playing = false;
+        self.audio_state.pause();
+        if let Some(track) = &self.document.audio {
+            self.audio_state
+                .seek_seconds(drill_core::audio::count_to_audio_time(
+                    track,
+                    &self.document.tempo,
+                    target_count as f32,
+                ));
+        }
+        self.status = i18n::registered(
+            self.locale,
+            if forward {
+                "app-state.151"
+            } else {
+                "app-state.152"
+            },
+        )
+        .into();
     }
 
     fn show_print_workspace(&mut self, context: &egui::Context) {
@@ -616,7 +1433,7 @@ impl DrillApp {
                 let failure = i18n::registered(self.locale, "app-state.040");
                 self.execute_edit(Edit::SetSubsetMembers { id, members }, failure);
             }
-            Action::SelectMembers { id } => {
+            Action::SelectMembers { id, mode } => {
                 let member_ids = self
                     .document
                     .subsets
@@ -624,7 +1441,7 @@ impl DrillApp {
                     .find(|s| s.id == id)
                     .map(|s| s.members.iter().copied().collect::<BTreeSet<_>>())
                     .unwrap_or_default();
-                self.selected = self
+                let members = self
                     .document
                     .performers
                     .iter()
@@ -633,6 +1450,16 @@ impl DrillApp {
                         member_ids.contains(&performer.id).then_some(index)
                     })
                     .collect();
+                let next = match mode {
+                    subset_snapshot_state::SelectionMode::Replace => members,
+                    subset_snapshot_state::SelectionMode::Add => {
+                        self.selected.union(&members).copied().collect()
+                    }
+                    subset_snapshot_state::SelectionMode::Exclude => {
+                        self.selected.difference(&members).copied().collect()
+                    }
+                };
+                self.replace_selection(next);
                 self.status = if self.locale == Locale::Ja {
                     format!("サブセットから{}人を選択しました", self.selected.len())
                 } else {
@@ -641,6 +1468,34 @@ impl DrillApp {
                         self.selected.len()
                     )
                 };
+            }
+            Action::FocusChanges {
+                set_ids,
+                performer_ids,
+            } => {
+                if let Some(set_index) = set_ids
+                    .iter()
+                    .find_map(|id| self.document.sets.iter().position(|set| set.id == *id))
+                {
+                    self.navigate_to_set(set_index);
+                }
+                if !performer_ids.is_empty() {
+                    let changed = self
+                        .document
+                        .performers
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, performer)| {
+                            performer_ids.contains(&performer.id).then_some(index)
+                        })
+                        .collect();
+                    self.replace_selection(changed);
+                    self.status = format!(
+                        "{}: {}",
+                        i18n::registered(self.locale, "subset-snapshot-state.009"),
+                        self.selected.len()
+                    );
+                }
             }
             Action::RemoveSubset { id } => {
                 let failure = i18n::registered(self.locale, "app-state.041");
@@ -810,10 +1665,102 @@ impl DrillApp {
         }
     }
 
+    /// Moves an editor-controlled playhead to an exact, valid count. Playback
+    /// itself still advances through [`Self::seek_global`] with fractional
+    /// count precision so visual/audio motion remains smooth.
+    fn seek_to_count(&mut self, count: u32) {
+        self.seek_global(count.min(self.document.timeline_counts()) as f32);
+    }
+
     fn seek_global(&mut self, count: f32) {
         let (set_index, local_count) = self.document.locate_count(count);
         self.current_set = set_index;
         self.count_position = local_count;
+    }
+
+    /// A set's written coordinates are its arrival picture. Counts between
+    /// set starts are a playback/interpolation preview, never a second
+    /// mutable copy of that picture.
+    fn is_editable_set_start(&self) -> bool {
+        !self.playing && self.count_position.abs() <= f32::EPSILON
+    }
+
+    /// Shared formation-edit safety boundary for buttons, shortcuts, and
+    /// pointer manipulation. Keeping it here prevents one interaction route
+    /// from silently writing a mid-count preview into the document.
+    fn ensure_editable_set_start(&mut self) -> bool {
+        if self.is_editable_set_start() {
+            true
+        } else {
+            self.status = i18n::registered(self.locale, "app-state.154").into();
+            false
+        }
+    }
+
+    /// Pause at the current set's exact start without disturbing the current
+    /// working selection.
+    fn return_to_editable_set_start(&mut self) {
+        self.navigate_to_set(self.current_set);
+        self.status = i18n::registered(self.locale, "app-state.155").into();
+    }
+
+    /// Jump to a set's first exact count without changing the working
+    /// performer selection. Navigation is a rehearsal/viewing action, not a
+    /// formation edit.
+    fn navigate_to_set(&mut self, set_index: usize) {
+        let Some(set) = self.document.sets.get(set_index) else {
+            return;
+        };
+        let set_name = set.name.clone();
+        let target = self.document.global_count(set_index, 0.0).round() as u32;
+        self.seek_to_count(target);
+        self.playing = false;
+        self.audio_state.pause();
+        if let Some(track) = &self.document.audio {
+            self.audio_state
+                .seek_seconds(drill_core::audio::count_to_audio_time(
+                    track,
+                    &self.document.tempo,
+                    target as f32,
+                ));
+        }
+        self.status = format!(
+            "{}: {set_name}",
+            i18n::registered(self.locale, "set-navigator.010"),
+        );
+    }
+
+    fn navigate_relative_set(&mut self, direction: isize) {
+        let target = if direction.is_negative() {
+            self.current_set.checked_sub(direction.unsigned_abs())
+        } else {
+            self.current_set.checked_add(direction as usize)
+        };
+        if let Some(target) = target.filter(|&index| index < self.document.sets.len()) {
+            self.navigate_to_set(target);
+        }
+    }
+
+    /// Rehearsal navigation always lands on a whole global count, pauses both
+    /// clocks, and leaves the current performer working group untouched.
+    fn navigate_to_global_count(&mut self, target: u32) {
+        let target = target.min(self.document.timeline_counts());
+        self.seek_to_count(target);
+        self.playing = false;
+        self.audio_state.pause();
+        if let Some(track) = &self.document.audio {
+            self.audio_state
+                .seek_seconds(drill_core::audio::count_to_audio_time(
+                    track,
+                    &self.document.tempo,
+                    target as f32,
+                ));
+        }
+        self.status = format!(
+            "{} {}",
+            i18n::registered(self.locale, "go-to-count.008"),
+            target + 1,
+        );
     }
 
     fn toggle_playback(&mut self, context: &egui::Context) {
@@ -826,7 +1773,7 @@ impl DrillApp {
             .document
             .global_count(self.current_set, self.count_position);
         if global < self.playback_start as f32 || global >= self.playback_end as f32 {
-            self.seek_global(self.playback_start as f32);
+            self.seek_to_count(self.playback_start);
         }
         self.playing = self.playback_end > self.playback_start;
         if self.playing {
@@ -852,11 +1799,168 @@ impl DrillApp {
             .collect()
     }
 
+    fn copy_selected_formation(&mut self) {
+        let entries = self
+            .selected
+            .iter()
+            .filter_map(|&index| {
+                self.document
+                    .performers
+                    .get(index)
+                    .zip(self.document.sets[self.current_set].positions.get(index))
+            })
+            .map(|(performer, &point)| (performer.id, point))
+            .collect::<Vec<_>>();
+        if entries.is_empty() {
+            self.status = i18n::registered(self.locale, "clipboard.001").into();
+            return;
+        }
+        self.formation_clipboard.entries = entries;
+        self.clipboard_paste_preview = None;
+        self.clipboard_paste_targets_selection = false;
+        self.status = format!(
+            "{} {}",
+            self.formation_clipboard.entries.len(),
+            i18n::registered(self.locale, "clipboard.002")
+        );
+    }
+
+    fn begin_clipboard_paste_preview(&mut self) {
+        if !self.ensure_editable_set_start() || self.formation_clipboard.entries.is_empty() {
+            if self.formation_clipboard.entries.is_empty() {
+                self.status = i18n::registered(self.locale, "clipboard.003").into();
+            }
+            return;
+        }
+        let current_ids = self
+            .document
+            .performers
+            .iter()
+            .map(|performer| performer.id)
+            .collect::<BTreeSet<_>>();
+        let entries = self
+            .formation_clipboard
+            .entries
+            .iter()
+            .copied()
+            .filter(|(id, _)| current_ids.contains(id) && !self.locked_performers.contains(id))
+            .collect::<Vec<_>>();
+        if entries.is_empty() {
+            self.status = i18n::registered(self.locale, "clipboard.022").into();
+            return;
+        }
+        // Selecting a different group with exactly the copied headcount means
+        // "put this picture here".  Preserve the target group's centre, so a
+        // paste transfers a form rather than unexpectedly teleporting it.
+        // Sorting both groups by field position gives deterministic, visible
+        // correspondence without relying on unstable selection click order.
+        let selected_targets = self
+            .selected
+            .iter()
+            .filter_map(|&index| {
+                self.document.performers.get(index).and_then(|performer| {
+                    self.document.sets[self.current_set]
+                        .positions
+                        .get(index)
+                        .copied()
+                        .map(|point| (performer.id, point))
+                })
+            })
+            .filter(|(id, _)| !self.locked_performers.contains(id))
+            .collect::<Vec<_>>();
+        let source_ids = entries.iter().map(|(id, _)| *id).collect::<BTreeSet<_>>();
+        let target_ids = selected_targets
+            .iter()
+            .map(|(id, _)| *id)
+            .collect::<BTreeSet<_>>();
+        let targets_selection = selected_targets.len() == entries.len() && target_ids != source_ids;
+        let preview = if targets_selection {
+            let source_centre = clipboard_centre(&entries);
+            let target_centre = clipboard_centre(&selected_targets);
+            let mut source_points = entries.iter().map(|(_, point)| *point).collect::<Vec<_>>();
+            let mut targets = selected_targets;
+            source_points.sort_by(point_field_order);
+            targets.sort_by(|left, right| point_field_order(&left.1, &right.1));
+            targets
+                .into_iter()
+                .zip(source_points)
+                .map(|((id, _), source)| {
+                    (
+                        id,
+                        Point {
+                            x: target_centre.x + source.x - source_centre.x,
+                            y: target_centre.y + source.y - source_centre.y,
+                        },
+                    )
+                })
+                .collect()
+        } else {
+            entries
+        };
+        self.clipboard_paste_targets_selection = targets_selection;
+        self.clipboard_paste_preview = Some(preview);
+        self.status = i18n::registered(self.locale, "clipboard.005").into();
+    }
+
+    fn cancel_clipboard_paste_preview(&mut self) {
+        if self.clipboard_paste_preview.take().is_some() {
+            self.clipboard_paste_targets_selection = false;
+            self.status = i18n::registered(self.locale, "clipboard.006").into();
+        }
+    }
+
+    fn apply_clipboard_paste_preview(&mut self) {
+        let Some(entries) = self.clipboard_paste_preview.take() else {
+            return;
+        };
+        self.clipboard_paste_targets_selection = false;
+        if !self.ensure_editable_set_start() {
+            return;
+        }
+        let set_id = self.document.sets[self.current_set].id;
+        let mut performer_ids = Vec::with_capacity(entries.len());
+        let mut positions = Vec::with_capacity(entries.len());
+        for (id, point) in entries {
+            if self
+                .document
+                .performers
+                .iter()
+                .any(|performer| performer.id == id)
+            {
+                performer_ids.push(id);
+                positions.push(self.document.grid.snap(point));
+            }
+        }
+        if performer_ids.is_empty() {
+            self.status = i18n::registered(self.locale, "clipboard.004").into();
+            return;
+        }
+        if self.execute_edit(
+            Edit::MovePerformers {
+                set_id,
+                performer_ids,
+                positions,
+            },
+            i18n::registered(self.locale, "clipboard.007"),
+        ) {
+            self.status = i18n::registered(self.locale, "clipboard.008").into();
+        }
+    }
+
     fn commit_layout(&mut self, points: Vec<Point>) {
+        if !self.ensure_editable_set_start() {
+            return;
+        }
         let before = self.selected_points();
         let after = points
             .into_iter()
-            .map(|point| self.document.grid.snap(point))
+            .map(|point| {
+                let point = self.document.grid.snap(point);
+                Point {
+                    x: point.x.clamp(0.0, self.document.grid.width),
+                    y: point.y.clamp(0.0, self.document.grid.height),
+                }
+            })
             .collect::<Vec<_>>();
         if before == after {
             return;
@@ -877,9 +1981,66 @@ impl DrillApp {
         );
     }
 
+    /// The one authoritative route for all command-surface arrangement
+    /// actions.  Toolbars and contextual controls may retain their compact
+    /// direct affordances, while menus and the palette share this path so
+    /// they cannot drift in editability, snapping, undo, or preview safety.
+    fn arrange_selection(&mut self, command: UiCommand) {
+        let points = self.selected_points();
+        match command {
+            UiCommand::AlignHorizontal => self.commit_layout(editing::align_horizontal(&points)),
+            UiCommand::AlignVertical => self.commit_layout(editing::align_vertical(&points)),
+            UiCommand::DistributeHorizontal => {
+                self.commit_layout(editing::distribute_horizontal(&points))
+            }
+            UiCommand::DistributeVertical => {
+                self.commit_layout(editing::distribute_vertical(&points))
+            }
+            UiCommand::FlipHorizontal => self.commit_layout(editing::flip_horizontal(&points)),
+            UiCommand::FlipVertical => self.commit_layout(editing::flip_vertical(&points)),
+            UiCommand::MakeLine => {
+                if let Some((min, max)) = self.selection_bounds() {
+                    let y = (min.y + max.y) * 0.5;
+                    self.preview_shape(shapes::ShapeSpec::Line {
+                        start: Point { x: min.x, y },
+                        end: Point { x: max.x, y },
+                    });
+                }
+            }
+            _ => unreachable!("non-arrangement command routed to arrange_selection"),
+        }
+    }
+
+    /// Moves the active working group by whole grid divisions. Every nudge
+    /// shares the snapping, bounds, and one-Undo-transaction path of drag.
+    fn nudge_selected(&mut self, horizontal_divisions: i32, vertical_divisions: i32) {
+        if self.selected.is_empty() {
+            return;
+        }
+        let grid = &self.document.grid;
+        let dx = grid.horizontal_units / f32::from(grid.horizontal_steps.max(1));
+        let dy = grid.vertical_units / f32::from(grid.vertical_steps.max(1));
+        let points = self
+            .selected_points()
+            .into_iter()
+            .map(|point| Point {
+                x: (point.x + dx * horizontal_divisions as f32).clamp(0.0, grid.width),
+                y: (point.y + dy * vertical_divisions as f32).clamp(0.0, grid.height),
+            })
+            .collect();
+        let revision = self.history.revision();
+        self.commit_layout(points);
+        if self.history.revision() != revision {
+            self.status = i18n::registered(self.locale, "app-state.153").into();
+        }
+    }
+
     /// Applies a Formation Designer result as one validated undo transaction,
     /// retaining its parametric source for later editing.
     fn commit_shape(&mut self, spec: shapes::ShapeSpec) {
+        if !self.ensure_editable_set_start() {
+            return;
+        }
         if self.selected.is_empty() || spec.validate().is_err() {
             self.status = i18n::registered(self.locale, "app-state.055").into();
             return;
@@ -917,6 +2078,20 @@ impl DrillApp {
         self.formation_preview_spec = Some(spec);
     }
 
+    fn formation_preview_is_closed(&self) -> bool {
+        matches!(
+            self.formation_preview_spec,
+            Some(
+                shapes::ShapeSpec::Circle { .. }
+                    | shapes::ShapeSpec::Ellipse { .. }
+                    | shapes::ShapeSpec::Star { .. }
+                    | shapes::ShapeSpec::Polygon { .. }
+                    | shapes::ShapeSpec::Cross { .. }
+                    | shapes::ShapeSpec::Text { .. }
+            )
+        )
+    }
+
     fn apply_shape_preview(&mut self) {
         if let Some(spec) = self.formation_preview_spec.take() {
             self.formation_preview_points.clear();
@@ -935,6 +2110,15 @@ impl DrillApp {
     }
 
     fn begin_free_draw(&mut self) {
+        if !self.ensure_editable_set_start() {
+            return;
+        }
+        // A form can be the starting point of a design. If nothing is selected,
+        // choose the complete cast as the pending target; document positions
+        // remain untouched until the user explicitly applies the preview.
+        if self.selected.is_empty() {
+            self.selected = (0..self.document.performers.len()).collect();
+        }
         self.formation_preview_spec = None;
         self.formation_preview_points.clear();
         self.free_draw_raw.clear();
@@ -1001,6 +2185,9 @@ impl DrillApp {
         success_ja: &'static str,
         success_en: &'static str,
     ) {
+        if !self.ensure_editable_set_start() {
+            return;
+        }
         if positions.len() != self.selected.len()
             || positions
                 .iter()
@@ -1328,14 +2515,88 @@ impl DrillApp {
         }
     }
 
-    fn open_dialog(&mut self) {
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("DrillForge", &["json"])
-            .pick_file()
-        else {
-            return;
-        };
-        self.project_state.load_legacy_json(path);
+    /// Always ask for a new JSON destination.  This deliberately differs from
+    /// Save, which reuses the current legacy JSON path when there is one.
+    fn save_as_dialog(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("DrillForge", &["drill.json"])
+            .set_file_name("untitled.drill.json")
+            .save_file()
+        {
+            self.project_state
+                .save_legacy_json(path, self.document.clone());
+        }
+    }
+
+    fn save_project_dialog(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("DrillForge Project", &["drillproj"])
+            .set_file_name("untitled.drillproj")
+            .save_file()
+        {
+            self.project_state.save_project(
+                path,
+                self.document.clone(),
+                self.embed_audio_in_project,
+                self.underlay_state.asset_bytes.clone(),
+            );
+        }
+    }
+
+    fn request_open_document(&mut self, kind: DocumentOpenKind) {
+        self.request_open_target(DocumentOpenTarget::Dialog(kind));
+    }
+
+    fn request_open_recent(&mut self, path: PathBuf) {
+        self.request_open_target(DocumentOpenTarget::Recent(path));
+    }
+
+    fn request_open_target(&mut self, target: DocumentOpenTarget) {
+        if self.dirty {
+            self.document_open_guard = DocumentOpenGuard::Prompt(target);
+        } else {
+            self.begin_open_target(target);
+        }
+    }
+
+    fn begin_open_document(&mut self, kind: DocumentOpenKind) {
+        match kind {
+            DocumentOpenKind::LegacyJson => {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("DrillForge", &["json"])
+                    .pick_file()
+                {
+                    self.project_state.load_legacy_json(path);
+                }
+            }
+            DocumentOpenKind::Project => {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("DrillForge Project", &["drillproj"])
+                    .pick_file()
+                {
+                    self.project_state.load_project(path);
+                }
+            }
+        }
+    }
+
+    fn begin_open_target(&mut self, target: DocumentOpenTarget) {
+        match target {
+            DocumentOpenTarget::Dialog(kind) => self.begin_open_document(kind),
+            DocumentOpenTarget::Recent(path) => {
+                if !path.is_file() {
+                    self.recent_projects.remove(&path);
+                    self.status = i18n::registered(self.locale, "recent-projects.005").into();
+                } else if path
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("drillproj"))
+                {
+                    self.project_state.load_project(path);
+                } else {
+                    self.project_state.load_legacy_json(path);
+                }
+            }
+        }
     }
 }
 
@@ -1346,6 +2607,24 @@ impl DrillApp {
             .pick_file()
         {
             self.import_state.choose(path);
+        }
+    }
+
+    fn import_musical_dialog(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Music timeline", &["musicxml", "mxl", "xml", "mid", "midi"])
+            .pick_file()
+        {
+            self.import_state.choose_musical(path);
+        }
+    }
+
+    fn load_underlay_dialog(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Image", &["png", "jpg", "jpeg"])
+            .pick_file()
+        {
+            self.underlay_state.load(path);
         }
     }
 

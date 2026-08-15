@@ -4,7 +4,10 @@
 //! compiled-in manifest endpoint; package download and installation stay explicit.
 
 mod transport;
-pub use transport::{MANIFEST_HOST, MANIFEST_PATH, TransportError, fetch_manifest};
+pub use transport::{
+    MANIFEST_HOST, MANIFEST_PATH, MAX_ATTESTATION_BYTES, MAX_MANIFEST_BYTES, MAX_PACKAGE_BYTES,
+    ResourceKind, Response, TransportError, UpdateTransport, fetch_manifest, fetch_resource,
+};
 
 pub use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -178,6 +181,65 @@ pub enum VerifyError {
     Sha256Mismatch,
     AttestationSha256Mismatch,
     SignerMismatch,
+    ManifestSignature,
+}
+
+/// Signature verification boundary. Production and tests use this exact API;
+/// private signing material is never accepted by updater production code.
+pub trait ManifestSignatureVerifier {
+    fn verify(&self, payload: &[u8], signature: &[u8]) -> bool;
+}
+
+pub fn verify_signed_manifest(
+    payload: &[u8],
+    signature: &[u8],
+    verifier: &impl ManifestSignatureVerifier,
+) -> Result<Manifest, VerifyError> {
+    if !verifier.verify(payload, signature) {
+        return Err(VerifyError::ManifestSignature);
+    }
+    Manifest::parse(payload).map_err(|_| VerifyError::ManifestSignature)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreparedUpdate {
+    pub release: Release,
+    pub package: Vec<u8>,
+    pub attestation: Vec<u8>,
+}
+
+/// Downloads and verifies an available update. It deliberately returns inert
+/// bytes: updater has no installer-launch or process-execution capability.
+pub fn prepare_update(
+    transport: &impl UpdateTransport,
+    release: &Release,
+    attested_signer: &str,
+) -> Result<PreparedUpdate, PrepareError> {
+    let package = fetch_resource(
+        transport,
+        &release.artifact.download_url,
+        ResourceKind::Package,
+    )
+    .map_err(PrepareError::Transport)?;
+    let attestation = fetch_resource(
+        transport,
+        &release.artifact.attestation_url,
+        ResourceKind::Attestation,
+    )
+    .map_err(PrepareError::Transport)?;
+    verify_download(&release.artifact, &package, &attestation, attested_signer)
+        .map_err(PrepareError::Verify)?;
+    Ok(PreparedUpdate {
+        release: release.clone(),
+        package,
+        attestation,
+    })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PrepareError {
+    Transport(TransportError),
+    Verify(VerifyError),
 }
 
 /// Verifies downloaded bytes plus the locally supplied attestation bundle.

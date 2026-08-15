@@ -4,7 +4,7 @@
 
 use super::*;
 use drill_core::clinic;
-use drill_core::{aesthetics, rhythm_sync};
+use drill_core::rhythm_sync;
 
 impl DrillApp {
     pub(super) fn show_workspace_inspector(&mut self, ui: &mut egui::Ui, set_counts: f32) {
@@ -84,12 +84,54 @@ impl DrillApp {
                     self.current_set = index;
                     self.count_position = 0.0;
                     self.playing = false;
-                    self.selected.clear();
+                    // Performer identity is stable across sets; preserve the
+                    // working group while the designer compares or adjusts a
+                    // transition.
                 }
             }
             if ui.button(super::i18n::registered(self.locale, "workspace-inspector.003")).clicked() {
                 self.duplicate_current_set();
             }
+            ui.collapsing(super::i18n::registered(self.locale, "count-adjust.001"), |ui| {
+                ui.small(super::i18n::registered(self.locale, "count-adjust.002"));
+                let set_id = self.document.sets[self.current_set].id;
+                let existing_moves = self.document.sets[self.current_set].counts;
+                let active_for_set = self
+                    .set_count_draft
+                    .is_some_and(|draft| draft.set_id == set_id);
+                if !active_for_set && ui.button(super::i18n::registered(self.locale, "count-adjust.003")).clicked() {
+                    self.begin_set_count_draft();
+                }
+                if active_for_set {
+                    let mut moves = self.set_count_draft.expect("active draft").moves;
+                    ui.add(egui::DragValue::new(&mut moves).range(1..=512).suffix(" c"));
+                    if let Some(draft) = &mut self.set_count_draft {
+                        draft.moves = moves;
+                    }
+                    let delta = i32::from(moves) - i32::from(existing_moves);
+                    ui.label(format!(
+                        "{} {:+} c",
+                        super::i18n::registered(self.locale, "count-adjust.004"),
+                        delta
+                    ));
+                    ui.small(super::i18n::registered(self.locale, "count-adjust.005"));
+                    ui.horizontal(|ui| {
+                        if ui.button(super::i18n::registered(self.locale, "count-adjust.006")).clicked() {
+                            self.apply_set_count_draft();
+                        }
+                        if ui.button(super::i18n::registered(self.locale, "count-adjust.007")).clicked() {
+                            self.discard_set_count_draft();
+                        }
+                    });
+                }
+            });
+            // Keep the marker browser close to the set list: both are the
+            // writer's fast ways to orient themselves without abandoning the
+            // field. Taking the small session state out avoids aliasing the
+            // app while it seeks, edits, or adjusts the playback range.
+            let mut production_markers_panel = std::mem::take(&mut self.production_markers_panel);
+            production_markers_panel.show(self, ui);
+            self.production_markers_panel = production_markers_panel;
             ui.collapsing(super::i18n::registered(self.locale, "workspace-inspector.004"), |ui| {
                 ui.small(super::i18n::registered(self.locale, "workspace-inspector.005"));
                 let set_id = self.document.sets[self.current_set].id;
@@ -125,13 +167,13 @@ impl DrillApp {
                 self.count_position.round() as u16,
                 self.document.sets[self.current_set].counts
             ));
+            let mut editor_count = self.count_position.round().clamp(0.0, set_counts) as u32;
             let seek = ui.add(
-                egui::Slider::new(&mut self.count_position, 0.0..=set_counts)
-                    .step_by(1.0)
+                egui::Slider::new(&mut editor_count, 0..=set_counts as u32)
                     .show_value(false),
             );
-            if seek.drag_stopped() {
-                self.count_position = self.count_position.round();
+            if seek.changed() {
+                self.count_position = editor_count as f32;
             }
             ui.separator();
             ui.heading(super::i18n::registered(self.locale, "workspace-inspector.013"));
@@ -154,22 +196,162 @@ impl DrillApp {
                             self.count_position = 0.0;
                             self.playback_start = 0;
                             self.playback_end = self.document.timeline_counts();
-                            self.selected.clear();
+                            self.reset_selection_for_document();
                             self.status = super::i18n::registered(self.locale, "workspace-inspector.019").into();
                         }
                     });
             }
             ui.horizontal(|ui| {
                 if ui.button(super::i18n::registered(self.locale, "workspace-inspector.020")).clicked() {
-                    self.selected = (0..self.document.performers.len()).collect();
+                    self.replace_selection((0..self.document.performers.len()).collect());
                 }
                 if ui.button(super::i18n::registered(self.locale, "workspace-inspector.021")).clicked() {
-                    self.selected.clear();
+                    self.clear_selection();
                 }
+                if ui
+                    .add_enabled(
+                        self.can_restore_selection(),
+                        egui::Button::new(super::i18n::registered(
+                            self.locale,
+                            "workspace-inspector.121",
+                        )),
+                    )
+                    .on_hover_text(super::i18n::registered(
+                        self.locale,
+                        "workspace-inspector.122",
+                    ))
+                    .clicked()
+                {
+                    self.restore_recent_selection();
+                }
+                ui.menu_button(
+                    super::i18n::registered(self.locale, "workspace-inspector.123"),
+                    |ui| {
+                        ui.small(super::i18n::registered(
+                            self.locale,
+                            "workspace-inspector.124",
+                        ));
+                        let entries: Vec<_> = self
+                            .selection_stack
+                            .iter()
+                            .rev()
+                            .cloned()
+                            .collect();
+                        for (recency, selection) in entries.into_iter().enumerate() {
+                            let label = self.selection_history_label(&selection);
+                            if ui.button(label).clicked() {
+                                self.restore_selection_history_at(recency);
+                                ui.close();
+                            }
+                        }
+                    },
+                );
                 if ui.button(super::i18n::registered(self.locale, "workspace-inspector.076")).on_hover_text(super::i18n::registered(self.locale, "workspace-inspector.077")).clicked() {
                     self.section_manager.open = true;
                 }
             });
+            if !self.locked_performers.is_empty() || !self.hidden_performers.is_empty() {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(format!(
+                        "{} {} · {} {}",
+                        self.locked_performers.len(),
+                        super::i18n::registered(self.locale, "app-ui.133"),
+                        self.hidden_performers.len(),
+                        super::i18n::registered(self.locale, "app-ui.134"),
+                    ));
+                    if ui
+                        .small_button(super::i18n::registered(self.locale, "app-ui.135"))
+                        .on_hover_text(super::i18n::registered(self.locale, "app-ui.136"))
+                        .clicked()
+                    {
+                        self.clear_performer_filters();
+                    }
+                });
+                let filtered_sections: Vec<_> = self
+                    .document
+                    .sections
+                    .iter()
+                    .filter_map(|section| {
+                        let count = self
+                            .document
+                            .performers
+                            .iter()
+                            .filter(|performer| {
+                                performer.section == section.id
+                                    && (self.locked_performers.contains(&performer.id)
+                                        || self.hidden_performers.contains(&performer.id))
+                            })
+                            .count();
+                        (count > 0).then(|| (section.id, section.name.clone(), count))
+                    })
+                    .collect();
+                let filtered_performers: Vec<_> = self
+                    .document
+                    .performers
+                    .iter()
+                    .filter_map(|performer| {
+                        let locked = self.locked_performers.contains(&performer.id);
+                        let hidden = self.hidden_performers.contains(&performer.id);
+                        (locked || hidden).then(|| {
+                            (
+                                performer.id,
+                                performer.label.clone(),
+                                locked,
+                                hidden,
+                            )
+                        })
+                    })
+                    .collect();
+                ui.collapsing(
+                    super::i18n::registered(self.locale, "app-ui.137"),
+                    |ui| {
+                        ui.small(super::i18n::registered(self.locale, "app-ui.138"));
+                        ui.horizontal_wrapped(|ui| {
+                            for (section, name, count) in &filtered_sections {
+                                let label = format!("{name} ({count})");
+                                if ui
+                                    .small_button(label)
+                                    .on_hover_text(super::i18n::registered(
+                                        self.locale,
+                                        "app-ui.139",
+                                    ))
+                                    .clicked()
+                                {
+                                    let restored = self.restore_filtered_section(*section);
+                                    self.status = format!(
+                                        "{} {restored}",
+                                        super::i18n::registered(self.locale, "app-ui.140")
+                                    );
+                                }
+                            }
+                        });
+                        ui.separator();
+                        for (id, label, locked, hidden) in filtered_performers {
+                            ui.horizontal(|ui| {
+                                let state = match (locked, hidden) {
+                                    (true, true) => super::i18n::registered(self.locale, "app-ui.143"),
+                                    (true, false) => super::i18n::registered(self.locale, "app-ui.145"),
+                                    (false, true) => super::i18n::registered(self.locale, "app-ui.146"),
+                                    (false, false) => unreachable!("filtered performer must have a filter"),
+                                };
+                                ui.label(format!("{label} · {state}"));
+                                if ui
+                                    .small_button(super::i18n::registered(self.locale, "app-ui.141"))
+                                    .on_hover_text(super::i18n::registered(
+                                        self.locale,
+                                        "app-ui.142",
+                                    ))
+                                    .clicked()
+                                {
+                                    self.restore_filtered_performer(id);
+                                    self.status = super::i18n::registered(self.locale, "app-ui.144")
+                                        .to_owned();
+                                }
+                            });
+                        }
+                    },
+                );
+            }
             if self.count_position != 0.0 {
                 ui.colored_label(
                     Color32::from_rgb(255, 184, 77),
@@ -322,23 +504,23 @@ impl DrillApp {
                                 );
                             }
                             ui.horizontal_wrapped(|ui| {
-                                if ui.button(super::i18n::registered(self.locale, "workspace-inspector.032")).clicked() {
-                                    self.commit_shape(shapes::ShapeSpec::Ellipse { center, radius_x: rx, radius_y: ry, rotation: 0.0 });
+                                if ui.button(super::i18n::registered(self.locale, "workspace-inspector.111")).clicked() {
+                                    self.preview_shape(shapes::ShapeSpec::Ellipse { center, radius_x: rx, radius_y: ry, rotation: 0.0 });
                                 }
-                                if ui.button(super::i18n::registered(self.locale, "workspace-inspector.033")).clicked() {
-                                    self.commit_shape(shapes::ShapeSpec::Parabola { vertex: Point { x: center.x, y: min.y }, curvature: 0.06, half_width: rx, rotation: 0.0 });
+                                if ui.button(super::i18n::registered(self.locale, "workspace-inspector.112")).clicked() {
+                                    self.preview_shape(shapes::ShapeSpec::Parabola { vertex: Point { x: center.x, y: min.y }, curvature: 0.06, half_width: rx, rotation: 0.0 });
                                 }
-                                if ui.button(super::i18n::registered(self.locale, "workspace-inspector.034")).clicked() {
-                                    self.commit_shape(shapes::ShapeSpec::SineWave { start: Point { x: min.x, y: center.y }, end: Point { x: max.x, y: center.y }, amplitude: ry * 0.65, cycles: 2.0, phase: 0.0 });
+                                if ui.button(super::i18n::registered(self.locale, "workspace-inspector.113")).clicked() {
+                                    self.preview_shape(shapes::ShapeSpec::SineWave { start: Point { x: min.x, y: center.y }, end: Point { x: max.x, y: center.y }, amplitude: ry * 0.65, cycles: 2.0, phase: 0.0 });
                                 }
-                                if ui.button(super::i18n::registered(self.locale, "workspace-inspector.035")).clicked() {
-                                    self.commit_shape(shapes::ShapeSpec::Star { center, outer_radius: rx.max(ry), inner_radius: rx.max(ry) * 0.45, points: 5, rotation: 0.0 });
+                                if ui.button(super::i18n::registered(self.locale, "workspace-inspector.114")).clicked() {
+                                    self.preview_shape(shapes::ShapeSpec::Star { center, outer_radius: rx.max(ry), inner_radius: rx.max(ry) * 0.45, points: 5, rotation: 0.0 });
                                 }
-                                if ui.button(super::i18n::registered(self.locale, "workspace-inspector.036")).clicked() {
-                                    self.commit_shape(shapes::ShapeSpec::Polygon { center, radius: rx.max(ry), sides: 6, rotation: 0.0 });
+                                if ui.button(super::i18n::registered(self.locale, "workspace-inspector.115")).clicked() {
+                                    self.preview_shape(shapes::ShapeSpec::Polygon { center, radius: rx.max(ry), sides: 6, rotation: 0.0 });
                                 }
-                                if ui.button(super::i18n::registered(self.locale, "workspace-inspector.037")).clicked() {
-                                    self.commit_shape(shapes::ShapeSpec::Cross { center, arm_length: rx.max(ry), arm_width: rx.min(ry) * 0.7 });
+                                if ui.button(super::i18n::registered(self.locale, "workspace-inspector.116")).clicked() {
+                                    self.preview_shape(shapes::ShapeSpec::Cross { center, arm_length: rx.max(ry), arm_width: rx.min(ry) * 0.7 });
                                 }
                             });
                             ui.horizontal_wrapped(|ui| {
@@ -418,6 +600,33 @@ impl DrillApp {
                         }
                     });
                 }
+            } else if !self.document.performers.is_empty() {
+                ui.group(|ui| {
+                    ui.label(
+                        egui::RichText::new(super::i18n::registered(
+                            self.locale,
+                            "workspace-inspector.117",
+                        ))
+                        .strong(),
+                    );
+                    ui.small(super::i18n::registered(
+                        self.locale,
+                        "workspace-inspector.118",
+                    ));
+                    if ui
+                        .button(super::i18n::registered(
+                            self.locale,
+                            "workspace-inspector.119",
+                        ))
+                        .on_hover_text(super::i18n::registered(
+                            self.locale,
+                            "workspace-inspector.120",
+                        ))
+                        .clicked()
+                    {
+                        self.begin_free_draw();
+                    }
+                });
             }
             // Calls the spatial-hash clinic directly (instead of the
             // `analyze_transition` compatibility wrapper) so the reusable
@@ -470,6 +679,93 @@ impl DrillApp {
                 stride_color,
                 format!("● {}: {}", super::i18n::registered(self.locale, "workspace-inspector.107"), excessive_strides),
             );
+            // A clinic report is useful only when it leads directly to the
+            // people that need attention.  Keep this session-only: focusing
+            // a warning changes neither the drill nor its undo history.
+            let collision_focus = report
+                .collisions
+                .iter()
+                .take(8)
+                .map(|event| (event.a, event.b, event.count, event.distance))
+                .collect::<Vec<_>>();
+            let stride_focus = report
+                .strides
+                .iter()
+                .filter(|event| event.rating > clinic::StrideRating::Comfortable)
+                .take(8)
+                .map(|event| (event.performer, event.units_per_count, event.rating))
+                .collect::<Vec<_>>();
+            if !collision_focus.is_empty() || !stride_focus.is_empty() {
+                egui::CollapsingHeader::new(super::i18n::registered(
+                    self.locale,
+                    "clinic-ui.001",
+                ))
+                .default_open(false)
+                .show(ui, |ui| {
+                    for (a, b, count, distance) in collision_focus {
+                        let label = format!(
+                            "{} · {:.0} / {:.2}",
+                            super::i18n::registered(self.locale, "clinic-ui.002"),
+                            count,
+                            distance
+                        );
+                        if ui
+                            .button(label)
+                            .on_hover_text(super::i18n::registered(
+                                self.locale,
+                                "clinic-ui.003",
+                            ))
+                            .clicked()
+                        {
+                            let next = self
+                                .document
+                                .performers
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(index, performer)| {
+                                    (performer.id == a || performer.id == b).then_some(index)
+                                })
+                                .collect();
+                            self.replace_selection(next);
+                            self.field_viewport.center = editing::centroid(&self.selected_points());
+                            self.field_viewport.zoom = self.field_viewport.zoom.max(1.8);
+                            self.status = super::i18n::registered(self.locale, "clinic-ui.004")
+                                .into();
+                        }
+                    }
+                    for (performer_id, stride, rating) in stride_focus {
+                        let label = format!(
+                            "{} · {:.2} ({rating:?})",
+                            super::i18n::registered(self.locale, "clinic-ui.005"),
+                            stride
+                        );
+                        if ui
+                            .button(label)
+                            .on_hover_text(super::i18n::registered(
+                                self.locale,
+                                "clinic-ui.003",
+                            ))
+                            .clicked()
+                        {
+                            let next = self
+                                .document
+                                .performers
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(index, performer)| {
+                                    (performer.id == performer_id).then_some(index)
+                                })
+                                .collect();
+                            self.replace_selection(next);
+                            self.field_viewport.center = editing::centroid(&self.selected_points());
+                            self.field_viewport.zoom = self.field_viewport.zoom.max(1.8);
+                            self.status = super::i18n::registered(self.locale, "clinic-ui.006")
+                                .into();
+                        }
+                    }
+                    ui.small(super::i18n::registered(self.locale, "clinic-ui.007"));
+                });
+            }
             let stats = pathing::transition_stats(&self.document, self.current_set);
             let unit_label = match self.document.grid.unit {
                 Unit::Yards => "yd",
@@ -824,23 +1120,24 @@ impl DrillApp {
     /// doc comments on `DrillApp` for the exact invalidation rule.
     fn show_analytics_panel(&mut self, ui: &mut egui::Ui) {
         let revision = self.history.revision();
-        egui::CollapsingHeader::new(super::i18n::registered(self.locale, "analytics.001"))
-            .show(ui, |ui| {
+        let analytics_key = super::analytics_state::AnalyticsKey {
+            revision,
+            set_index: self.current_set,
+            beats_per_measure: self.beats_per_measure,
+            heatmap: self.heatmap_enabled,
+        };
+        self.analytics_state.poll(analytics_key);
+        self.analytics_state.ensure(&self.document, analytics_key);
+        egui::CollapsingHeader::new(super::i18n::registered(self.locale, "analytics.001")).show(
+            ui,
+            |ui| {
                 ui.small(super::i18n::registered(self.locale, "analytics.002"));
 
                 // --- Rhythm sync -------------------------------------------------
                 ui.separator();
                 ui.heading(super::i18n::registered(self.locale, "analytics.003"));
                 ui.small(super::i18n::registered(self.locale, "analytics.004"));
-                if self.rhythm_sync_cache.as_ref().map(|(rev, _)| *rev) != Some(revision) {
-                    let params = rhythm_sync::RhythmSyncParams {
-                        beats_per_measure: self.beats_per_measure,
-                        ..rhythm_sync::RhythmSyncParams::default()
-                    };
-                    let report = rhythm_sync::analyze_show(&self.document, &params);
-                    self.rhythm_sync_cache = Some((revision, report));
-                }
-                if let Some((_, report)) = &self.rhythm_sync_cache {
+                if let Some(report) = self.analytics_state.rhythm(analytics_key) {
                     if report.events.is_empty() {
                         ui.small(super::i18n::registered(self.locale, "analytics.010"));
                     } else {
@@ -892,22 +1189,7 @@ impl DrillApp {
                 ui.separator();
                 ui.heading(super::i18n::registered(self.locale, "analytics.011"));
                 ui.small(super::i18n::registered(self.locale, "analytics.012"));
-                let aesthetics_key = (revision, self.current_set);
-                if self
-                    .aesthetics_cache
-                    .as_ref()
-                    .map(|(rev, set_index, _)| (*rev, *set_index))
-                    != Some(aesthetics_key)
-                {
-                    let score = aesthetics::analyze_set(
-                        &self.document,
-                        self.current_set,
-                        &aesthetics::AestheticParams::default(),
-                    );
-                    self.aesthetics_cache =
-                        score.map(|score| (revision, self.current_set, score));
-                }
-                if let Some((_, _, score)) = &self.aesthetics_cache {
+                if let Some(score) = self.analytics_state.aesthetics(analytics_key) {
                     ui.small(format!(
                         "{}: {:.0}  ・  {}: {:.0}  ・  {}: {:.0}",
                         super::i18n::registered(self.locale, "analytics.013"),
@@ -943,7 +1225,22 @@ impl DrillApp {
                     super::i18n::registered(self.locale, "analytics.020"),
                 );
                 if !self.heatmap_enabled {
-                    self.heatmap_cache = None;
+                    self.analytics_state.cancel();
+                }
+                if let Some(progress) = self.analytics_state.progress() {
+                    ui.horizontal(|ui| {
+                        ui.add(egui::ProgressBar::new(progress).show_percentage());
+                        if ui
+                            .button(if self.locale == drill_core::Locale::Ja {
+                                "解析を中止"
+                            } else {
+                                "Cancel analysis"
+                            })
+                            .clicked()
+                        {
+                            self.analytics_state.cancel();
+                        }
+                    });
                 }
 
                 // --- Trails ---------------------------------------------------------
@@ -968,6 +1265,7 @@ impl DrillApp {
                         super::i18n::registered(self.locale, "analytics.026"),
                     );
                 });
-            });
+            },
+        );
     }
 }

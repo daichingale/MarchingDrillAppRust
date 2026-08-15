@@ -55,7 +55,9 @@
 //! iteration order are ever embedded, so the same [`Document`] always
 //! produces byte-identical HTML.
 
-use drill_core::{Document, DrillError, Locale, Performer, PerformerId, Point, SectionId, continuity, coordinates};
+use drill_core::{
+    Document, DrillError, Locale, Performer, PerformerId, Point, SectionId, continuity, coordinates,
+};
 use drill_render::{FieldMap, Vec2};
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -87,9 +89,36 @@ pub fn build_practice_viewer(
     performer_ids: &[PerformerId],
     locale: Locale,
 ) -> Result<String, DrillError> {
+    if document.performers.len() > drill_core::MAX_PERFORMERS {
+        return Err(DrillError::LimitExceeded {
+            field: "performers",
+            limit: drill_core::MAX_PERFORMERS,
+        });
+    }
+    if document.sets.len() > drill_core::MAX_SETS {
+        return Err(DrillError::LimitExceeded {
+            field: "sets",
+            limit: drill_core::MAX_SETS,
+        });
+    }
+    for (set_index, set) in document.sets.iter().enumerate() {
+        if set.positions.len() != document.performers.len() {
+            return Err(DrillError::SetSizeMismatch {
+                set_index,
+                expected: document.performers.len(),
+                found: set.positions.len(),
+            });
+        }
+    }
     let indices = resolve_performer_indices(document, performer_ids);
     let field_height = field_height_px(&document.grid);
-    let mut html = String::with_capacity(estimate_capacity(document, &indices));
+    let capacity = estimate_capacity(document, &indices);
+    let mut html = String::new();
+    html.try_reserve(capacity)
+        .map_err(|_| DrillError::LimitExceeded {
+            field: "practice viewer bytes",
+            limit: capacity,
+        })?;
 
     write_head(&mut html, document, locale);
     html.push_str("<body>\n");
@@ -125,11 +154,16 @@ fn resolve_performer_indices(document: &Document, performer_ids: &[PerformerId])
 fn estimate_capacity(document: &Document, indices: &[usize]) -> usize {
     let per_set_card = 320usize;
     let sets = document.sets.len();
-    let text_bytes = indices.len().saturating_mul(sets).saturating_mul(per_set_card);
+    let text_bytes = indices
+        .len()
+        .saturating_mul(sets)
+        .saturating_mul(per_set_card);
     let diagram_bytes = sets
         .saturating_mul(document.performers.len())
         .saturating_mul(96);
-    text_bytes.saturating_add(diagram_bytes).saturating_add(8 * 1024)
+    text_bytes
+        .saturating_add(diagram_bytes)
+        .saturating_add(8 * 1024)
 }
 
 fn field_height_px(grid: &drill_core::GridConfig) -> f32 {
@@ -261,7 +295,7 @@ fn write_performer_page(html: &mut String, document: &Document, index: usize) {
     let pid = performer.id.get();
     let _ = write!(
         html,
-        "<section id=\"performer-{pid}\" class=\"performer-page\" data-pid=\"{pid}\" hidden>\n\
+        "<section id=\"performer-{pid}\" class=\"performer-page\" data-pid=\"{pid}\" tabindex=\"-1\" hidden>\n\
          <button type=\"button\" class=\"back\">\
          <span lang=\"ja\">← 選択画面に戻る</span><span lang=\"en\">← Back to selection</span>\
          </button>\n\
@@ -274,6 +308,15 @@ fn write_performer_page(html: &mut String, document: &Document, index: usize) {
              <span lang=\"en\">This drill has no sets</span></p>\n",
         );
     } else {
+        html.push_str(
+            "<nav class=\"set-nav\" aria-label=\"Set navigation\">\n\
+             <button type=\"button\" data-action=\"prev-set\">\n\
+             <span lang=\"ja\">← 前のセット</span><span lang=\"en\">← Previous</span></button>\n\
+             <span class=\"set-progress\" aria-live=\"polite\"></span>\n\
+             <button type=\"button\" data-action=\"next-set\">\n\
+             <span lang=\"ja\">次のセット →</span><span lang=\"en\">Next →</span></button>\n\
+             </nav>\n",
+        );
         let segments = continuity::performer_continuity(document, index);
         for (set_index, set) in document.sets.iter().enumerate() {
             write_set_card(html, document, set_index, set, index, &segments);
@@ -293,7 +336,7 @@ fn write_set_card(
     let name = esc(&set.name);
     let _ = write!(
         html,
-        "<article class=\"set-card\">\n\
+        "<article class=\"set-card\" data-set-index=\"{set_index}\">\n\
          <h3><span lang=\"ja\">{name} ({}カウント)</span><span lang=\"en\">{name} ({} counts)</span></h3>\n",
         set.counts, set.counts,
     );
@@ -379,7 +422,10 @@ fn format_time_label(seconds: f32) -> (String, String) {
 fn write_field_templates(html: &mut String, document: &Document, field_height: f32) {
     for (set_index, set) in document.sets.iter().enumerate() {
         let svg = build_field_template_svg(document, &set.positions, FIELD_WIDTH_PX, field_height);
-        let _ = writeln!(html, "<template id=\"field-tpl-{set_index}\">{svg}</template>");
+        let _ = writeln!(
+            html,
+            "<template id=\"field-tpl-{set_index}\">{svg}</template>"
+        );
     }
 }
 
@@ -397,7 +443,10 @@ fn build_field_template_svg(
     let map = FieldMap::new(
         grid.width,
         grid.height,
-        Vec2 { x: width, y: height },
+        Vec2 {
+            x: width,
+            y: height,
+        },
         FIELD_MARGIN_PX,
     );
     let mut svg = String::with_capacity(positions.len() * 72 + 256);
@@ -488,6 +537,10 @@ main{padding:.75rem 1rem 3rem;max-width:640px;margin:0 auto;}
 .card-label{font-weight:700;font-size:1.15rem;}
 .card-section{color:var(--muted);font-size:.85rem;}
 .back{margin:.25rem 0 1rem;border:none;background:transparent;color:var(--accent);font-size:1rem;padding:.5rem 0;}
+.set-nav{position:sticky;top:3.65rem;z-index:4;display:flex;align-items:center;justify-content:space-between;gap:.35rem;margin:0 0 .75rem;padding:.45rem;border:1px solid var(--border);border-radius:12px;background:color-mix(in srgb,var(--panel) 94%,transparent);backdrop-filter:blur(14px);}
+.set-nav button{border:0;background:transparent;color:var(--accent);font-size:.92rem;padding:.45rem .35rem;min-height:2.25rem;}
+.set-nav button:disabled{color:var(--muted);opacity:.6;}
+.set-progress{font-size:.85rem;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap;}
 .set-card{border:1px solid var(--border);background:var(--panel);border-radius:14px;padding:1rem;margin-bottom:.85rem;}
 .set-card h3{margin:0 0 .5rem;font-size:1.05rem;}
 .set-card p{margin:.25rem 0;}
@@ -540,12 +593,38 @@ function mountFields(page){
     mount.appendChild(clone);
   });
 }
+function showSet(page, requested){
+  var cards=Array.prototype.slice.call(page.querySelectorAll('.set-card'));
+  if(!cards.length){return;}
+  var index=Math.max(0,Math.min(cards.length-1,requested));
+  cards.forEach(function(card,i){card.hidden=i!==index;});
+  page.dataset.setIndex=String(index);
+  var progress=page.querySelector('.set-progress');
+  if(progress){progress.textContent=(index+1)+' / '+cards.length;}
+  var prev=page.querySelector('[data-action="prev-set"]');
+  var next=page.querySelector('[data-action="next-set"]');
+  if(prev){prev.disabled=index===0;}
+  if(next){next.disabled=index===cards.length-1;}
+}
+function wireSetNavigation(page){
+  if(page.dataset.navWired==='1'){return;}
+  page.dataset.navWired='1';
+  var prev=page.querySelector('[data-action="prev-set"]');
+  var next=page.querySelector('[data-action="next-set"]');
+  if(prev){prev.addEventListener('click',function(){showSet(page,Number(page.dataset.setIndex||0)-1);});}
+  if(next){next.addEventListener('click',function(){showSet(page,Number(page.dataset.setIndex||0)+1);});}
+  page.addEventListener('keydown',function(event){
+    if(event.altKey||event.ctrlKey||event.metaKey||event.target.matches('button,input,select,textarea')){return;}
+    if(event.key==='ArrowLeft'){showSet(page,Number(page.dataset.setIndex||0)-1);event.preventDefault();}
+    if(event.key==='ArrowRight'){showSet(page,Number(page.dataset.setIndex||0)+1);event.preventDefault();}
+  });
+}
 function showPerformer(pid){
   if(selector){selector.hidden=true;}
   pages.forEach(function(p){
     var match=p.dataset.pid===pid;
     p.hidden=!match;
-    if(match){mountFields(p);}
+    if(match){mountFields(p);wireSetNavigation(p);showSet(p,Number(p.dataset.setIndex||0));p.focus();}
   });
 }
 document.querySelectorAll('.card').forEach(function(card){
@@ -587,6 +666,16 @@ mod tests {
         assert!(balanced(&html, "<h3", "</h3>"));
         assert!(balanced(&html, "<style", "</style>"));
         assert!(balanced(&html, "<script", "</script>"));
+    }
+
+    #[test]
+    fn rejects_unvalidated_position_mismatch_before_rendering() {
+        let mut doc = Document::demo(2, 2);
+        doc.sets[0].positions.pop();
+        assert!(matches!(
+            build_practice_viewer(&doc, &[], Locale::Ja),
+            Err(DrillError::SetSizeMismatch { set_index: 0, .. })
+        ));
     }
 
     #[test]
@@ -634,10 +723,29 @@ mod tests {
         let en = coordinates::readable_localized(point, &doc.grid, Locale::En);
         for locale in [Locale::Ja, Locale::En] {
             let html = build_practice_viewer(&doc, &[], locale).unwrap();
-            assert!(html.contains(&esc(&ja)), "missing Japanese text for {locale:?}");
-            assert!(html.contains(&esc(&en)), "missing English text for {locale:?}");
+            assert!(
+                html.contains(&esc(&ja)),
+                "missing Japanese text for {locale:?}"
+            );
+            assert!(
+                html.contains(&esc(&en)),
+                "missing English text for {locale:?}"
+            );
             assert!(html.contains("個人練習ビューア"));
             assert!(html.contains("Practice Viewer"));
+        }
+    }
+
+    #[test]
+    fn performer_pages_include_single_set_practice_navigation() {
+        let doc = Document::demo(1, 2);
+        let html = build_practice_viewer(&doc, &[], Locale::En).unwrap();
+        assert!(html.contains("class=\"set-nav\""));
+        assert!(html.contains("data-action=\"prev-set\""));
+        assert!(html.contains("data-action=\"next-set\""));
+        assert!(html.contains("function showSet(page, requested)"));
+        for set_index in 0..doc.sets.len() {
+            assert!(html.contains(&format!("data-set-index=\"{set_index}\"")));
         }
     }
 

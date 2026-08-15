@@ -188,8 +188,13 @@ pub struct SetRhythmSummary {
 pub fn analyze_show(document: &Document, params: &RhythmSyncParams) -> RhythmSyncReport {
     let params = params.sanitized();
     let transitions = document.sets.len().saturating_sub(1);
-    let mut events =
-        Vec::with_capacity(document.performers.len().saturating_mul(transitions).saturating_mul(2));
+    let mut events = Vec::with_capacity(
+        document
+            .performers
+            .len()
+            .saturating_mul(transitions)
+            .saturating_mul(2),
+    );
     for set_index in 0..transitions {
         push_transition_events(document, set_index, params, &mut events);
     }
@@ -217,7 +222,10 @@ pub fn set_rhythm_summary(
             syncopation_ratio: 0.0,
         };
     }
-    let on_beat = events.iter().filter(|event| event.intent.is_on_beat()).count();
+    let on_beat = events
+        .iter()
+        .filter(|event| event.intent.is_on_beat())
+        .count();
     let syncopated = events
         .iter()
         .filter(|event| event.intent == RhythmicIntent::Syncopated)
@@ -243,7 +251,10 @@ impl RhythmicIntent {
 
 fn finish_report(events: Vec<PerformerRhythmEvent>) -> RhythmSyncReport {
     let total = events.len();
-    let on_beat = events.iter().filter(|event| event.intent.is_on_beat()).count();
+    let on_beat = events
+        .iter()
+        .filter(|event| event.intent.is_on_beat())
+        .count();
     let on_beat_ratio = if total == 0 {
         0.0
     } else {
@@ -315,7 +326,11 @@ fn push_event(
         .tempo
         .measure_beat(global_count, params.beats_per_measure);
     let alignment = BeatAlignment::new(measure, beat);
-    let intent = RhythmicIntent::classify(alignment, params.beats_per_measure, params.on_beat_tolerance_counts);
+    let intent = RhythmicIntent::classify(
+        alignment,
+        params.beats_per_measure,
+        params.on_beat_tolerance_counts,
+    );
     out.push(PerformerRhythmEvent {
         performer_id,
         set_index,
@@ -428,7 +443,11 @@ mod tests {
         let params = RhythmSyncParams::default();
         let report = analyze_show(&doc, &params);
         assert_eq!(report.events.len(), doc.performers.len() * 2);
-        assert!(report.on_beat_ratio > 0.99, "ratio={}", report.on_beat_ratio);
+        assert!(
+            report.on_beat_ratio > 0.99,
+            "ratio={}",
+            report.on_beat_ratio
+        );
         assert!(report.show_score > 99.0, "score={}", report.show_score);
     }
 
@@ -451,7 +470,11 @@ mod tests {
         };
         let params = RhythmSyncParams::default();
         let report = analyze_show(&doc, &params);
-        assert!(report.on_beat_ratio < 0.01, "ratio={}", report.on_beat_ratio);
+        assert!(
+            report.on_beat_ratio < 0.01,
+            "ratio={}",
+            report.on_beat_ratio
+        );
         assert!(report.show_score < 1.0, "score={}", report.show_score);
         assert!(
             report

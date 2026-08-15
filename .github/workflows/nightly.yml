@@ -31,6 +31,10 @@ jobs:
         run: cargo test -p drill-conformance --test fuzz_layout --locked -- --test-threads=1
       - name: Enforce CPU/GPU renderer parity matrix
         run: cargo test -p drill-gpu --test renderer_parity --locked -- --test-threads=1
+      - name: Enforce maximum-document analytics worker latency and heap
+        run: cargo bench -p drill-jobs --bench analytics_performance --locked
+      - name: Enforce mobile practice viewer generation budget
+        run: cargo bench -p drill-mobile-viewer --bench generation_performance --locked
       - name: Enforce performance and allocation budgets
         run: |
           cargo bench -p drill-jobs --bench max_project_save_latency --locked

@@ -21,7 +21,7 @@ impl From<TransportError> for UpdateFailure {
             TransportError::NotConfigured => Self::NotConfigured,
             TransportError::Offline => Self::Offline,
             TransportError::Timeout => Self::Timeout,
-            TransportError::Tls => Self::Tls,
+            TransportError::Tls | TransportError::InsecureUrl => Self::Tls,
             TransportError::HttpStatus(code) => Self::Http(code),
             TransportError::InvalidManifest(_)
             | TransportError::InvalidContentType

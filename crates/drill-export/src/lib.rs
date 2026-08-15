@@ -177,7 +177,7 @@ impl RasterSurface {
     ) -> RasterStats {
         self.rgba.fill(0);
         let mut stats = RasterStats::default();
-        for command in list.commands() {
+        for command in list.paint_order() {
             stats.commands = stats.commands.saturating_add(1);
             match *command {
                 DrawCmd::FieldFill { rect, fill } => {

@@ -7,17 +7,19 @@
 //! same as the full UI. This module never touches `self.document` fields
 //! directly. See `ui_qa.rs` for the guard test that scans this file too.
 use super::*;
+use drill_jobs::{Job, JobErrorCode, JobFailure, JobKind, JobMsg};
 
-/// Tiny locale-pair helper local to this module. Deliberately *not* named
-/// `tr` and not written as `if locale == Locale::Ja { .. } else { .. }`, so
-/// `scripts/generate-message-catalog.ps1`'s textual scan (which only matches
-/// those two call shapes) does not pick up simple-mode copy and require a
-/// docs/MESSAGE_CATALOG.md regeneration for this file.
-fn s(locale: Locale, ja: &'static str, en: &'static str) -> &'static str {
-    match locale {
-        Locale::Ja => ja,
-        Locale::En => en,
-    }
+type PreparedClicks = (
+    drill_audio::ClickSettings,
+    drill_audio::ClickSchedule,
+    drill_audio::ClickVoices,
+    f32,
+);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MetronomeFailure {
+    Output,
+    Schedule,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -57,41 +59,23 @@ impl SimpleStep {
     }
 
     fn title(self, locale: Locale) -> &'static str {
-        match (locale, self) {
-            (Locale::Ja, Self::ChooseFormation) => "1. フォーメーションを選ぶ",
-            (Locale::En, Self::ChooseFormation) => "1. Choose a Formation",
-            (Locale::Ja, Self::SelectPerformers) => "2. 演者を選ぶ",
-            (Locale::En, Self::SelectPerformers) => "2. Select Performers",
-            (Locale::Ja, Self::MovePerformers) => "3. 動かす",
-            (Locale::En, Self::MovePerformers) => "3. Move",
-            (Locale::Ja, Self::Playback) => "4. 再生する",
-            (Locale::En, Self::Playback) => "4. Play",
-        }
+        let id = match self {
+            Self::ChooseFormation => "simple-mode.001",
+            Self::SelectPerformers => "simple-mode.002",
+            Self::MovePerformers => "simple-mode.003",
+            Self::Playback => "simple-mode.004",
+        };
+        i18n::registered(locale, id)
     }
 
     fn guidance(self, locale: Locale) -> &'static str {
-        match (locale, self) {
-            (Locale::Ja, Self::ChooseFormation) => {
-                "編集したいフォーメーション（セット）を選びましょう。"
-            }
-            (Locale::En, Self::ChooseFormation) => {
-                "Choose the formation (set) you want to edit."
-            }
-            (Locale::Ja, Self::SelectPerformers) => {
-                "次は演者を選んでみましょう。フィールドの演者をタップするか、「全員を選択」を押します。"
-            }
-            (Locale::En, Self::SelectPerformers) => {
-                "Next, let's select performers. Tap performers on the field, or press Select All."
-            }
-            (Locale::Ja, Self::MovePerformers) => {
-                "選んだ演者をドラッグするか、並べ方のボタンで動かしましょう。矢印ボタンで表示範囲を移動できます。"
-            }
-            (Locale::En, Self::MovePerformers) => {
-                "Drag the selected performers, or use a layout button. Use the arrow buttons to pan the view."
-            }
-            (Locale::Ja, Self::Playback) => "再生ボタンを押して、動きを確認しましょう。",
-            (Locale::En, Self::Playback) => "Press Play to check how it moves.",
-        }
+        let id = match self {
+            Self::ChooseFormation => "simple-mode.005",
+            Self::SelectPerformers => "simple-mode.006",
+            Self::MovePerformers => "simple-mode.007",
+            Self::Playback => "simple-mode.008",
+        };
+        i18n::registered(locale, id)
     }
 }
 
@@ -103,7 +87,10 @@ pub(crate) struct MetronomeState {
     pub bpm: f32,
     running: bool,
     output: Option<drill_audio::AudioOutput>,
-    error: Option<String>,
+    open_job: Option<Job<drill_audio::AudioOutput>>,
+    schedule_job: Option<Job<PreparedClicks>>,
+    start_when_ready: bool,
+    error: Option<MetronomeFailure>,
 }
 
 impl Default for MetronomeState {
@@ -112,55 +99,83 @@ impl Default for MetronomeState {
             bpm: 120.0,
             running: false,
             output: None,
+            open_job: None,
+            schedule_job: None,
+            start_when_ready: false,
             error: None,
         }
     }
 }
 
 impl MetronomeState {
-    fn ensure_output(&mut self) -> bool {
-        if self.output.is_some() {
-            return true;
+    fn begin_open(&mut self) {
+        if self.output.is_some() || self.open_job.is_some() {
+            return;
         }
         // A few seconds of silence: `render_block` fills silence past the end
         // of the asset too, so the click mixer keeps ticking indefinitely
         // while the device stream stays open. No music/document dependency.
-        let asset =
-            match drill_audio::AudioAsset::from_interleaved(vec![0_i16; 48_000 * 2], 48_000, 1, 1.0)
-            {
-                Ok(asset) => std::sync::Arc::new(asset),
-                Err(error) => {
-                    self.error = Some(error.to_string());
-                    return false;
-                }
-            };
-        match drill_audio::AudioOutput::open_default(asset) {
-            Ok(output) => {
-                self.output = Some(output);
-                self.error = None;
-                true
-            }
-            Err(error) => {
-                self.error = Some(error.to_string());
-                false
-            }
-        }
+        self.open_job = Some(Job::spawn_typed(JobKind::AudioDecode, |_| {
+            let asset =
+                drill_audio::AudioAsset::from_interleaved(vec![0_i16; 48_000 * 2], 48_000, 1, 1.0)
+                    .map(std::sync::Arc::new)
+                    .map_err(|_| JobFailure::new(JobErrorCode::Decode))?;
+            drill_audio::AudioOutput::open_default(asset)
+                .map_err(|_| JobFailure::new(JobErrorCode::External))
+        }));
     }
 
-    fn rebuild_schedule(&mut self) {
+    fn begin_schedule(&mut self) {
         let Some(output) = &self.output else { return };
+        if self.schedule_job.is_some() {
+            return;
+        }
         let rate = output.output_sample_rate();
-        let tempo = drill_core::tempo::TempoMap::constant(self.bpm.clamp(30.0, 300.0));
-        let settings = drill_audio::ClickSettings {
-            enabled: true,
-            ..drill_audio::ClickSettings::default()
-        };
-        // ~100,000 counts covers many hours of practice at any supported BPM
-        // without needing to rebuild the schedule while it plays.
-        let schedule = drill_audio::ClickSchedule::build(&tempo, 0.0, 100_000.0, &settings, rate);
-        let voices = drill_audio::ClickVoices::render(&settings, rate);
-        if let Err(error) = output.set_clicks(settings, schedule, voices) {
-            self.error = Some(error.to_string());
+        let bpm = self.bpm;
+        self.schedule_job = Some(Job::spawn_typed(JobKind::AudioDecode, move |_| {
+            let tempo = drill_core::tempo::TempoMap::constant(bpm);
+            let settings = drill_audio::ClickSettings {
+                enabled: true,
+                ..Default::default()
+            };
+            let schedule =
+                drill_audio::ClickSchedule::build(&tempo, 0.0, 100_000.0, &settings, rate);
+            let voices = drill_audio::ClickVoices::render(&settings, rate);
+            Ok((settings, schedule, voices, bpm))
+        }));
+    }
+
+    pub fn poll(&mut self) {
+        if let Some(message) = self.open_job.as_mut().and_then(Job::poll) {
+            self.open_job = None;
+            match message {
+                JobMsg::Done(output) => {
+                    self.output = Some(output);
+                    self.error = None;
+                    self.begin_schedule();
+                }
+                JobMsg::Failed(_) => self.error = Some(MetronomeFailure::Output),
+                JobMsg::Cancelled => {}
+            }
+        }
+        if let Some(message) = self.schedule_job.as_mut().and_then(Job::poll) {
+            self.schedule_job = None;
+            match message {
+                JobMsg::Done((settings, schedule, voices, bpm)) if bpm == self.bpm => {
+                    if let Some(output) = &self.output
+                        && output.set_clicks(settings, schedule, voices).is_ok()
+                        && self.start_when_ready
+                    {
+                        output.seek(0);
+                        output.play();
+                        self.running = true;
+                        self.start_when_ready = false;
+                    }
+                }
+                JobMsg::Done(_) => self.begin_schedule(),
+                JobMsg::Failed(_) => self.error = Some(MetronomeFailure::Schedule),
+                JobMsg::Cancelled => {}
+            }
         }
     }
 
@@ -168,8 +183,8 @@ impl MetronomeState {
         self.running
     }
 
-    pub fn error(&self) -> Option<&str> {
-        self.error.as_deref()
+    fn error(&self) -> Option<MetronomeFailure> {
+        self.error
     }
 
     pub fn toggle(&mut self) {
@@ -181,15 +196,12 @@ impl MetronomeState {
     }
 
     pub fn start(&mut self) {
-        if !self.ensure_output() {
-            return;
+        self.start_when_ready = true;
+        if self.output.is_none() {
+            self.begin_open();
+        } else {
+            self.begin_schedule();
         }
-        self.rebuild_schedule();
-        if let Some(output) = &self.output {
-            output.seek(0);
-            output.play();
-        }
-        self.running = true;
     }
 
     pub fn stop(&mut self) {
@@ -197,6 +209,7 @@ impl MetronomeState {
             output.pause();
         }
         self.running = false;
+        self.start_when_ready = false;
     }
 
     pub fn set_bpm(&mut self, bpm: f32) {
@@ -206,10 +219,9 @@ impl MetronomeState {
         }
         self.bpm = bpm;
         if self.running && self.output.is_some() {
-            self.rebuild_schedule();
-            if let Some(output) = &self.output {
-                output.seek(0);
-            }
+            self.start_when_ready = true;
+            self.running = false;
+            self.begin_schedule();
         }
     }
 
@@ -287,15 +299,11 @@ impl DrillApp {
 
     fn simple_header_ui(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.heading(s(self.locale, "かんたんモード", "Simple Mode"));
+            ui.heading(i18n::registered(self.locale, "simple-mode.009"));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .button(s(self.locale, "通常モードに戻る", "Back to Full Mode"))
-                    .on_hover_text(s(
-                        self.locale,
-                        "いつでも通常の画面に戻れます",
-                        "You can return to the full desktop UI anytime",
-                    ))
+                    .button(i18n::registered(self.locale, "simple-mode.010"))
+                    .on_hover_text(i18n::registered(self.locale, "simple-mode.011"))
                     .clicked()
                 {
                     self.simple_mode.enabled = false;
@@ -303,7 +311,10 @@ impl DrillApp {
                 ui.add_space(6.0);
                 let metronome_selected = self.simple_mode.screen == SimpleScreen::Metronome;
                 if ui
-                    .selectable_label(metronome_selected, s(self.locale, "メトロノーム", "Metronome"))
+                    .selectable_label(
+                        metronome_selected,
+                        i18n::registered(self.locale, "simple-mode.012"),
+                    )
                     .clicked()
                 {
                     self.simple_mode.screen = if metronome_selected {
@@ -355,7 +366,7 @@ impl DrillApp {
             if ui
                 .add_enabled(
                     self.simple_mode.step != SimpleStep::ChooseFormation,
-                    egui::Button::new(s(self.locale, "◀ もどる", "◀ Back")),
+                    egui::Button::new(i18n::registered(self.locale, "simple-mode.013")),
                 )
                 .clicked()
             {
@@ -364,7 +375,7 @@ impl DrillApp {
             if ui
                 .add_enabled(
                     self.simple_mode.step != SimpleStep::Playback,
-                    egui::Button::new(s(self.locale, "つぎへ ▶", "Next ▶")),
+                    egui::Button::new(i18n::registered(self.locale, "simple-mode.014")),
                 )
                 .clicked()
             {
@@ -378,7 +389,7 @@ impl DrillApp {
             if ui
                 .add_enabled(
                     self.current_set > 0,
-                    egui::Button::new(s(self.locale, "◀ 前のフォーメーション", "◀ Previous")),
+                    egui::Button::new(i18n::registered(self.locale, "simple-mode.015")),
                 )
                 .clicked()
             {
@@ -387,14 +398,14 @@ impl DrillApp {
             }
             ui.label(format!(
                 "{} {} / {}",
-                s(self.locale, "フォーメーション", "Formation"),
+                i18n::registered(self.locale, "simple-mode.016"),
                 self.current_set + 1,
                 self.document.sets.len()
             ));
             if ui
                 .add_enabled(
                     self.current_set + 1 < self.document.sets.len(),
-                    egui::Button::new(s(self.locale, "次のフォーメーション ▶", "Next ▶")),
+                    egui::Button::new(i18n::registered(self.locale, "simple-mode.017")),
                 )
                 .clicked()
             {
@@ -402,7 +413,7 @@ impl DrillApp {
                 self.count_position = 0.0;
             }
             if ui
-                .button(s(self.locale, "＋ 新しいフォーメーション", "+ Add Formation"))
+                .button(i18n::registered(self.locale, "simple-mode.018"))
                 .clicked()
             {
                 self.duplicate_current_set();
@@ -415,14 +426,14 @@ impl DrillApp {
     fn simple_step_select_performers(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             if ui.button(text(self.locale, Text::SelectAll)).clicked() {
-                self.selected = (0..self.document.performers.len()).collect();
+                self.replace_selection((0..self.document.performers.len()).collect());
             }
             if ui.button(text(self.locale, Text::ClearSelection)).clicked() {
-                self.selected.clear();
+                self.clear_selection();
             }
             ui.label(format!(
                 "{}: {}",
-                s(self.locale, "選択中", "Selected"),
+                i18n::registered(self.locale, "simple-mode.019"),
                 self.selected.len()
             ));
         });
@@ -434,11 +445,7 @@ impl DrillApp {
         if self.selected.is_empty() {
             ui.colored_label(
                 Color32::from_rgb(245, 197, 66),
-                s(
-                    self.locale,
-                    "先に「2. 演者を選ぶ」で演者を選びましょう",
-                    "Select performers in step 2 first",
-                ),
+                i18n::registered(self.locale, "simple-mode.020"),
             );
         }
         ui.horizontal(|ui| {
@@ -447,7 +454,7 @@ impl DrillApp {
             if ui
                 .add_enabled(
                     enabled,
-                    egui::Button::new(s(self.locale, "直線に並べる", "Line Up")),
+                    egui::Button::new(i18n::registered(self.locale, "simple-mode.021")),
                 )
                 .clicked()
             {
@@ -465,7 +472,7 @@ impl DrillApp {
             if ui
                 .add_enabled(
                     enabled,
-                    egui::Button::new(s(self.locale, "円に並べる", "Arrange in Circle")),
+                    egui::Button::new(i18n::registered(self.locale, "simple-mode.022")),
                 )
                 .clicked()
             {
@@ -480,7 +487,7 @@ impl DrillApp {
             if ui
                 .add_enabled(
                     enabled,
-                    egui::Button::new(s(self.locale, "ブロックに並べる", "Arrange in Block")),
+                    egui::Button::new(i18n::registered(self.locale, "simple-mode.023")),
                 )
                 .clicked()
             {
@@ -501,7 +508,7 @@ impl DrillApp {
                 });
             }
             if ui
-                .button(s(self.locale, "選択箇所を表示", "Center on Selection"))
+                .button(i18n::registered(self.locale, "simple-mode.024"))
                 .clicked()
             {
                 self.simple_mode.viewport.center = Some(self.simple_selection_anchor());
@@ -512,6 +519,95 @@ impl DrillApp {
     }
 
     fn simple_step_playback(&mut self, ui: &mut egui::Ui) {
+        // Keep range selection beside the primary Play control. In the full
+        // editor these controls live above the timeline, but a learner in
+        // Simple Mode should never have to leave the playback step just to
+        // answer the essential question: "which part will play?".
+        let total_counts = self.document.timeline_counts().max(1);
+        let current_global = self
+            .document
+            .global_count(self.current_set, self.count_position)
+            .round()
+            .clamp(0.0, total_counts as f32) as u32;
+        egui::Frame::new()
+            .fill(Color32::from_rgb(20, 27, 36))
+            .inner_margin(8)
+            .corner_radius(6)
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        egui::RichText::new(i18n::registered(self.locale, "simple-mode.039"))
+                            .strong(),
+                    );
+                    if ui
+                        .button(i18n::registered(self.locale, "simple-mode.040"))
+                        .clicked()
+                    {
+                        let start = self.document.global_count(self.current_set, 0.0) as u32;
+                        self.playback_start = start;
+                        self.playback_end = (start
+                            + u32::from(self.document.sets[self.current_set].counts))
+                        .min(total_counts);
+                    }
+                    if ui
+                        .button(i18n::registered(self.locale, "simple-mode.041"))
+                        .clicked()
+                    {
+                        self.playback_start = 0;
+                        self.playback_end = total_counts;
+                    }
+                    if ui
+                        .button(i18n::registered(self.locale, "simple-mode.042"))
+                        .on_hover_text(i18n::registered(self.locale, "simple-mode.046"))
+                        .clicked()
+                    {
+                        self.playback_start =
+                            current_global.min(self.playback_end.saturating_sub(1));
+                    }
+                    if ui
+                        .button(i18n::registered(self.locale, "simple-mode.043"))
+                        .on_hover_text(i18n::registered(self.locale, "simple-mode.047"))
+                        .clicked()
+                    {
+                        self.playback_end = current_global
+                            .max(self.playback_start + 1)
+                            .min(total_counts);
+                    }
+                    ui.checkbox(
+                        &mut self.loop_playback,
+                        i18n::registered(self.locale, "simple-mode.044"),
+                    );
+                });
+                let range =
+                    playback_range_summary(&self.document, self.playback_start, self.playback_end);
+                let count_label = i18n::registered(self.locale, "simple-mode.049");
+                ui.horizontal_wrapped(|ui| {
+                    ui.small(format!(
+                        "{}: {} · {} {}",
+                        i18n::registered(self.locale, "simple-mode.048"),
+                        range.start_set,
+                        count_label,
+                        range.start_count,
+                    ));
+                    ui.separator();
+                    ui.small(format!(
+                        "{}: {} · {} {}",
+                        i18n::registered(self.locale, "simple-mode.050"),
+                        range.end_set,
+                        count_label,
+                        range.end_count,
+                    ));
+                    ui.separator();
+                    ui.small(format!(
+                        "{}: {} {}",
+                        i18n::registered(self.locale, "simple-mode.051"),
+                        range.length,
+                        i18n::registered(self.locale, "simple-mode.052"),
+                    ));
+                });
+                ui.small(i18n::registered(self.locale, "simple-mode.053"));
+            });
+        ui.add_space(6.0);
         ui.horizontal(|ui| {
             let label = if self.playing {
                 text(self.locale, Text::Pause)
@@ -519,36 +615,39 @@ impl DrillApp {
                 text(self.locale, Text::Play)
             };
             if ui
-                .add_sized([160.0, 46.0], egui::Button::new(egui::RichText::new(label).size(20.0)))
+                .add_sized(
+                    [160.0, 46.0],
+                    egui::Button::new(egui::RichText::new(label).size(20.0)),
+                )
                 .clicked()
             {
                 self.toggle_playback(ui.ctx());
             }
             if ui
-                .button(s(self.locale, "最初から", "From the Start"))
+                .button(i18n::registered(self.locale, "simple-mode.025"))
                 .clicked()
             {
-                self.seek_global(self.playback_start as f32);
+                self.seek_to_count(self.playback_start);
                 self.playing = false;
             }
             if ui
                 .add_sized(
                     [140.0, 46.0],
-                    egui::Button::new(s(self.locale, "保存する", "Save")),
+                    egui::Button::new(i18n::registered(self.locale, "simple-mode.026")),
                 )
                 .clicked()
             {
                 self.save_dialog();
             }
         });
-        let total = self.document.timeline_counts().max(1) as f32;
+        let total = total_counts as f32;
         let position = self
             .document
             .global_count(self.current_set, self.count_position)
             .clamp(0.0, total);
         ui.add(egui::ProgressBar::new(position / total).text(format!(
             "{}: {:.0} / {:.0}",
-            s(self.locale, "カウント", "Count"),
+            i18n::registered(self.locale, "simple-mode.027"),
             position,
             total
         )));
@@ -621,6 +720,7 @@ impl DrillApp {
             .frame_positions
             .iter()
             .enumerate()
+            .filter(|(index, _)| self.is_selectable_index(*index))
             .min_by(|(_, a), (_, b)| {
                 to_screen(**a)
                     .distance(pointer)
@@ -628,27 +728,30 @@ impl DrillApp {
             })
             .filter(|(_, p)| to_screen(**p).distance(pointer) < 22.0)
             .map(|(index, _)| index);
+        let additive = ui.input(|input| {
+            input.modifiers.command || input.modifiers.ctrl || input.modifiers.shift
+        });
         match nearest {
-            Some(index) => {
-                if !self.selected.insert(index) {
-                    self.selected.remove(&index);
+            Some(index) if additive => {
+                let mut next = self.selected.clone();
+                if !next.insert(index) {
+                    next.remove(&index);
                 }
+                self.replace_selection(next);
             }
-            None => self.selected.clear(),
+            Some(index) => self.replace_selection(std::iter::once(index).collect()),
+            None if !additive => self.clear_selection(),
+            None => {}
         }
     }
 
     fn simple_selection_anchor(&self) -> Point {
         let points = self.selected_points();
         if points.is_empty() {
-            return self
-                .frame_positions
-                .first()
-                .copied()
-                .unwrap_or(Point {
-                    x: self.document.grid.width * 0.5,
-                    y: self.document.grid.height * 0.5,
-                });
+            return self.frame_positions.first().copied().unwrap_or(Point {
+                x: self.document.grid.width * 0.5,
+                y: self.document.grid.height * 0.5,
+            });
         }
         let count = points.len() as f32;
         Point {
@@ -682,7 +785,11 @@ impl DrillApp {
             *center
         };
 
-        let step = if grid.unit == Unit::Meters { 1.0 } else { 1.093_613 };
+        let step = if grid.unit == Unit::Meters {
+            1.0
+        } else {
+            1.093_613
+        };
         let mut pan = Vec2::ZERO;
         ui.input(|input| {
             if input.key_pressed(egui::Key::ArrowUp) {
@@ -700,36 +807,58 @@ impl DrillApp {
         });
 
         ui.horizontal(|ui| {
-            ui.label(s(
-                self.locale,
-                "拡大表示：矢印ボタンやキーで移動できます",
-                "Zoomed in: pan with the arrow buttons or arrow keys",
-            ));
+            ui.label(i18n::registered(self.locale, "simple-mode.028"));
         });
         ui.horizontal(|ui| {
             ui.add_space((ui.available_width() * 0.5 - 24.0).max(0.0));
-            if ui.add_sized([48.0, 32.0], egui::Button::new("▲")).clicked() {
+            if ui
+                .add_sized(
+                    [48.0, 32.0],
+                    egui::Button::new(i18n::registered(self.locale, "simple-mode.033")),
+                )
+                .clicked()
+            {
                 pan.y += step;
             }
         });
 
         let available = ui.available_size() - Vec2::new(0.0, 40.0);
         ui.horizontal(|ui| {
-            if ui.add_sized([32.0, 48.0], egui::Button::new("◀")).clicked() {
+            if ui
+                .add_sized(
+                    [32.0, 48.0],
+                    egui::Button::new(i18n::registered(self.locale, "simple-mode.034")),
+                )
+                .clicked()
+            {
                 pan.x -= step;
             }
-            let (response, painter) =
-                ui.allocate_painter(available.max(Vec2::new(80.0, 80.0)), Sense::click_and_drag());
+            let (response, painter) = ui.allocate_painter(
+                available.max(Vec2::new(80.0, 80.0)),
+                Sense::click_and_drag(),
+            );
             let rect = response.rect;
             self.paint_zoom_viewport(ui, &painter, rect, center, half);
             self.handle_zoom_interaction(ui, &response, rect, center, half);
-            if ui.add_sized([32.0, 48.0], egui::Button::new("▶")).clicked() {
+            if ui
+                .add_sized(
+                    [32.0, 48.0],
+                    egui::Button::new(i18n::registered(self.locale, "simple-mode.035")),
+                )
+                .clicked()
+            {
                 pan.x += step;
             }
         });
         ui.horizontal(|ui| {
             ui.add_space((ui.available_width() * 0.5 - 24.0).max(0.0));
-            if ui.add_sized([48.0, 32.0], egui::Button::new("▼")).clicked() {
+            if ui
+                .add_sized(
+                    [48.0, 32.0],
+                    egui::Button::new(i18n::registered(self.locale, "simple-mode.036")),
+                )
+                .clicked()
+            {
                 pan.y -= step;
             }
         });
@@ -754,10 +883,7 @@ impl DrillApp {
         let size = half * 2.0;
         let scale = (rect.width() / size).min(rect.height() / size).max(0.001);
         let drawn = size * scale;
-        let offset = Vec2::new(
-            (rect.width() - drawn) * 0.5,
-            (rect.height() - drawn) * 0.5,
-        );
+        let offset = Vec2::new((rect.width() - drawn) * 0.5, (rect.height() - drawn) * 0.5);
         let vp_min_x = center.x - half;
         let vp_max_y = center.y + half;
         let to_screen = |p: Point| -> Pos2 {
@@ -769,7 +895,11 @@ impl DrillApp {
         // Reference lines every yard/meter so a small square still reads as
         // a field, not an abstract canvas.
         let grid = &self.document.grid;
-        let minor = if grid.unit == Unit::Meters { 1.0 } else { 1.093_613 };
+        let minor = if grid.unit == Unit::Meters {
+            1.0
+        } else {
+            1.093_613
+        };
         if minor > 0.01 {
             let mut x = (vp_min_x / minor).floor() * minor;
             while x <= center.x + half {
@@ -837,6 +967,22 @@ impl DrillApp {
                 to_screen(point)
             };
             painter.circle_filled(pos, 9.0, Color32::from_rgb(color[0], color[1], color[2]));
+            if self.is_hidden_index(index) {
+                painter.circle_filled(pos, 9.0, Color32::from_black_alpha(185));
+                painter.line_segment(
+                    [pos + Vec2::new(-6.0, 6.0), pos + Vec2::new(6.0, -6.0)],
+                    Stroke::new(1.5, Color32::WHITE),
+                );
+            } else if self.is_locked_index(index) {
+                painter.circle_stroke(pos, 8.5, Stroke::new(1.5, Color32::WHITE));
+                painter.text(
+                    pos + Vec2::new(7.0, -8.0),
+                    egui::Align2::CENTER_CENTER,
+                    "L",
+                    egui::FontId::proportional(10.0),
+                    Color32::WHITE,
+                );
+            }
             if selected {
                 painter.circle_stroke(pos, 12.0, Stroke::new(2.5, Color32::WHITE));
             }
@@ -867,10 +1013,7 @@ impl DrillApp {
         let size = half * 2.0;
         let scale = (rect.width() / size).min(rect.height() / size).max(0.001);
         let drawn = size * scale;
-        let offset = Vec2::new(
-            (rect.width() - drawn) * 0.5,
-            (rect.height() - drawn) * 0.5,
-        );
+        let offset = Vec2::new((rect.width() - drawn) * 0.5, (rect.height() - drawn) * 0.5);
         let vp_min_x = center.x - half;
         let vp_max_y = center.y + half;
         let to_screen = |p: Point| -> Pos2 {
@@ -882,34 +1025,53 @@ impl DrillApp {
         let Some(pointer) = response.interact_pointer_pos() else {
             return;
         };
-        let nearest = || {
-            self.frame_positions
-                .iter()
-                .enumerate()
-                .filter(|&(_, &p)| (p.x - center.x).abs() <= half && (p.y - center.y).abs() <= half)
-                .min_by(|(_, a), (_, b)| {
-                    to_screen(**a)
-                        .distance(pointer)
-                        .total_cmp(&to_screen(**b).distance(pointer))
-                })
-                .filter(|&(_, &p)| to_screen(p).distance(pointer) < 22.0)
-                .map(|(index, _)| index)
-        };
+        // Resolve the hit before mutating `self`. Keeping this as a value (not
+        // a closure that borrows frame_positions) makes click and drag share
+        // one stable target and avoids a stale borrow across selection changes.
+        let nearest = self
+            .frame_positions
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| self.is_selectable_index(*index))
+            .filter(|&(_, &p)| (p.x - center.x).abs() <= half && (p.y - center.y).abs() <= half)
+            .min_by(|(_, a), (_, b)| {
+                to_screen(**a)
+                    .distance(pointer)
+                    .total_cmp(&to_screen(**b).distance(pointer))
+            })
+            .filter(|&(_, &p)| to_screen(p).distance(pointer) < 22.0)
+            .map(|(index, _)| index);
+        let additive = ui.input(|input| {
+            input.modifiers.command || input.modifiers.ctrl || input.modifiers.shift
+        });
         if response.clicked() {
-            match nearest() {
-                Some(index) => {
-                    if !self.selected.insert(index) {
-                        self.selected.remove(&index);
+            match nearest {
+                Some(index) if additive => {
+                    let mut next = self.selected.clone();
+                    if !next.insert(index) {
+                        next.remove(&index);
                     }
+                    self.replace_selection(next);
                 }
-                None => self.selected.clear(),
+                Some(index) => self.replace_selection(std::iter::once(index).collect()),
+                None if !additive => self.clear_selection(),
+                None => {}
             }
         }
         if response.drag_started() {
-            if let Some(index) = nearest() {
+            if let Some(index) = nearest {
+                if !self.is_editable_set_start() {
+                    self.ensure_editable_set_start();
+                    return;
+                }
                 if !self.selected.contains(&index) {
-                    self.selected.clear();
-                    self.selected.insert(index);
+                    if additive {
+                        let mut next = self.selected.clone();
+                        next.insert(index);
+                        self.replace_selection(next);
+                    } else {
+                        self.replace_selection(std::iter::once(index).collect());
+                    }
                 }
                 self.simple_mode.drag_start_points = self.selected_points();
                 self.simple_mode.drag_start_pointer = Some(pointer);
@@ -957,20 +1119,17 @@ impl DrillApp {
     }
 
     fn simple_metronome_ui(&mut self, ui: &mut egui::Ui) {
+        self.simple_mode.metronome.poll();
         ui.vertical_centered(|ui| {
             ui.add_space(10.0);
-            ui.label(s(
-                self.locale,
-                "ドリルとは関係なく、いつでも使える練習用メトロノームです",
-                "A practice metronome, independent of the drill you're editing",
-            ));
+            ui.label(i18n::registered(self.locale, "simple-mode.029"));
             ui.add_space(16.0);
             ui.label(
                 egui::RichText::new(format!("{:.0}", self.simple_mode.metronome.bpm))
                     .size(72.0)
                     .strong(),
             );
-            ui.label("BPM");
+            ui.label(i18n::registered(self.locale, "simple-mode.032"));
             ui.add_space(12.0);
             let mut bpm = self.simple_mode.metronome.bpm;
             if ui
@@ -989,8 +1148,7 @@ impl DrillApp {
             } else {
                 Color32::from_gray(90)
             };
-            let (response, painter) =
-                ui.allocate_painter(Vec2::new(90.0, 90.0), Sense::hover());
+            let (response, painter) = ui.allocate_painter(Vec2::new(90.0, 90.0), Sense::hover());
             painter.circle_filled(response.rect.center(), pulse_radius, pulse_color);
             painter.circle_stroke(
                 response.rect.center(),
@@ -999,9 +1157,9 @@ impl DrillApp {
             );
             ui.add_space(18.0);
             let toggle_label = if running {
-                s(self.locale, "停止", "Stop")
+                i18n::registered(self.locale, "simple-mode.030")
             } else {
-                s(self.locale, "開始", "Start")
+                i18n::registered(self.locale, "simple-mode.031")
             };
             if ui
                 .add_sized(
@@ -1014,7 +1172,14 @@ impl DrillApp {
             }
             if let Some(error) = self.simple_mode.metronome.error() {
                 ui.add_space(8.0);
-                ui.colored_label(Color32::from_rgb(235, 120, 120), error);
+                let id = match error {
+                    MetronomeFailure::Output => "simple-mode.037",
+                    MetronomeFailure::Schedule => "simple-mode.038",
+                };
+                ui.colored_label(
+                    Color32::from_rgb(235, 120, 120),
+                    i18n::registered(self.locale, id),
+                );
             }
         });
         if self.simple_mode.metronome.is_running() {
@@ -1036,10 +1201,29 @@ mod tests {
 
     #[test]
     fn simple_step_order_is_linear_and_bidirectional() {
-        assert_eq!(SimpleStep::ChooseFormation.next(), SimpleStep::SelectPerformers);
+        assert_eq!(
+            SimpleStep::ChooseFormation.next(),
+            SimpleStep::SelectPerformers
+        );
         assert_eq!(SimpleStep::Playback.next(), SimpleStep::Playback);
-        assert_eq!(SimpleStep::ChooseFormation.previous(), SimpleStep::ChooseFormation);
+        assert_eq!(
+            SimpleStep::ChooseFormation.previous(),
+            SimpleStep::ChooseFormation
+        );
         assert_eq!(SimpleStep::Playback.previous(), SimpleStep::MovePerformers);
+    }
+
+    #[test]
+    fn simple_mode_selection_uses_the_shared_restore_stack() {
+        let mut app = DrillApp::default();
+        app.replace_selection([0_usize, 2].into_iter().collect());
+        app.replace_selection(std::iter::once(1_usize).collect());
+
+        assert_eq!(app.selected, [1_usize].into_iter().collect());
+        assert!(app.can_restore_selection());
+        app.restore_recent_selection();
+        assert_eq!(app.selected, [0_usize, 2].into_iter().collect());
+        assert!(!app.history.can_undo());
     }
 
     #[test]
@@ -1103,5 +1287,19 @@ mod tests {
         assert_eq!(metronome.is_running(), metronome.output.is_some());
         metronome.stop();
         assert!(!metronome.is_running());
+    }
+
+    #[test]
+    fn metronome_start_never_opens_device_or_builds_clicks_on_caller_thread() {
+        let source = include_str!("simple_mode.rs");
+        let start = source
+            .split("pub fn start(&mut self)")
+            .nth(1)
+            .and_then(|tail| tail.split("pub fn stop").next())
+            .expect("start method source");
+        assert!(!start.contains("AudioOutput::open_default"));
+        assert!(!start.contains("ClickSchedule::build"));
+        assert!(start.contains("begin_open"));
+        assert!(start.contains("begin_schedule"));
     }
 }

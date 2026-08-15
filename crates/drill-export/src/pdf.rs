@@ -294,7 +294,7 @@ fn display_list(
 ) {
     let height = list.viewport().size.y;
     let point = |p: Vec2| (ox + p.x, oy + height - p.y);
-    for command in list.commands() {
+    for command in list.paint_order() {
         match *command {
             DrawCmd::FieldFill { rect, fill } => {
                 let (x, y) = point(Vec2 {

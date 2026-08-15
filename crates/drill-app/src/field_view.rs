@@ -1,5 +1,96 @@
 use super::*;
 
+/// Non-persistent navigation state for the desktop 2D field. The document
+/// remains in field units; this only changes the lens through which it is
+/// viewed, so pan/zoom are never undoable edits.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FieldViewport {
+    pub(crate) center: Point,
+    pub(crate) zoom: f32,
+    pub(crate) pan_last_pointer: Option<Pos2>,
+}
+
+impl FieldViewport {
+    pub(crate) fn fit(grid: &GridConfig) -> Self {
+        Self {
+            center: Point {
+                x: grid.width * 0.5,
+                y: grid.height * 0.5,
+            },
+            zoom: 1.0,
+            pan_last_pointer: None,
+        }
+    }
+
+    pub(crate) fn reset(&mut self, grid: &GridConfig) {
+        *self = Self::fit(grid);
+    }
+
+    pub(crate) fn clamp_center(&mut self, grid: &GridConfig, size: Vec2) {
+        let fit = (size.x / grid.width.max(f32::EPSILON))
+            .min(size.y / grid.height.max(f32::EPSILON))
+            .max(f32::EPSILON);
+        let half_x = size.x / (2.0 * fit * self.zoom);
+        let half_y = size.y / (2.0 * fit * self.zoom);
+        self.center.x = if half_x * 2.0 >= grid.width {
+            grid.width * 0.5
+        } else {
+            self.center.x.clamp(half_x, grid.width - half_x)
+        };
+        self.center.y = if half_y * 2.0 >= grid.height {
+            grid.height * 0.5
+        } else {
+            self.center.y.clamp(half_y, grid.height - half_y)
+        };
+    }
+
+    pub(crate) fn pan_pixels(&mut self, delta: Vec2, grid: &GridConfig, size: Vec2) {
+        let fit = (size.x / grid.width.max(f32::EPSILON))
+            .min(size.y / grid.height.max(f32::EPSILON))
+            .max(f32::EPSILON);
+        let unit = (fit * self.zoom).max(f32::EPSILON);
+        self.center.x -= delta.x / unit;
+        self.center.y += delta.y / unit;
+        self.clamp_center(grid, size);
+    }
+
+    pub(crate) fn zoom_at(&mut self, factor: f32, pointer: Pos2, rect: Rect, grid: &GridConfig) {
+        let size = rect.size();
+        let old_map = drill_render::FieldMap::with_view(
+            grid.width,
+            grid.height,
+            drill_render::Vec2 {
+                x: size.x,
+                y: size.y,
+            },
+            0.0,
+            Some(self.center),
+            self.zoom,
+        );
+        let local = drill_render::Vec2 {
+            x: pointer.x - rect.left(),
+            y: pointer.y - rect.top(),
+        };
+        let pinned = old_map.unmap(local);
+        self.zoom = (self.zoom * factor).clamp(0.25, 8.0);
+        let new_map = drill_render::FieldMap::with_view(
+            grid.width,
+            grid.height,
+            drill_render::Vec2 {
+                x: size.x,
+                y: size.y,
+            },
+            0.0,
+            Some(self.center),
+            self.zoom,
+        );
+        let now = new_map.unmap(local);
+        self.center.x += pinned.x - now.x;
+        self.center.y += pinned.y - now.y;
+        self.clamp_center(grid, size);
+    }
+}
+
 impl DrillApp {
     pub(crate) fn draw_stadium(
         &mut self,
@@ -27,17 +118,141 @@ impl DrillApp {
             }
         }
         painter.rect_filled(rect, 4.0, Color32::from_rgb(16, 20, 28));
-        let mut refresh_visibility = false;
+        let visibility_key = stadium_inspector::VisibilityKey::new(
+            self.history.revision(),
+            self.current_set,
+            self.count_position,
+            self.camera,
+        );
+        let mut refresh_visibility = stadium_inspector::VisibilityRefresh::None;
         egui::Area::new("stadium-visibility-controls".into())
             .fixed_pos(rect.left_top() + Vec2::new(12.0, 34.0))
             .show(ui.ctx(), |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    refresh_visibility = self.stadium_inspector.controls(ui, self.locale);
+                    refresh_visibility =
+                        self.stadium_inspector
+                            .controls(ui, self.locale, visibility_key);
                 });
             });
-        if refresh_visibility {
-            self.stadium_inspector
-                .analyze(&self.document, &self.frame_positions, self.camera);
+        if self.stadium_inspector.enabled
+            // A smooth playback advances the key every frame. Keep the last
+            // diagnosis visibly stale while it runs rather than doing an
+            // O(P²) visibility pass on the UI thread for every video frame.
+            // Pausing refreshes the new scene once; the button still forces
+            // an immediate user-requested refresh during playback.
+            && (refresh_visibility == stadium_inspector::VisibilityRefresh::Manual
+                || (!self.playing && !self.stadium_inspector.is_current(visibility_key)))
+        {
+            self.stadium_inspector.analyze(
+                &self.document,
+                &self.frame_positions,
+                self.camera,
+                visibility_key,
+                refresh_visibility == stadium_inspector::VisibilityRefresh::Manual,
+            );
+        }
+        // Keep diagnosis navigation separate from the analysis controls: the
+        // buttons operate on the fresh, exact camera/set/count result only,
+        // and they never write drill data. A white selection ring provides a
+        // non-colour-only focus cue in the stadium itself.
+        if self.stadium_inspector.enabled && self.stadium_inspector.is_current(visibility_key) {
+            let nearly_hidden = self
+                .stadium_inspector
+                .diagnostic_indexes(visibility_key, 0.25);
+            let impaired = self
+                .stadium_inspector
+                .diagnostic_indexes(visibility_key, 0.75);
+            let eligible_impaired = impaired
+                .iter()
+                .filter(|&&index| self.is_selectable_index(index))
+                .count();
+            egui::Area::new("stadium-visibility-review".into())
+                .fixed_pos(rect.left_top() + Vec2::new(12.0, 178.0))
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.strong(super::i18n::registered(
+                            self.locale,
+                            "stadium-inspector.007",
+                        ));
+                        ui.horizontal_wrapped(|ui| {
+                            if ui
+                                .add_enabled(
+                                    !nearly_hidden.is_empty(),
+                                    egui::Button::new(format!(
+                                        "{} ({})",
+                                        super::i18n::registered(
+                                            self.locale,
+                                            "stadium-inspector.009"
+                                        ),
+                                        nearly_hidden.len()
+                                    )),
+                                )
+                                .on_hover_text(super::i18n::registered(
+                                    self.locale,
+                                    "stadium-inspector.008",
+                                ))
+                                .clicked()
+                            {
+                                self.select_visibility_targets(&nearly_hidden);
+                            }
+                            if ui
+                                .add_enabled(
+                                    !impaired.is_empty(),
+                                    egui::Button::new(format!(
+                                        "{} ({})",
+                                        super::i18n::registered(
+                                            self.locale,
+                                            "stadium-inspector.010"
+                                        ),
+                                        impaired.len()
+                                    )),
+                                )
+                                .on_hover_text(super::i18n::registered(
+                                    self.locale,
+                                    "stadium-inspector.008",
+                                ))
+                                .clicked()
+                            {
+                                self.select_visibility_targets(&impaired);
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add_enabled(
+                                    eligible_impaired > 0,
+                                    egui::Button::new(super::i18n::registered(
+                                        self.locale,
+                                        "stadium-inspector.011",
+                                    )),
+                                )
+                                .clicked()
+                            {
+                                self.focus_visibility_target(&impaired, -1);
+                            }
+                            if ui
+                                .add_enabled(
+                                    eligible_impaired > 0,
+                                    egui::Button::new(super::i18n::registered(
+                                        self.locale,
+                                        "stadium-inspector.012",
+                                    )),
+                                )
+                                .clicked()
+                            {
+                                self.focus_visibility_target(&impaired, 1);
+                            }
+                        });
+                        ui.small(format!(
+                            "{}: {}",
+                            super::i18n::registered(self.locale, "stadium-inspector.008"),
+                            eligible_impaired
+                        ));
+                        ui.small(super::i18n::registered(
+                            self.locale,
+                            "stadium-inspector.013",
+                        ));
+                    });
+                });
         }
         let grid = &self.document.grid;
         let vw = rect.width();
@@ -224,7 +439,7 @@ impl DrillApp {
             if self.selected.contains(&i) {
                 painter.circle_stroke(pos, radius + 3.0, Stroke::new(2.0, Color32::WHITE));
             }
-            if let Some(visible) = self.stadium_inspector.visible_fraction(i)
+            if let Some(visible) = self.stadium_inspector.visible_fraction(visibility_key, i)
                 && visible < 0.75
             {
                 let red = ((1.0 - visible) * 255.0).round() as u8;
@@ -237,7 +452,8 @@ impl DrillApp {
         }
         if gpu_stadium && self.stadium_inspector.enabled {
             for (i, &point) in self.frame_positions.iter().enumerate() {
-                let Some(visible) = self.stadium_inspector.visible_fraction(i) else {
+                let Some(visible) = self.stadium_inspector.visible_fraction(visibility_key, i)
+                else {
                     continue;
                 };
                 if visible >= 0.75 {
@@ -265,5 +481,69 @@ impl DrillApp {
             egui::FontId::proportional(12.0),
             Color32::from_white_alpha(170),
         );
+    }
+}
+
+#[cfg(test)]
+mod viewport_tests {
+    use super::*;
+
+    fn grid() -> GridConfig {
+        GridConfig::default()
+    }
+
+    #[test]
+    fn pan_is_bounded_to_the_field_at_high_magnification() {
+        let grid = grid();
+        let mut view = FieldViewport::fit(&grid);
+        view.zoom = 4.0;
+        view.pan_pixels(
+            Vec2::new(-100_000.0, 100_000.0),
+            &grid,
+            Vec2::new(800.0, 500.0),
+        );
+        assert!(view.center.x >= 0.0 && view.center.x <= grid.width);
+        assert!(view.center.y >= 0.0 && view.center.y <= grid.height);
+    }
+
+    #[test]
+    fn zoom_keeps_the_point_below_the_pointer_fixed() {
+        let grid = grid();
+        let rect = Rect::from_min_size(Pos2::new(10.0, 20.0), Vec2::new(900.0, 500.0));
+        let pointer = Pos2::new(580.0, 245.0);
+        let mut view = FieldViewport::fit(&grid);
+        let before = drill_render::FieldMap::with_view(
+            grid.width,
+            grid.height,
+            drill_render::Vec2 {
+                x: rect.width(),
+                y: rect.height(),
+            },
+            0.0,
+            Some(view.center),
+            view.zoom,
+        )
+        .unmap(drill_render::Vec2 {
+            x: pointer.x - rect.left(),
+            y: pointer.y - rect.top(),
+        });
+        view.zoom_at(2.0, pointer, rect, &grid);
+        let after = drill_render::FieldMap::with_view(
+            grid.width,
+            grid.height,
+            drill_render::Vec2 {
+                x: rect.width(),
+                y: rect.height(),
+            },
+            0.0,
+            Some(view.center),
+            view.zoom,
+        )
+        .unmap(drill_render::Vec2 {
+            x: pointer.x - rect.left(),
+            y: pointer.y - rect.top(),
+        });
+        assert!((before.x - after.x).abs() < 0.001);
+        assert!((before.y - after.y).abs() < 0.001);
     }
 }

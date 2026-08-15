@@ -17,7 +17,10 @@ try {
         Select-String -Pattern '\bunsafe\s*(\{|fn\b|impl\b|extern\b|trait\b)' |
         Where-Object {
             $_.Path -notlike '*drill-updater\src\transport.rs' -and
-            $_.Path -notlike '*drill-project\src\lib.rs'
+            $_.Path -notlike '*drill-project\src\lib.rs' -and
+            # Diagnostic-only Windows PSAPI FFI. It reads this process' memory
+            # counters into a fully initialized, layout-compatible structure.
+            $_.Path -notlike '*drill-audio\examples\audio_device_diagnostic.rs'
         })
     if ($unsafe.Count -ne 0) {
         $unsafe | ForEach-Object { Write-Error "$($_.Path):$($_.LineNumber): unexpected unsafe code" }

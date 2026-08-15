@@ -188,7 +188,11 @@ pub fn analyze_occupancy_for(
     analyze_indices(document, &indices, params)
 }
 
-fn analyze_indices(document: &Document, indices: &[usize], params: &HeatmapParams) -> FieldOccupancy {
+fn analyze_indices(
+    document: &Document,
+    indices: &[usize],
+    params: &HeatmapParams,
+) -> FieldOccupancy {
     let mut occupancy = FieldOccupancy::new(
         params.cells_x,
         params.cells_y,
@@ -211,12 +215,12 @@ fn analyze_indices(document: &Document, indices: &[usize], params: &HeatmapParam
         return occupancy;
     }
 
-    let samples_per_count = if params.samples_per_count.is_finite() && params.samples_per_count > 0.0
-    {
-        params.samples_per_count
-    } else {
-        1.0
-    };
+    let samples_per_count =
+        if params.samples_per_count.is_finite() && params.samples_per_count > 0.0 {
+            params.samples_per_count
+        } else {
+            1.0
+        };
 
     let mut plan = crate::transition::TransitionPlan::default();
     let mut buffer: Vec<Point> = Vec::new();
@@ -258,7 +262,11 @@ mod tests {
     /// Builds a document with `performer_count` performers (reusing
     /// `Document::demo`'s valid roster/section plumbing) and replaces its
     /// sets with the caller-supplied per-set position lists.
-    fn document_with_sets(performer_count: usize, set_positions: &[Vec<Point>], counts: u16) -> Document {
+    fn document_with_sets(
+        performer_count: usize,
+        set_positions: &[Vec<Point>],
+        counts: u16,
+    ) -> Document {
         let mut doc = Document::demo(1, performer_count.max(1));
         doc.performers.truncate(performer_count);
         doc.sets = set_positions

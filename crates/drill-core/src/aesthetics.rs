@@ -238,8 +238,7 @@ fn symmetry_score(
         distances.push((id, nearest));
     }
 
-    let mean_distance =
-        distances.iter().map(|&(_, d)| d).sum::<f32>() / distances.len() as f32;
+    let mean_distance = distances.iter().map(|&(_, d)| d).sum::<f32>() / distances.len() as f32;
     let reference = (height * 0.5).max(f32::EPSILON);
     let score = (100.0 * (1.0 - (mean_distance / reference).clamp(0.0, 1.0))).clamp(0.0, 100.0);
 

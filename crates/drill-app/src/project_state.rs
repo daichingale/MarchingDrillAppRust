@@ -227,6 +227,13 @@ impl ProjectState {
         self.save.is_some() || self.load.is_some() || self.startup.is_some()
     }
 
+    /// Unlike `busy`, this answers only whether an explicit save is still
+    /// pending.  Exit protection must not mistake a heartbeat or a load for a
+    /// completed write.
+    pub fn is_saving(&self) -> bool {
+        self.save.is_some()
+    }
+
     pub fn poll(&mut self) -> Option<ProjectEvent> {
         if let Some(message) = self.startup.as_mut().and_then(Job::poll) {
             self.startup = None;

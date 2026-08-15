@@ -13,6 +13,8 @@ features = ["opt-simd", "all-meta", "adpcm", "flac", "mkv", "ogg", "pcm", "vorbi
 cpal = "0.18.1"
 drill-core = { path = "../drill-core" }
 rtrb = "0.3.4"
+serde.workspace = true
+serde_json.workspace = true
 
 [[bench]]
 name = "audio_performance"

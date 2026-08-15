@@ -27,6 +27,35 @@ pub struct OutputDeviceInfo {
     pub sample_format: String,
 }
 
+/// Lock-free counters written by the realtime callback. Reading a snapshot is
+/// safe from a diagnostics or UI thread and never changes stream behaviour.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct OutputDiagnostics {
+    pub callbacks: u64,
+    pub rendered_frames: u64,
+    pub underruns: u64,
+    pub device_errors: u64,
+}
+
+#[derive(Debug, Default)]
+struct RealtimeDiagnostics {
+    callbacks: AtomicU64,
+    rendered_frames: AtomicU64,
+    underruns: AtomicU64,
+    device_errors: AtomicU64,
+}
+
+impl RealtimeDiagnostics {
+    fn snapshot(&self) -> OutputDiagnostics {
+        OutputDiagnostics {
+            callbacks: self.callbacks.load(Ordering::Relaxed),
+            rendered_frames: self.rendered_frames.load(Ordering::Relaxed),
+            underruns: self.underruns.load(Ordering::Relaxed),
+            device_errors: self.device_errors.load(Ordering::Relaxed),
+        }
+    }
+}
+
 /// Probes the route CPAL would use for [`AudioOutput::open_default`]. A missing
 /// device is returned as an error and must never be reported as a successful
 /// test by callers.
@@ -236,6 +265,7 @@ pub struct AudioOutput {
     mixer: Option<JoinHandle<()>>,
     click_commands: Sender<MixerCommand>,
     output_rate: u32,
+    diagnostics: Arc<RealtimeDiagnostics>,
 }
 
 impl AudioOutput {
@@ -269,6 +299,7 @@ impl AudioOutput {
         });
         let clock_shared = Arc::new(ClockShared::new(sample_rate));
         let clock = PlaybackClock::new(Arc::clone(&clock_shared));
+        let diagnostics = Arc::new(RealtimeDiagnostics::default());
         let (producer, consumer) = rtrb::RingBuffer::<Block>::new(RING_BLOCKS);
         let (click_commands, click_receiver) = std::sync::mpsc::channel();
         let mixer_controls = Arc::clone(&controls);
@@ -288,15 +319,30 @@ impl AudioOutput {
 
         let callback_controls = Arc::clone(&controls);
         let stream = match sample_format {
-            cpal::SampleFormat::F32 => {
-                build_stream::<f32>(&device, &config, consumer, callback_controls, clock_shared)
-            }
-            cpal::SampleFormat::I16 => {
-                build_stream::<i16>(&device, &config, consumer, callback_controls, clock_shared)
-            }
-            cpal::SampleFormat::U16 => {
-                build_stream::<u16>(&device, &config, consumer, callback_controls, clock_shared)
-            }
+            cpal::SampleFormat::F32 => build_stream::<f32>(
+                &device,
+                &config,
+                consumer,
+                callback_controls,
+                clock_shared,
+                Arc::clone(&diagnostics),
+            ),
+            cpal::SampleFormat::I16 => build_stream::<i16>(
+                &device,
+                &config,
+                consumer,
+                callback_controls,
+                clock_shared,
+                Arc::clone(&diagnostics),
+            ),
+            cpal::SampleFormat::U16 => build_stream::<u16>(
+                &device,
+                &config,
+                consumer,
+                callback_controls,
+                clock_shared,
+                Arc::clone(&diagnostics),
+            ),
             other => Err(OutputError::BuildStream(format!(
                 "unsupported device sample format: {other:?}"
             ))),
@@ -311,6 +357,7 @@ impl AudioOutput {
             mixer: Some(mixer),
             click_commands,
             output_rate: sample_rate,
+            diagnostics,
         })
     }
 
@@ -390,6 +437,14 @@ impl AudioOutput {
     #[must_use]
     pub fn clock(&self) -> PlaybackClock {
         self.clock.clone()
+    }
+
+    /// Returns a coherent-enough monotonic counter snapshot. Individual
+    /// fields may be from adjacent callbacks, which is intentional: all are
+    /// independent totals and never require a callback-side lock.
+    #[must_use]
+    pub fn diagnostics(&self) -> OutputDiagnostics {
+        self.diagnostics.snapshot()
     }
 }
 
@@ -495,6 +550,7 @@ fn build_stream<T>(
     mut consumer: rtrb::Consumer<Block>,
     controls: Arc<Controls>,
     clock: Arc<ClockShared>,
+    diagnostics: Arc<RealtimeDiagnostics>,
 ) -> Result<cpal::Stream, OutputError>
 where
     T: cpal::SizedSample + cpal::FromSample<f32>,
@@ -503,10 +559,17 @@ where
     let channels = usize::from(config.channels);
     let mut current = Block::default();
     let mut cursor = 0_usize;
+    let callback_diagnostics = Arc::clone(&diagnostics);
     device
         .build_output_stream(
             *config,
             move |output: &mut [T], _| {
+                callback_diagnostics
+                    .callbacks
+                    .fetch_add(1, Ordering::Relaxed);
+                callback_diagnostics
+                    .rendered_frames
+                    .fetch_add((output.len() / channels) as u64, Ordering::Relaxed);
                 if !controls.playing.load(Ordering::Acquire) {
                     output.fill(T::from_sample(0.0));
                     clock.write(
@@ -541,6 +604,9 @@ where
                                 }
                                 Ok(_) => continue,
                                 Err(rtrb::PopError::Empty) => {
+                                    callback_diagnostics
+                                        .underruns
+                                        .fetch_add(1, Ordering::Relaxed);
                                     output[written..].fill(T::from_sample(0.0));
                                     clock.write(
                                         current.start_sample,
@@ -582,7 +648,8 @@ where
             },
             move |_error| {
                 // The realtime callback cannot log, allocate, or lock. Device
-                // fault reporting is added through a fixed-size atomic code.
+                // fault reporting is a fixed-size atomic counter only.
+                diagnostics.device_errors.fetch_add(1, Ordering::Relaxed);
             },
             None,
         )

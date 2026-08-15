@@ -34,6 +34,14 @@ DrillForgeは「Pywareのコピー」ではなく、マーチング制作で必�
 - `cargo bench -p drill-core --bench core_performance`
 - `cargo bench -p drill-render --bench display_list`
 - `cargo bench -p drill-audio --bench audio_performance`
+- `cargo bench -p drill-jobs --bench analytics_performance`
+- `cargo bench -p drill-mobile-viewer --bench generation_performance`
+
+最大規模解析ゲートは4,000人×240セットを使い、Rhythm Sync、Aesthetics、Show DNAを
+`drill-job-analytics`上で実行する。workerは30秒以内、peak heapは768MiB以下、UI側の
+progress/result pollはp95≤2ms・p99≤4ms・worst≤8ms、cancel応答は2秒以内を必須とする。
+これは計算経路とUI非停止の証明であり、各スコアが審美的・音楽的に正しいという専門家評価の
+代替にはしない。
 
 ### Reliability
 

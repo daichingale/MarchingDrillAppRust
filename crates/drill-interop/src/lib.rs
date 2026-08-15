@@ -943,6 +943,7 @@ pub fn import_tabular_as_document(
         subsets: Vec::new(),
         performers,
         sets,
+        production_markers: Vec::new(),
     };
     document
         .validate()

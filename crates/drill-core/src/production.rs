@@ -1,5 +1,5 @@
 //! Production-facing annotations and derived production sheets.
-use crate::{Document, Locale, MAX_TEXT_BYTES};
+use crate::{Document, Locale, MAX_TEXT_BYTES, ProductionMarkerId};
 use serde::{Deserialize, Serialize};
 use std::fmt::Write as _;
 
@@ -17,6 +17,36 @@ pub struct SetAnnotation {
     pub sync_time_seconds: Option<f64>,
     #[serde(default)]
     pub transition_duration_seconds: Option<f64>,
+}
+
+/// A user-authored landmark on the count timeline. Unlike set annotations,
+/// markers may be placed at any whole count, including inside a transition.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProductionMarkerKind {
+    #[default]
+    Hit,
+    Rehearsal,
+    Note,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProductionMarker {
+    pub id: ProductionMarkerId,
+    pub count: u32,
+    #[serde(default)]
+    pub kind: ProductionMarkerKind,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub detail: String,
+}
+
+impl ProductionMarker {
+    pub fn validate(&self, total_counts: u32) -> bool {
+        self.count <= total_counts
+            && self.label.len() <= MAX_TEXT_BYTES
+            && self.detail.len() <= MAX_TEXT_BYTES
+    }
 }
 
 impl SetAnnotation {

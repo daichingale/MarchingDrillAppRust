@@ -6,7 +6,31 @@ use crate::{Manifest, ManifestError};
 /// have no pretend server and report `NotConfigured`.
 pub const MANIFEST_HOST: Option<&str> = option_env!("DRILLFORGE_UPDATE_HOST");
 pub const MANIFEST_PATH: Option<&str> = option_env!("DRILLFORGE_UPDATE_PATH");
-const MAX_MANIFEST_BYTES: usize = 256 * 1024;
+pub const MAX_MANIFEST_BYTES: usize = 256 * 1024;
+pub const MAX_PACKAGE_BYTES: usize = 512 * 1024 * 1024;
+pub const MAX_ATTESTATION_BYTES: usize = 4 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResourceKind {
+    Manifest,
+    Package,
+    Attestation,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Response {
+    pub status: u16,
+    pub content_type: String,
+    pub body: Vec<u8>,
+    /// Set only after the transport has authenticated TLS for the requested origin.
+    pub tls_authenticated: bool,
+    pub redirected: bool,
+}
+
+/// Pure transport seam used by production and release-readiness tests.
+pub trait UpdateTransport {
+    fn get(&self, url: &str, kind: ResourceKind) -> Result<Response, TransportError>;
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TransportError {
@@ -15,6 +39,7 @@ pub enum TransportError {
     Offline,
     Timeout,
     Tls,
+    InsecureUrl,
     HttpStatus(u16),
     RedirectRejected,
     InvalidContentType,
@@ -31,6 +56,7 @@ impl std::fmt::Display for TransportError {
             Self::Offline => f.write_str("network is unavailable"),
             Self::Timeout => f.write_str("update server timed out"),
             Self::Tls => f.write_str("secure connection validation failed"),
+            Self::InsecureUrl => f.write_str("update resource did not use authenticated HTTPS"),
             Self::HttpStatus(code) => write!(f, "update server returned HTTP {code}"),
             Self::RedirectRejected => f.write_str("update server redirect was rejected"),
             Self::InvalidContentType => f.write_str("update server returned a non-JSON response"),
@@ -39,6 +65,57 @@ impl std::fmt::Display for TransportError {
             Self::Platform(code) => write!(f, "update transport failed (OS error {code})"),
         }
     }
+}
+
+pub fn fetch_resource(
+    transport: &impl UpdateTransport,
+    url: &str,
+    kind: ResourceKind,
+) -> Result<Vec<u8>, TransportError> {
+    if !url.starts_with("https://") || url.contains(['\r', '\n']) {
+        return Err(TransportError::InsecureUrl);
+    }
+    let response = transport.get(url, kind)?;
+    if !response.tls_authenticated {
+        return Err(TransportError::Tls);
+    }
+    validate_response_for(kind, response)
+}
+
+fn validate_response_for(
+    kind: ResourceKind,
+    response: Response,
+) -> Result<Vec<u8>, TransportError> {
+    if response.redirected || (300..400).contains(&response.status) {
+        return Err(TransportError::RedirectRejected);
+    }
+    if response.status != 200 {
+        return Err(TransportError::HttpStatus(response.status));
+    }
+    let media_type = response.content_type.split(';').next().unwrap_or("").trim();
+    let type_ok = match kind {
+        ResourceKind::Manifest => {
+            media_type.eq_ignore_ascii_case("application/json")
+                || media_type.eq_ignore_ascii_case("application/manifest+json")
+        }
+        ResourceKind::Package => media_type.eq_ignore_ascii_case("application/octet-stream"),
+        ResourceKind::Attestation => {
+            media_type.eq_ignore_ascii_case("application/json")
+                || media_type.eq_ignore_ascii_case("application/vnd.dev.sigstore.bundle+json")
+        }
+    };
+    if !type_ok {
+        return Err(TransportError::InvalidContentType);
+    }
+    let limit = match kind {
+        ResourceKind::Manifest => MAX_MANIFEST_BYTES,
+        ResourceKind::Package => MAX_PACKAGE_BYTES,
+        ResourceKind::Attestation => MAX_ATTESTATION_BYTES,
+    };
+    if response.body.len() > limit {
+        return Err(TransportError::TooLarge);
+    }
+    Ok(response.body)
 }
 
 impl std::error::Error for TransportError {}

@@ -1,5 +1,5 @@
 use drill_core::snapshot::{BranchId, BranchStore, DocumentSnapshot, MergePreview, SnapshotDiff};
-use drill_core::{Document, Locale, PerformerId, SubsetId};
+use drill_core::{Document, Locale, PerformerId, SetId, SubsetId};
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -56,6 +56,7 @@ pub(crate) enum Action {
     },
     SelectMembers {
         id: SubsetId,
+        mode: SelectionMode,
     },
     RemoveSubset {
         id: SubsetId,
@@ -77,6 +78,21 @@ pub(crate) enum Action {
         id: BranchId,
         use_theirs: bool,
     },
+    /// Session-only navigation from a structural comparison.  This must never
+    /// enter document history: it only changes the field view and selection.
+    FocusChanges {
+        set_ids: Vec<SetId>,
+        performer_ids: Vec<PerformerId>,
+    },
+}
+
+/// A session-only selection operation.  This does not alter subset membership
+/// or the drill itself, so it deliberately does not enter document history.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SelectionMode {
+    Replace,
+    Add,
+    Exclude,
 }
 
 #[derive(Default)]
@@ -162,7 +178,13 @@ impl SubsetSnapshotState {
                             ui.horizontal_wrapped(|ui| {
                                 ui.strong(format!("{} · {}", subset.name, if ja { format!("{}人", subset.members.len()) } else { format!("{} members", subset.members.len()) }));
                                 if ui.button(if ja { "選択" } else { "Select" }).clicked() {
-                                    action = Some(Action::SelectMembers { id: subset.id });
+                                    action = Some(Action::SelectMembers { id: subset.id, mode: SelectionMode::Replace });
+                                }
+                                if ui.small_button(if ja { "＋ 追加" } else { "+ Add" }).clicked() {
+                                    action = Some(Action::SelectMembers { id: subset.id, mode: SelectionMode::Add });
+                                }
+                                if ui.small_button(if ja { "− 除外" } else { "− Exclude" }).clicked() {
+                                    action = Some(Action::SelectMembers { id: subset.id, mode: SelectionMode::Exclude });
                                 }
                                 if ui.add_enabled(!selected_ids.is_empty(), egui::Button::new(if ja { "現在の選択で置換" } else { "Replace with selection" })).clicked() {
                                     action = Some(Action::SetMembers { id: subset.id, members: selected_ids.iter().copied().collect() });
@@ -216,7 +238,10 @@ impl SubsetSnapshotState {
                 });
                 if let Some(index) = self.selected_snapshot.and_then(|i| self.snapshots.get(i).map(|_| i)) {
                     let diff = SnapshotDiff::between(&self.snapshots[index].document, document);
-                    ui.group(|ui| show_diff(ui, ja, &diff));
+                    ui.group(|ui| {
+                        show_diff(ui, ja, &diff);
+                        show_diff_actions(ui, locale, document, &diff, &mut action);
+                    });
                 }
 
                 ui.separator();
@@ -251,7 +276,10 @@ impl SubsetSnapshotState {
                     if let Some(selected) = self.selected_branch.filter(|id| *id != branches.active)
                         && let Some(diff) = branches.compare(branches.active, selected)
                     {
-                        ui.group(|ui| show_diff(ui, ja, &diff));
+                        ui.group(|ui| {
+                            show_diff(ui, ja, &diff);
+                            show_diff_actions(ui, locale, document, &diff, &mut action);
+                        });
                     }
                 }
             });
@@ -569,6 +597,73 @@ fn show_diff(ui: &mut egui::Ui, ja: bool, diff: &SnapshotDiff) {
     }
 }
 
+/// Comparison data can be broad, but the two actions below deliberately act
+/// only on IDs still present in the open document.  This makes branch and
+/// snapshot review a safe navigation aid even when one side removed a set or
+/// performer.
+fn show_diff_actions(
+    ui: &mut egui::Ui,
+    locale: Locale,
+    document: &Document,
+    diff: &SnapshotDiff,
+    action: &mut Option<Action>,
+) {
+    let (changed_set_ids, changed_performer_ids) = focusable_diff_ids(document, diff);
+    if changed_set_ids.is_empty() && changed_performer_ids.is_empty() {
+        return;
+    }
+    ui.add_space(4.0);
+    ui.horizontal_wrapped(|ui| {
+        if ui
+            .add_enabled(
+                !changed_set_ids.is_empty(),
+                egui::Button::new(super::i18n::registered(locale, "subset-snapshot-state.005")),
+            )
+            .on_hover_text(super::i18n::registered(locale, "subset-snapshot-state.006"))
+            .clicked()
+        {
+            *action = Some(Action::FocusChanges {
+                set_ids: changed_set_ids.clone(),
+                performer_ids: Vec::new(),
+            });
+        }
+        if ui
+            .add_enabled(
+                !changed_performer_ids.is_empty(),
+                egui::Button::new(super::i18n::registered(locale, "subset-snapshot-state.007")),
+            )
+            .on_hover_text(super::i18n::registered(locale, "subset-snapshot-state.008"))
+            .clicked()
+        {
+            *action = Some(Action::FocusChanges {
+                set_ids: Vec::new(),
+                performer_ids: changed_performer_ids,
+            });
+        }
+    });
+}
+
+fn focusable_diff_ids(document: &Document, diff: &SnapshotDiff) -> (Vec<SetId>, Vec<PerformerId>) {
+    let changed_set_ids = diff
+        .changed_sets
+        .iter()
+        .copied()
+        .filter(|id| document.sets.iter().any(|set| set.id == *id))
+        .collect();
+    let changed_performer_ids = diff
+        .changed_performers
+        .iter()
+        .copied()
+        .filter(|id| {
+            document
+                .performers
+                .iter()
+                .any(|performer| performer.id == *id)
+        })
+        .collect();
+    (changed_set_ids, changed_performer_ids)
+}
+
 fn save_archive(
     path: &Path,
     snapshots: &[DocumentSnapshot],
@@ -691,5 +786,24 @@ mod tests {
                     .any(|ch| matches!(ch, '\u{3040}'..='\u{30ff}' | '\u{4e00}'..='\u{9fff}'))
             );
         }
+    }
+
+    #[test]
+    fn comparison_focus_uses_only_ids_still_in_open_document() {
+        let original = Document::demo(2, 3);
+        let mut changed = original.clone();
+        changed.sets[0].name = "Changed".into();
+        changed.performers[0].label = "Changed performer".into();
+        let diff = SnapshotDiff::between(&original, &changed);
+
+        let (sets, performers) = focusable_diff_ids(&changed, &diff);
+        assert_eq!(sets, vec![changed.sets[0].id]);
+        assert_eq!(performers, vec![changed.performers[0].id]);
+
+        changed.sets.remove(0);
+        changed.performers.remove(0);
+        let (sets, performers) = focusable_diff_ids(&changed, &diff);
+        assert!(sets.is_empty());
+        assert!(performers.is_empty());
     }
 }

@@ -37,6 +37,7 @@ stable_id!(SetId);
 stable_id!(SectionId);
 stable_id!(SubsetId);
 stable_id!(CameraId);
+stable_id!(ProductionMarkerId);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IdAllocator {

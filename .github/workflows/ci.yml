@@ -69,6 +69,11 @@ jobs:
       - name: Run tests
         run: cargo test --workspace --locked
 
+      - name: Verify bounded audio endurance report wiring
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/test-audio-endurance.ps1 -Profile ci
+
       - name: Run deterministic desktop UI smoke tests
         run: cargo test -p drill-app --locked ui_qa -- --nocapture
 

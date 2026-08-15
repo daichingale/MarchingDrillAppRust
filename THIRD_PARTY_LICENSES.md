@@ -3,7 +3,7 @@
 Generated from committed `Cargo.lock` and Cargo package metadata. Do not edit manually.
 Regenerate with `pwsh ./scripts/generate-third-party-licenses.ps1`.
 
-Cargo.lock SHA-256: `23b32d4d7864e0ea2ebabc6bf16330070f56f37d491bccd42875beafdba49fc0`
+Cargo.lock SHA-256: `42482a559b92815bea73a4f91640aa5671c7821bd78bd9098dc5591cd730fd9e`
 
 | Package | Version | SPDX license expression | Source |
 |---|---:|---|---|
@@ -99,6 +99,7 @@ Cargo.lock SHA-256: `23b32d4d7864e0ea2ebabc6bf16330070f56f37d491bccd42875beafdba
 | drill-gpu | 0.1.0 | MIT OR Apache-2.0 | workspace |
 | drill-interop | 0.1.0 | MIT OR Apache-2.0 | workspace |
 | drill-jobs | 0.1.0 | MIT OR Apache-2.0 | workspace |
+| drill-mobile-viewer | 0.1.0 | MIT OR Apache-2.0 | workspace |
 | drill-plugin | 0.1.0 | MIT OR Apache-2.0 | workspace |
 | drill-project | 0.1.0 | MIT OR Apache-2.0 | workspace |
 | drill-render | 0.1.0 | MIT OR Apache-2.0 | workspace |

@@ -2,6 +2,192 @@
 use drill_core::Locale;
 pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
     match (locale, id) {
+        (Locale::Ja, "workspace-preset.001") => "デザインワークスペース",
+        (Locale::En, "workspace-preset.001") => "Design Workspace",
+        (Locale::Ja, "workspace-preset.002") => "レビューワークスペース",
+        (Locale::En, "workspace-preset.002") => "Review Workspace",
+        (Locale::Ja, "workspace-preset.003") => "プレゼンテーションワークスペース",
+        (Locale::En, "workspace-preset.003") => "Presentation Workspace",
+        (Locale::Ja, "workspace-preset.004") => "デザインワークスペースに切り替えました",
+        (Locale::En, "workspace-preset.004") => "Switched to Design workspace",
+        (Locale::Ja, "workspace-preset.005") => "レビューワークスペースに切り替えました",
+        (Locale::En, "workspace-preset.005") => "Switched to Review workspace",
+        (Locale::Ja, "workspace-preset.006") => "プレゼンテーションワークスペースに切り替えました",
+        (Locale::En, "workspace-preset.006") => "Switched to Presentation workspace",
+        (Locale::Ja, "workspace-preset.007") => "ワークスペース",
+        (Locale::En, "workspace-preset.007") => "Workspace",
+        (Locale::Ja, "production-sheet.001") => "プロダクションシート",
+        (Locale::En, "production-sheet.001") => "Production Sheet",
+        (Locale::Ja, "production-sheet.002") => "リハーサル用のセット一覧",
+        (Locale::En, "production-sheet.002") => "Rehearsal set list",
+        (Locale::Ja, "production-sheet.003") => "常に表示",
+        (Locale::En, "production-sheet.003") => "Keep open",
+        (Locale::Ja, "production-sheet.004") => {
+            "行をクリックすると停止してそのセット先頭へ移動します。"
+        }
+        (Locale::En, "production-sheet.004") => {
+            "Click a row to pause and go to that set's first count."
+        }
+        (Locale::Ja, "production-sheet.005") => "閉じる",
+        (Locale::En, "production-sheet.005") => "Close",
+        (Locale::Ja, "production-sheet.006") => "セット・マーク・タイトル・備考・テンポを検索",
+        (Locale::En, "production-sheet.006") => "Search set, mark, title, notes, or tempo",
+        (Locale::Ja, "production-sheet.007") => "拍数",
+        (Locale::En, "production-sheet.007") => "Counts",
+        (Locale::Ja, "production-sheet.008") => "マーク",
+        (Locale::En, "production-sheet.008") => "Mark",
+        (Locale::Ja, "production-sheet.009") => "タイトル",
+        (Locale::En, "production-sheet.009") => "Title",
+        (Locale::Ja, "production-sheet.010") => "テンポ",
+        (Locale::En, "production-sheet.010") => "Tempo",
+        (Locale::Ja, "production-sheet.011") => "備考／キュー",
+        (Locale::En, "production-sheet.011") => "Notes / cues",
+        (Locale::Ja, "production-sheet.012") => "クリック: 再生を停止してセット先頭へ移動",
+        (Locale::En, "production-sheet.012") => "Click: pause playback and go to set start",
+        (Locale::Ja, "production-sheet.013") => "編集するセットを一覧から選択してください。",
+        (Locale::En, "production-sheet.013") => "Select a set from the list to edit it.",
+        (Locale::Ja, "production-sheet.014") => "セット",
+        (Locale::En, "production-sheet.014") => "Set",
+        (Locale::Ja, "production-sheet.015") => "保存",
+        (Locale::En, "production-sheet.015") => "Save",
+        (Locale::Ja, "production-sheet.016") => "キャンセル",
+        (Locale::En, "production-sheet.016") => "Cancel",
+        (Locale::Ja, "production-sheet.017") => "プロダクション情報を更新できません",
+        (Locale::En, "production-sheet.017") => "Could not update production information",
+        (Locale::Ja, "production-sheet.018") => "同期時刻を指定",
+        (Locale::En, "production-sheet.018") => "Override sync time",
+        (Locale::Ja, "production-sheet.019") => "トランジション尺を指定",
+        (Locale::En, "production-sheet.019") => "Override transition duration",
+        (Locale::Ja, "production-sheet.020") => "タイトル",
+        (Locale::En, "production-sheet.020") => "Title",
+        (Locale::Ja, "production-sheet.021") => "マーク",
+        (Locale::En, "production-sheet.021") => "Mark",
+        (Locale::Ja, "production-sheet.022") => "備考／キュー",
+        (Locale::En, "production-sheet.022") => "Notes / cues",
+        (Locale::Ja, "production-sheet.023") => "テンポ",
+        (Locale::En, "production-sheet.023") => "Tempo",
+        (Locale::Ja, "production-sheet.024") => "総",
+        (Locale::En, "production-sheet.024") => "G",
+        (Locale::Ja, "production-sheet.025") => "再生位置に追従",
+        (Locale::En, "production-sheet.025") => "Follow Playhead",
+        (Locale::Ja, "production-sheet.026") => {
+            "再生位置のセットを自動選択します。未保存の編集がある間は切り替えません。"
+        }
+        (Locale::En, "production-sheet.026") => {
+            "Select the set under the playhead automatically. Unsaved edits are never replaced."
+        }
+        (Locale::Ja, "production-sheet.027") => {
+            "未保存の編集があります。保存またはキャンセルしてから別のセットを選択してください。"
+        }
+        (Locale::En, "production-sheet.027") => {
+            "You have unsaved edits. Save or cancel before selecting another set."
+        }
+        (Locale::Ja, "production-sheet.028") => "セット先頭へ移動",
+        (Locale::En, "production-sheet.028") => "Go to Set Start",
+        (Locale::Ja, "production-sheet.029") => "クリック: このセットを選択して編集",
+        (Locale::En, "production-sheet.029") => "Click to select this set for editing",
+        (Locale::Ja, "production-sheet.030") => {
+            "行で編集対象を選び、「セット先頭へ移動」で再生位置を移動します。"
+        }
+        (Locale::En, "production-sheet.030") => {
+            "Select a row to edit it; use Go to Set Start to move the playhead."
+        }
+        (Locale::Ja, "production-sheet.031") => "再生位置",
+        (Locale::En, "production-sheet.031") => "Playhead",
+        (Locale::Ja, "production-sheet.034") => "↑↓・Home・End: 行を選択　Enter: セット先頭へ移動",
+        (Locale::En, "production-sheet.034") => {
+            "↑↓, Home, End: select a row · Enter: go to set start"
+        }
+        (Locale::Ja, "commands.105") => "プロダクションシートを表示",
+        (Locale::En, "commands.105") => "Show Production Sheet",
+        (Locale::Ja, "commands.106") => "前のセットへ",
+        (Locale::En, "commands.106") => "Previous Set",
+        (Locale::Ja, "commands.107") => "次のセットへ",
+        (Locale::En, "commands.107") => "Next Set",
+        (Locale::Ja, "commands.108") => "全体拍へ移動…",
+        (Locale::En, "commands.108") => "Go to Global Count…",
+        (Locale::Ja, "commands.109") => "前のセットはありません",
+        (Locale::En, "commands.109") => "No previous set",
+        (Locale::Ja, "commands.110") => "次のセットはありません",
+        (Locale::En, "commands.110") => "No next set",
+        (Locale::Ja, "commands.115") => "開く…",
+        (Locale::En, "commands.115") => "Open…",
+        (Locale::Ja, "commands.116") => "プロジェクトを開く…",
+        (Locale::En, "commands.116") => "Open Project…",
+        (Locale::Ja, "commands.117") => "保存",
+        (Locale::En, "commands.117") => "Save",
+        (Locale::Ja, "commands.118") => "別名で保存…",
+        (Locale::En, "commands.118") => "Save As…",
+        (Locale::Ja, "recent-projects.001") => "最近使った項目",
+        (Locale::En, "recent-projects.001") => "Open Recent",
+        (Locale::Ja, "recent-projects.002") => "最近開いたコンテはありません",
+        (Locale::En, "recent-projects.002") => "No Recent Documents",
+        (Locale::Ja, "recent-projects.003") => "最近使った項目を消去",
+        (Locale::En, "recent-projects.003") => "Clear Recent Documents",
+        (Locale::Ja, "recent-projects.004") => {
+            "開くファイルを選択します。現在の未保存変更は先に確認されます。"
+        }
+        (Locale::En, "recent-projects.004") => {
+            "Choose a file to open. Unsaved changes are protected first."
+        }
+        (Locale::Ja, "recent-projects.005") => {
+            "この最近使った項目は見つからなかったため、一覧から除きました"
+        }
+        (Locale::En, "recent-projects.005") => {
+            "That recent document was unavailable and has been removed"
+        }
+        (Locale::Ja, "recent-projects.006") => "この項目を一覧から除く",
+        (Locale::En, "recent-projects.006") => "Remove from Recent Documents",
+        (Locale::Ja, "recent-projects.007") => "最近使った項目",
+        (Locale::En, "recent-projects.007") => "Open Recent",
+        (Locale::Ja, "recent-projects.008") => "最近開いたコンテはありません",
+        (Locale::En, "recent-projects.008") => "No Recent Documents",
+        (Locale::Ja, "recent-projects.009") => "最近使った項目を消去",
+        (Locale::En, "recent-projects.009") => "Clear Recent Documents",
+        (Locale::Ja, "recent-projects.010") => "最近使った項目",
+        (Locale::En, "recent-projects.010") => "Open Recent",
+        (Locale::Ja, "recent-projects.011") => "最近開いたコンテはありません",
+        (Locale::En, "recent-projects.011") => "No Recent Documents",
+        (Locale::Ja, "recent-projects.012") => "最近使った項目を消去",
+        (Locale::En, "recent-projects.012") => "Clear Recent Documents",
+        (Locale::Ja, "recent-projects.013") => "最近使った項目",
+        (Locale::En, "recent-projects.013") => "Open Recent",
+        (Locale::Ja, "commands.119") => "プロジェクトとして保存…",
+        (Locale::En, "commands.119") => "Save as Project…",
+        (Locale::Ja, "commands.120") => "座標表をインポート…",
+        (Locale::En, "commands.120") => "Import Coordinate Table…",
+        (Locale::Ja, "commands.121") => "MusicXML / MIDIテンポをインポート…",
+        (Locale::En, "commands.121") => "Import MusicXML / MIDI Tempo…",
+        (Locale::Ja, "commands.122") => "画像下敷きを読み込む…",
+        (Locale::En, "commands.122") => "Load Image Underlay…",
+        (Locale::Ja, "commands.123") => "水平に整列",
+        (Locale::En, "commands.123") => "Align Horizontally",
+        (Locale::Ja, "commands.124") => "垂直に整列",
+        (Locale::En, "commands.124") => "Align Vertically",
+        (Locale::Ja, "commands.125") => "横方向に均等分配",
+        (Locale::En, "commands.125") => "Distribute Horizontally",
+        (Locale::Ja, "commands.126") => "縦方向に均等分配",
+        (Locale::En, "commands.126") => "Distribute Vertically",
+        (Locale::Ja, "commands.127") => "左右反転",
+        (Locale::En, "commands.127") => "Flip Horizontally",
+        (Locale::Ja, "commands.128") => "上下反転",
+        (Locale::En, "commands.128") => "Flip Vertically",
+        (Locale::Ja, "commands.129") => "直線を作成…",
+        (Locale::En, "commands.129") => "Make Line…",
+        (Locale::Ja, "commands.130") => "選択をロック",
+        (Locale::En, "commands.130") => "Lock Selection",
+        (Locale::Ja, "commands.131") => "選択を非表示",
+        (Locale::En, "commands.131") => "Hide Selection",
+        (Locale::Ja, "commands.132") => "2人以上を選択してください",
+        (Locale::En, "commands.132") => "Select at least two performers",
+        (Locale::Ja, "commands.133") => "先に演者を選択してください",
+        (Locale::En, "commands.133") => "Select performers first",
+        (Locale::Ja, "commands.134") => "セット先頭に戻ると配置を編集できます",
+        (Locale::En, "commands.134") => "Return to the set start to arrange performers",
+        (Locale::Ja, "commands.135") => "整列",
+        (Locale::En, "commands.135") => "Arrange",
+        (Locale::Ja, "commands.136") => "先に演者を選択してください",
+        (Locale::En, "commands.136") => "Select performers first",
         (Locale::Ja, "app-state.001") => "DrillForgeの更新",
         (Locale::En, "app-state.001") => "DrillForge Update",
         (Locale::Ja, "app-state.002") => {
@@ -712,6 +898,28 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "stadium-inspector.004") => {
             "Red rings identify performers hidden by others from this camera. Re-analyze after moving it."
         }
+        (Locale::Ja, "stadium-inspector.005") => "現在のセット・拍・カメラで解析済み",
+        (Locale::En, "stadium-inspector.005") => "Current set, count, and camera analyzed",
+        (Locale::Ja, "stadium-inspector.006") => "表示状態が変わったため、結果を更新中",
+        (Locale::En, "stadium-inspector.006") => "View changed; updating results",
+        (Locale::Ja, "stadium-inspector.007") => "視認性の問題を巡回",
+        (Locale::En, "stadium-inspector.007") => "Review visibility issues",
+        (Locale::Ja, "stadium-inspector.008") => "人を選択",
+        (Locale::En, "stadium-inspector.008") => "Select performers",
+        (Locale::Ja, "stadium-inspector.009") => "完全遮蔽に近い",
+        (Locale::En, "stadium-inspector.009") => "Nearly hidden",
+        (Locale::Ja, "stadium-inspector.010") => "見えにくい全員",
+        (Locale::En, "stadium-inspector.010") => "All impaired",
+        (Locale::Ja, "stadium-inspector.011") => "前へ",
+        (Locale::En, "stadium-inspector.011") => "Previous",
+        (Locale::Ja, "stadium-inspector.012") => "次へ",
+        (Locale::En, "stadium-inspector.012") => "Next",
+        (Locale::Ja, "stadium-inspector.013") => {
+            "ロックまたは非表示の演者は巡回対象から除外されます。"
+        }
+        (Locale::En, "stadium-inspector.013") => {
+            "Locked or hidden performers are excluded from review."
+        }
         (Locale::Ja, "subset-snapshot-state.001") => "スナップショットを復元",
         (Locale::En, "subset-snapshot-state.001") => "Restore snapshot",
         (Locale::Ja, "subset-snapshot-state.002") => {
@@ -724,6 +932,24 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "subset-snapshot-state.003") => "Restore",
         (Locale::Ja, "subset-snapshot-state.004") => "キャンセル",
         (Locale::En, "subset-snapshot-state.004") => "Cancel",
+        (Locale::Ja, "subset-snapshot-state.005") => "変更セットへ移動",
+        (Locale::En, "subset-snapshot-state.005") => "Go to changed set",
+        (Locale::Ja, "subset-snapshot-state.006") => {
+            "現在の原稿に存在する最初の変更セットを開きます（保存・Undoには影響しません）"
+        }
+        (Locale::En, "subset-snapshot-state.006") => {
+            "Open the first changed set present in this document (does not affect save or Undo)"
+        }
+        (Locale::Ja, "subset-snapshot-state.007") => "変更演者を選択",
+        (Locale::En, "subset-snapshot-state.007") => "Select changed performers",
+        (Locale::Ja, "subset-snapshot-state.008") => {
+            "現在の原稿に残る変更演者だけを選択します（保存・Undoには影響しません）"
+        }
+        (Locale::En, "subset-snapshot-state.008") => {
+            "Select only changed performers still in this document (does not affect save or Undo)"
+        }
+        (Locale::Ja, "subset-snapshot-state.009") => "変更演者を選択",
+        (Locale::En, "subset-snapshot-state.009") => "Selected changed performers",
         (Locale::Ja, "workspace-inspector.001") => "1. セットを選ぶ",
         (Locale::En, "workspace-inspector.001") => "1. Choose a Set",
         (Locale::Ja, "workspace-inspector.002") => {
@@ -982,6 +1208,50 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "workspace-inspector.106") => "Potential collisions",
         (Locale::Ja, "workspace-inspector.107") => "過大歩幅",
         (Locale::En, "workspace-inspector.107") => "Excessive strides",
+        (Locale::Ja, "workspace-inspector.111") => "楕円をプレビュー",
+        (Locale::En, "workspace-inspector.111") => "Preview ellipse",
+        (Locale::Ja, "workspace-inspector.112") => "放物線をプレビュー",
+        (Locale::En, "workspace-inspector.112") => "Preview parabola",
+        (Locale::Ja, "workspace-inspector.113") => "波形をプレビュー",
+        (Locale::En, "workspace-inspector.113") => "Preview sine wave",
+        (Locale::Ja, "workspace-inspector.114") => "星をプレビュー",
+        (Locale::En, "workspace-inspector.114") => "Preview star",
+        (Locale::Ja, "workspace-inspector.115") => "六角形をプレビュー",
+        (Locale::En, "workspace-inspector.115") => "Preview hexagon",
+        (Locale::Ja, "workspace-inspector.116") => "十字をプレビュー",
+        (Locale::En, "workspace-inspector.116") => "Preview cross",
+        (Locale::Ja, "workspace-inspector.117") => "形から始める",
+        (Locale::En, "workspace-inspector.117") => "Start with a form",
+        (Locale::Ja, "workspace-inspector.118") => {
+            "選択せずに形を描き、あとから全員へ割り当てられます。"
+        }
+        (Locale::En, "workspace-inspector.118") => {
+            "Draw a form first, then assign the full cast when you apply it."
+        }
+        (Locale::Ja, "workspace-inspector.119") => "全員の形を描く",
+        (Locale::En, "workspace-inspector.119") => "Draw a form for everyone",
+        (Locale::Ja, "workspace-inspector.120") => {
+            "全員を一時的に対象にし、フィールド上で形を描きます。適用するまで元の隊形は変わりません。"
+        }
+        (Locale::En, "workspace-inspector.120") => {
+            "Temporarily targets the full cast and lets you draw on the field. Your drill changes only when you apply the preview."
+        }
+        (Locale::Ja, "workspace-inspector.121") => "直前の選択を復元",
+        (Locale::En, "workspace-inspector.121") => "Restore Previous Selection",
+        (Locale::Ja, "workspace-inspector.122") => {
+            "直前に選んでいた演者グループへ戻ります。配置やUndo履歴は変更しません。"
+        }
+        (Locale::En, "workspace-inspector.122") => {
+            "Returns to the previous performer group without changing the drill or its undo history."
+        }
+        (Locale::Ja, "workspace-inspector.123") => "選択履歴",
+        (Locale::En, "workspace-inspector.123") => "Recent Groups",
+        (Locale::Ja, "workspace-inspector.124") => {
+            "以前の演者グループを選びます。現在の選択も履歴として残ります。"
+        }
+        (Locale::En, "workspace-inspector.124") => {
+            "Choose an earlier working group. Your current selection stays in the session history."
+        }
         (Locale::Ja, "export-status.016") => {
             "先に事前検査を実行し、表示された問題を解決してください"
         }
@@ -1148,6 +1418,8 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "inspector-media.067") => "Could not export the practice viewer",
         (Locale::Ja, "inspector-media.068") => "前回書き出した演者数",
         (Locale::En, "inspector-media.068") => "Performers in last export",
+        (Locale::Ja, "inspector-media.069") => "キャンセル",
+        (Locale::En, "inspector-media.069") => "Cancel",
         (Locale::Ja, "import-status.001") => "音楽タイムラインを安全に解析中…",
         (Locale::En, "import-status.001") => "Safely analyzing musical timeline…",
         (Locale::Ja, "import-status.002") => "表を安全に検査中…",
@@ -1182,6 +1454,250 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "app-ui.072") => "Audio error",
         (Locale::Ja, "app-ui.073") => "音源解析をキャンセルしました",
         (Locale::En, "app-ui.073") => "Audio analysis cancelled",
+        (Locale::Ja, "app-ui.074") => "インスペクタを表示",
+        (Locale::En, "app-ui.074") => "Show Inspector",
+        (Locale::Ja, "app-ui.075") => "インスペクタ",
+        (Locale::En, "app-ui.075") => "Inspector",
+        (Locale::Ja, "app-ui.076") => {
+            "編集パネルを表示／非表示にします。ワークスペースのコマンドを選ぶと自動的に開きます。"
+        }
+        (Locale::En, "app-ui.076") => {
+            "Show or hide editing panels. Workspace commands reopen the inspector automatically."
+        }
+        (Locale::Ja, "app-ui.077") => "選択中",
+        (Locale::En, "app-ui.077") => "Selected",
+        (Locale::Ja, "app-ui.078") => "水平に整列",
+        (Locale::En, "app-ui.078") => "Align Horizontally",
+        (Locale::Ja, "app-ui.079") => "横方向に分配",
+        (Locale::En, "app-ui.079") => "Distribute Horizontally",
+        (Locale::Ja, "app-ui.080") => "直線をプレビュー",
+        (Locale::En, "app-ui.080") => "Preview Line",
+        (Locale::Ja, "app-ui.081") => "詳細インスペクタ",
+        (Locale::En, "app-ui.081") => "More in Inspector",
+        (Locale::Ja, "app-ui.082") => "プレビューを適用",
+        (Locale::En, "app-ui.082") => "Apply Preview",
+        (Locale::Ja, "app-ui.083") => "破棄",
+        (Locale::En, "app-ui.083") => "Discard",
+        (Locale::Ja, "app-ui.084") => "プレビューを破棄します（Esc）",
+        (Locale::En, "app-ui.084") => "Discard preview (Esc)",
+        (Locale::Ja, "app-ui.085") => "整列…",
+        (Locale::En, "app-ui.085") => "Arrange…",
+        (Locale::Ja, "app-ui.086") => "垂直に整列",
+        (Locale::En, "app-ui.086") => "Align Vertically",
+        (Locale::Ja, "app-ui.087") => "縦方向に分配",
+        (Locale::En, "app-ui.087") => "Distribute Vertically",
+        (Locale::Ja, "app-ui.088") => "左右反転",
+        (Locale::En, "app-ui.088") => "Flip Horizontally",
+        (Locale::Ja, "app-ui.089") => "上下反転",
+        (Locale::En, "app-ui.089") => "Flip Vertically",
+        (Locale::Ja, "app-ui.090") => "プレビュー中",
+        (Locale::En, "app-ui.090") => "Preview",
+        (Locale::Ja, "app-ui.091") => "人を適用待ち",
+        (Locale::En, "app-ui.091") => "performers pending",
+        (Locale::Ja, "app-ui.092") => "Escで破棄",
+        (Locale::En, "app-ui.092") => "Press Esc to discard",
+        (Locale::Ja, "app-ui.093") => "プレビューを適用",
+        (Locale::En, "app-ui.093") => "Apply Preview",
+        (Locale::Ja, "app-ui.094") => "破棄",
+        (Locale::En, "app-ui.094") => "Discard",
+        (Locale::Ja, "app-ui.095") => "形を描画中",
+        (Locale::En, "app-ui.095") => "Drawing a form",
+        (Locale::Ja, "app-ui.096") => {
+            "フィールド上でドラッグし、離すとプレビューになります。Escで破棄"
+        }
+        (Locale::En, "app-ui.096") => {
+            "Drag on the field, then release to preview. Press Esc to discard."
+        }
+        (Locale::Ja, "app-ui.097") => "人を選択中",
+        (Locale::En, "app-ui.097") => "performers selected",
+        (Locale::Ja, "app-ui.098") => "横に整列",
+        (Locale::En, "app-ui.098") => "Align Horizontally",
+        (Locale::Ja, "app-ui.099") => "縦に整列",
+        (Locale::En, "app-ui.099") => "Align Vertically",
+        (Locale::Ja, "app-ui.100") => "横に均等分配",
+        (Locale::En, "app-ui.100") => "Distribute Horizontally",
+        (Locale::Ja, "app-ui.101") => "縦に均等分配",
+        (Locale::En, "app-ui.101") => "Distribute Vertically",
+        (Locale::Ja, "app-ui.102") => "直線をプレビュー",
+        (Locale::En, "app-ui.102") => "Preview Line",
+        (Locale::Ja, "app-ui.103") => "● 未保存",
+        (Locale::En, "app-ui.103") => "● Unsaved",
+        (Locale::Ja, "app-ui.104") => "✓ 保存済み",
+        (Locale::En, "app-ui.104") => "✓ Saved",
+        (Locale::Ja, "document-feedback.001") => "名称未設定",
+        (Locale::En, "document-feedback.001") => "Untitled",
+        (Locale::Ja, "document-feedback.002") => "保存中…",
+        (Locale::En, "document-feedback.002") => "Saving…",
+        (Locale::Ja, "document-feedback.003") => "保存済み",
+        (Locale::En, "document-feedback.003") => "Saved",
+        (Locale::Ja, "document-feedback.004") => "編集済み",
+        (Locale::En, "document-feedback.004") => "Edited",
+        (Locale::Ja, "document-feedback.005") => "場所",
+        (Locale::En, "document-feedback.005") => "Location",
+        (Locale::Ja, "app-ui.105") => "セット",
+        (Locale::En, "app-ui.105") => "Set",
+        (Locale::Ja, "app-ui.106") => "カウント",
+        (Locale::En, "app-ui.106") => "Count",
+        (Locale::Ja, "app-ui.107") => "人を選択",
+        (Locale::En, "app-ui.107") => "selected",
+        (Locale::Ja, "app-ui.108") => "状態",
+        (Locale::En, "app-ui.108") => "Status",
+        (Locale::Ja, "app-ui.119") => "矢印キーで移動",
+        (Locale::En, "app-ui.119") => "Arrow keys move",
+        (Locale::Ja, "app-ui.120") => {
+            "フィールドをクリック後、矢印キーで1目盛り、Shift+矢印キーで4目盛り移動します"
+        }
+        (Locale::En, "app-ui.120") => {
+            "Click the field, then use Arrow keys for one grid division or Shift+Arrow keys for four"
+        }
+        (Locale::Ja, "app-ui.121") => "再生プレビュー中です",
+        (Locale::En, "app-ui.121") => "Playback preview",
+        (Locale::Ja, "app-ui.122") => "このセットの開始位置へ戻って編集",
+        (Locale::En, "app-ui.122") => "Return to this set start to edit",
+        (Locale::Ja, "app-ui.123") => {
+            "再生を停止し、選択を保持したままセット開始の正確な位置へ移動します"
+        }
+        (Locale::En, "app-ui.123") => {
+            "Pauses playback and returns to this set's exact start without changing the selection"
+        }
+        (Locale::Ja, "app-ui.124") => "全体表示",
+        (Locale::En, "app-ui.124") => "Fit Field",
+        (Locale::Ja, "app-ui.125") => "全体を表示 (F)",
+        (Locale::En, "app-ui.125") => "Fit the complete field (F)",
+        (Locale::Ja, "app-ui.126") => "選択を表示",
+        (Locale::En, "app-ui.126") => "Focus Selection",
+        (Locale::Ja, "app-ui.127") => "選択した演者の中心へ移動 (⌘1 / Ctrl+1)",
+        (Locale::En, "app-ui.127") => "Center on selected performers (Cmd+1 / Ctrl+1)",
+        (Locale::Ja, "app-ui.128") => "⌘/Ctrl+ホイール: 拡大　中ボタンまたはSpace+ドラッグ: 移動",
+        (Locale::En, "app-ui.128") => "Cmd/Ctrl+wheel: zoom · Middle-button or Space-drag: pan",
+        (Locale::Ja, "app-state.149") => "直前の編集を元に戻しました",
+        (Locale::En, "app-state.149") => "Undid the previous edit",
+        (Locale::Ja, "app-state.150") => "編集をやり直しました",
+        (Locale::En, "app-state.150") => "Redid the edit",
+        (Locale::Ja, "app-state.151") => "次のプロダクションマーカーへ移動しました",
+        (Locale::En, "app-state.151") => "Moved to the next production marker",
+        (Locale::Ja, "app-state.152") => "前のプロダクションマーカーへ移動しました",
+        (Locale::En, "app-state.152") => "Moved to the previous production marker",
+        (Locale::Ja, "app-state.153") => "選択した演者をグリッド目盛り分移動しました",
+        (Locale::En, "app-state.153") => "Moved selected performers by grid divisions",
+        (Locale::Ja, "app-state.154") => {
+            "編集中のフォーメーションはセット開始位置でのみ変更できます。セット開始へ戻ってください。"
+        }
+        (Locale::En, "app-state.154") => {
+            "Formation edits are available only at a set start. Return to the set start to edit."
+        }
+        (Locale::Ja, "app-state.155") => "セット開始位置に戻りました。選択はそのままです。",
+        (Locale::En, "app-state.155") => "Returned to the set start. Your selection is unchanged.",
+        (Locale::Ja, "commands.101") => "前のプロダクションマーカーへ",
+        (Locale::En, "commands.101") => "Previous Production Marker",
+        (Locale::Ja, "commands.102") => "次のプロダクションマーカーへ",
+        (Locale::En, "commands.102") => "Next Production Marker",
+        (Locale::Ja, "commands.103") => "前のプロダクションマーカーはありません",
+        (Locale::En, "commands.103") => "No previous production marker",
+        (Locale::Ja, "commands.104") => "次のプロダクションマーカーはありません",
+        (Locale::En, "commands.104") => "No next production marker",
+        (Locale::Ja, "timeline.009") => "カウント",
+        (Locale::En, "timeline.009") => "Count",
+        (Locale::Ja, "timeline.018") => "カウント",
+        (Locale::En, "timeline.018") => "Count",
+        (Locale::Ja, "timeline.010") => "ヒット",
+        (Locale::En, "timeline.010") => "Hit",
+        (Locale::Ja, "timeline.011") => "リハーサル",
+        (Locale::En, "timeline.011") => "Rehearsal",
+        (Locale::Ja, "timeline.012") => "メモ",
+        (Locale::En, "timeline.012") => "Note",
+        (Locale::Ja, "timeline.013") => "プロダクションマーカーを編集",
+        (Locale::En, "timeline.013") => "Edit production marker",
+        (Locale::Ja, "timeline.014") => "名前",
+        (Locale::En, "timeline.014") => "Label",
+        (Locale::Ja, "timeline.015") => "詳細",
+        (Locale::En, "timeline.015") => "Details",
+        (Locale::Ja, "timeline.016") => "マーカーを削除",
+        (Locale::En, "timeline.016") => "Delete Marker",
+        (Locale::Ja, "timeline.017") => "プロダクションマーカーを追加",
+        (Locale::En, "timeline.017") => "Add production marker",
+        (Locale::Ja, "timeline.019") => "保存",
+        (Locale::En, "timeline.019") => "Save",
+        (Locale::Ja, "timeline.020") => "キャンセル",
+        (Locale::En, "timeline.020") => "Cancel",
+        (Locale::Ja, "app-ui.109") => "プロダクションマーカーを更新できませんでした",
+        (Locale::En, "app-ui.109") => "Could not update production marker",
+        (Locale::Ja, "app-ui.111") => "現在位置を再生開始（IN）にします",
+        (Locale::En, "app-ui.111") => "Set the playback start (IN) at the current position",
+        (Locale::Ja, "app-ui.112") => {
+            "現在位置を再生終了（OUT）にします。終了カウントの直前で停止します"
+        }
+        (Locale::En, "app-ui.112") => {
+            "Set the playback end (OUT) at the current position; playback stops before this count"
+        }
+        (Locale::Ja, "app-ui.113") => "開始（含む）",
+        (Locale::En, "app-ui.113") => "Starts at",
+        (Locale::Ja, "app-ui.114") => "拍",
+        (Locale::En, "app-ui.114") => "count",
+        (Locale::Ja, "app-ui.115") => "終了（この拍の直前）",
+        (Locale::En, "app-ui.115") => "Stops before",
+        (Locale::Ja, "app-ui.116") => "再生長",
+        (Locale::En, "app-ui.116") => "Length",
+        (Locale::Ja, "app-ui.117") => "拍",
+        (Locale::En, "app-ui.117") => "counts",
+        (Locale::Ja, "app-ui.118") => {
+            "I: 現在位置を開始（IN） · O: 現在位置を終了（OUT） · 上のリハーサル／Hitマーカーをクリックして移動"
+        }
+        (Locale::En, "app-ui.118") => {
+            "I: set Start (IN) at the playhead · O: set End (OUT) · Click rehearsal or Hit markers above the count track to jump"
+        }
+        (Locale::Ja, "command-palette.001") => "コマンドを検索",
+        (Locale::En, "command-palette.001") => "Search Commands",
+        (Locale::Ja, "command-palette.002") => "コマンドを検索…",
+        (Locale::En, "command-palette.002") => "Search commands…",
+        (Locale::Ja, "command-palette.003") => "一致するコマンドがありません",
+        (Locale::En, "command-palette.003") => "No matching commands",
+        (Locale::Ja, "command-palette.004") => "↑↓で選択  •  Enterで実行  •  Escで閉じる",
+        (Locale::En, "command-palette.004") => "↑↓ to select  •  Enter to run  •  Esc to close",
+        (Locale::Ja, "set-navigator.001") => "セットへ移動",
+        (Locale::En, "set-navigator.001") => "Go to Set",
+        (Locale::Ja, "set-navigator.002") => "セット名・番号・リハーサル記号を検索…",
+        (Locale::En, "set-navigator.002") => "Search set name, number, or rehearsal mark…",
+        (Locale::Ja, "set-navigator.003") => "一致するセットがありません",
+        (Locale::En, "set-navigator.003") => "No matching sets",
+        (Locale::Ja, "set-navigator.004") => "セット",
+        (Locale::En, "set-navigator.004") => "Set",
+        (Locale::Ja, "set-navigator.005") => "開始拍",
+        (Locale::En, "set-navigator.005") => "Starts at count",
+        (Locale::Ja, "set-navigator.006") => "拍",
+        (Locale::En, "set-navigator.006") => "counts",
+        (Locale::Ja, "set-navigator.007") => "セットへ移動",
+        (Locale::En, "set-navigator.007") => "Go to set",
+        (Locale::Ja, "set-navigator.008") => {
+            "↑↓で選択  •  Enterで移動  •  Escで閉じる  •  ⌘Jで開く"
+        }
+        (Locale::En, "set-navigator.008") => {
+            "↑↓ to select  •  Enter to go  •  Esc to close  •  ⌘J to open"
+        }
+        (Locale::Ja, "set-navigator.009") => "セットへ移動…  ⌘J",
+        (Locale::En, "set-navigator.009") => "Go to Set…  ⌘J",
+        (Locale::Ja, "set-navigator.010") => "セットへ移動しました",
+        (Locale::En, "set-navigator.010") => "Moved to set",
+        (Locale::Ja, "go-to-count.001") => "全体拍へ移動",
+        (Locale::En, "go-to-count.001") => "Go to Global Count",
+        (Locale::Ja, "go-to-count.002") => "移動先の拍を入力（1から",
+        (Locale::En, "go-to-count.002") => "Enter a count (1 through",
+        (Locale::Ja, "go-to-count.003") => "例: 33",
+        (Locale::En, "go-to-count.003") => "For example: 33",
+        (Locale::Ja, "go-to-count.004") => "1以上、曲全体の拍数以下の整数を入力してください",
+        (Locale::En, "go-to-count.004") => "Enter a whole number within the show's count range",
+        (Locale::Ja, "go-to-count.005") => "移動",
+        (Locale::En, "go-to-count.005") => "Go",
+        (Locale::Ja, "go-to-count.006") => "キャンセル",
+        (Locale::En, "go-to-count.006") => "Cancel",
+        (Locale::Ja, "go-to-count.007") => {
+            "Enterで移動  •  Escでキャンセル。移動時は再生を停止します。"
+        }
+        (Locale::En, "go-to-count.007") => {
+            "Enter to go  •  Esc to cancel. Navigation pauses playback."
+        }
+        (Locale::Ja, "go-to-count.008") => "全体拍へ移動しました:",
+        (Locale::En, "go-to-count.008") => "Moved to global count:",
         (Locale::Ja, "analytics.001") => "アナリティクス",
         (Locale::En, "analytics.001") => "Analytics",
         (Locale::Ja, "analytics.002") => {
@@ -1254,6 +1770,476 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "analytics.025") => "Selected performers only",
         (Locale::Ja, "analytics.026") => "全員",
         (Locale::En, "analytics.026") => "Everyone",
+        (Locale::Ja, "simple-mode.001") => "1. フォーメーションを選ぶ",
+        (Locale::En, "simple-mode.001") => "1. Choose a Formation",
+        (Locale::Ja, "simple-mode.002") => "2. 演者を選ぶ",
+        (Locale::En, "simple-mode.002") => "2. Select Performers",
+        (Locale::Ja, "simple-mode.003") => "3. 動かす",
+        (Locale::En, "simple-mode.003") => "3. Move",
+        (Locale::Ja, "simple-mode.004") => "4. 再生する",
+        (Locale::En, "simple-mode.004") => "4. Play",
+        (Locale::Ja, "simple-mode.005") => "編集したいフォーメーション（セット）を選びましょう。",
+        (Locale::En, "simple-mode.005") => "Choose the formation (set) you want to edit.",
+        (Locale::Ja, "simple-mode.006") => {
+            "次は演者を選んでみましょう。フィールドの演者をタップするか、「全員を選択」を押します。"
+        }
+        (Locale::En, "simple-mode.006") => {
+            "Next, let's select performers. Tap performers on the field, or press Select All."
+        }
+        (Locale::Ja, "simple-mode.007") => {
+            "選んだ演者をドラッグするか、並べ方のボタンで動かしましょう。矢印ボタンで表示範囲を移動できます。"
+        }
+        (Locale::En, "simple-mode.007") => {
+            "Drag the selected performers, or use a layout button. Use the arrow buttons to pan the view."
+        }
+        (Locale::Ja, "simple-mode.008") => "再生ボタンを押して、動きを確認しましょう。",
+        (Locale::En, "simple-mode.008") => "Press Play to check how it moves.",
+        (Locale::Ja, "simple-mode.009") => "かんたんモード",
+        (Locale::En, "simple-mode.009") => "Simple Mode",
+        (Locale::Ja, "simple-mode.010") => "通常モードに戻る",
+        (Locale::En, "simple-mode.010") => "Back to Full Mode",
+        (Locale::Ja, "simple-mode.011") => "いつでも通常の画面に戻れます",
+        (Locale::En, "simple-mode.011") => "You can return to the full desktop UI anytime",
+        (Locale::Ja, "simple-mode.012") => "メトロノーム",
+        (Locale::En, "simple-mode.012") => "Metronome",
+        (Locale::Ja, "simple-mode.013") => "◀ もどる",
+        (Locale::En, "simple-mode.013") => "◀ Back",
+        (Locale::Ja, "simple-mode.014") => "つぎへ ▶",
+        (Locale::En, "simple-mode.014") => "Next ▶",
+        (Locale::Ja, "simple-mode.015") => "◀ 前のフォーメーション",
+        (Locale::En, "simple-mode.015") => "◀ Previous",
+        (Locale::Ja, "simple-mode.016") => "フォーメーション",
+        (Locale::En, "simple-mode.016") => "Formation",
+        (Locale::Ja, "simple-mode.017") => "次のフォーメーション ▶",
+        (Locale::En, "simple-mode.017") => "Next ▶",
+        (Locale::Ja, "simple-mode.018") => "＋ 新しいフォーメーション",
+        (Locale::En, "simple-mode.018") => "+ Add Formation",
+        (Locale::Ja, "simple-mode.019") => "選択中",
+        (Locale::En, "simple-mode.019") => "Selected",
+        (Locale::Ja, "simple-mode.020") => "先に「2. 演者を選ぶ」で演者を選びましょう",
+        (Locale::En, "simple-mode.020") => "Select performers in step 2 first",
+        (Locale::Ja, "simple-mode.021") => "直線に並べる",
+        (Locale::En, "simple-mode.021") => "Line Up",
+        (Locale::Ja, "simple-mode.022") => "円に並べる",
+        (Locale::En, "simple-mode.022") => "Arrange in Circle",
+        (Locale::Ja, "simple-mode.023") => "ブロックに並べる",
+        (Locale::En, "simple-mode.023") => "Arrange in Block",
+        (Locale::Ja, "simple-mode.024") => "選択箇所を表示",
+        (Locale::En, "simple-mode.024") => "Center on Selection",
+        (Locale::Ja, "simple-mode.025") => "最初から",
+        (Locale::En, "simple-mode.025") => "From the Start",
+        (Locale::Ja, "simple-mode.026") => "保存する",
+        (Locale::En, "simple-mode.026") => "Save",
+        (Locale::Ja, "simple-mode.027") => "カウント",
+        (Locale::En, "simple-mode.027") => "Count",
+        (Locale::Ja, "simple-mode.028") => "拡大表示：矢印ボタンやキーで移動できます",
+        (Locale::En, "simple-mode.028") => "Zoomed in: pan with the arrow buttons or arrow keys",
+        (Locale::Ja, "simple-mode.029") => {
+            "ドリルとは関係なく、いつでも使える練習用メトロノームです"
+        }
+        (Locale::En, "simple-mode.029") => {
+            "A practice metronome, independent of the drill you're editing"
+        }
+        (Locale::Ja, "simple-mode.030") => "停止",
+        (Locale::En, "simple-mode.030") => "Stop",
+        (Locale::Ja, "simple-mode.031") => "開始",
+        (Locale::En, "simple-mode.031") => "Start",
+        (Locale::Ja, "simple-mode.032") => "BPM",
+        (Locale::En, "simple-mode.032") => "BPM",
+        (Locale::Ja, "simple-mode.033") => "▲",
+        (Locale::En, "simple-mode.033") => "▲",
+        (Locale::Ja, "simple-mode.034") => "◀",
+        (Locale::En, "simple-mode.034") => "◀",
+        (Locale::Ja, "simple-mode.035") => "▶",
+        (Locale::En, "simple-mode.035") => "▶",
+        (Locale::Ja, "simple-mode.036") => "▼",
+        (Locale::En, "simple-mode.036") => "▼",
+        (Locale::Ja, "simple-mode.037") => "音声出力デバイスを開けませんでした",
+        (Locale::En, "simple-mode.037") => "Could not open the audio output device",
+        (Locale::Ja, "simple-mode.038") => "メトロノーム音を準備できませんでした",
+        (Locale::En, "simple-mode.038") => "Could not prepare the metronome clicks",
+        (Locale::Ja, "simple-mode.039") => "再生範囲",
+        (Locale::En, "simple-mode.039") => "Playback Range",
+        (Locale::Ja, "simple-mode.040") => "現在のセット",
+        (Locale::En, "simple-mode.040") => "Current Set",
+        (Locale::Ja, "simple-mode.041") => "曲全体",
+        (Locale::En, "simple-mode.041") => "Whole Show",
+        (Locale::Ja, "simple-mode.042") => "現在位置を開始",
+        (Locale::En, "simple-mode.042") => "Set In",
+        (Locale::Ja, "simple-mode.043") => "現在位置を終了",
+        (Locale::En, "simple-mode.043") => "Set Out",
+        (Locale::Ja, "simple-mode.044") => "ループ",
+        (Locale::En, "simple-mode.044") => "Loop",
+        (Locale::Ja, "simple-mode.045") => "カウント",
+        (Locale::En, "simple-mode.045") => "Counts",
+        (Locale::Ja, "simple-mode.046") => "現在位置を再生開始（IN）にします",
+        (Locale::En, "simple-mode.046") => "Set the playback start (IN) at the current position",
+        (Locale::Ja, "simple-mode.047") => {
+            "現在位置を再生終了（OUT）にします。終了カウントの直前で停止します"
+        }
+        (Locale::En, "simple-mode.047") => {
+            "Set the playback end (OUT) at the current position; playback stops before this count"
+        }
+        (Locale::Ja, "simple-mode.048") => "開始（含む）",
+        (Locale::En, "simple-mode.048") => "Starts at",
+        (Locale::Ja, "simple-mode.049") => "拍",
+        (Locale::En, "simple-mode.049") => "count",
+        (Locale::Ja, "simple-mode.050") => "終了（この拍の直前）",
+        (Locale::En, "simple-mode.050") => "Stops before",
+        (Locale::Ja, "simple-mode.051") => "再生長",
+        (Locale::En, "simple-mode.051") => "Length",
+        (Locale::Ja, "simple-mode.052") => "拍",
+        (Locale::En, "simple-mode.052") => "counts",
+        (Locale::Ja, "simple-mode.053") => {
+            "I: 現在位置を開始（IN） · O: 現在位置を終了（OUT） · タイムラインのマーカーをクリックして移動"
+        }
+        (Locale::En, "simple-mode.053") => {
+            "I: set Start (IN) at the playhead · O: set End (OUT) · Click timeline markers to jump"
+        }
+        (Locale::Ja, "production-markers.001") => "プロダクションマーカー",
+        (Locale::En, "production-markers.001") => "Production Markers",
+        (Locale::Ja, "production-markers.002") => {
+            "ヒット、リハーサル、メモを検索し、クリックして正確な拍へ移動します。"
+        }
+        (Locale::En, "production-markers.002") => {
+            "Search hits, rehearsals, and notes; click one to jump to its exact count."
+        }
+        (Locale::Ja, "production-markers.003") => "名前、種類、拍で検索",
+        (Locale::En, "production-markers.003") => "Search name, type, or count",
+        (Locale::Ja, "production-markers.004") => "プロダクションマーカーを検索",
+        (Locale::En, "production-markers.004") => "Search production markers",
+        (Locale::Ja, "production-markers.005") => "ヒット",
+        (Locale::En, "production-markers.005") => "Hit",
+        (Locale::Ja, "production-markers.006") => "リハーサル",
+        (Locale::En, "production-markers.006") => "Rehearsal",
+        (Locale::Ja, "production-markers.007") => "メモ",
+        (Locale::En, "production-markers.007") => "Note",
+        (Locale::Ja, "production-markers.008") => {
+            "一致するマーカーはありません。タイムラインを右クリックして追加できます。"
+        }
+        (Locale::En, "production-markers.008") => {
+            "No matching markers. Right-click the timeline to add one."
+        }
+        (Locale::Ja, "production-markers.009") => "詳細はありません",
+        (Locale::En, "production-markers.009") => "No details",
+        (Locale::Ja, "production-markers.010") => "再生範囲の開始にする",
+        (Locale::En, "production-markers.010") => "Use as Range Start",
+        (Locale::Ja, "production-markers.011") => "ここまでを再生範囲にする",
+        (Locale::En, "production-markers.011") => "Set Range to Here",
+        (Locale::Ja, "production-markers.012") => {
+            "開始マーカーを選択してから、後のマーカーを選んでください"
+        }
+        (Locale::En, "production-markers.012") => {
+            "Choose a start marker, then select a later marker."
+        }
+        (Locale::Ja, "production-markers.013") => "選択したマーカー間を再生範囲にしました",
+        (Locale::En, "production-markers.013") => "Set playback range between the selected markers",
+        (Locale::Ja, "production-markers.014") => "再生開始マーカー:",
+        (Locale::En, "production-markers.014") => "Range start marker:",
+        (Locale::Ja, "production-markers.015") => "種類",
+        (Locale::En, "production-markers.015") => "Type",
+        (Locale::Ja, "production-markers.016") => "名前",
+        (Locale::En, "production-markers.016") => "Label",
+        (Locale::Ja, "production-markers.017") => "詳細",
+        (Locale::En, "production-markers.017") => "Details",
+        (Locale::Ja, "production-markers.018") => "保存",
+        (Locale::En, "production-markers.018") => "Save",
+        (Locale::Ja, "production-markers.019") => "編集を戻す",
+        (Locale::En, "production-markers.019") => "Revert Edit",
+        (Locale::Ja, "production-markers.020") => "プロダクションマーカーを更新できませんでした",
+        (Locale::En, "production-markers.020") => "Could not update production marker",
+        (Locale::Ja, "production-markers.021") => "前のマーカー",
+        (Locale::En, "production-markers.021") => "Previous",
+        (Locale::Ja, "production-markers.022") => {
+            "Option + 左矢印: 前のプロダクションマーカーへ移動"
+        }
+        (Locale::En, "production-markers.022") => "Option + Left Arrow: previous production marker",
+        (Locale::Ja, "production-markers.023") => "次のマーカー",
+        (Locale::En, "production-markers.023") => "Next",
+        (Locale::Ja, "production-markers.024") => {
+            "Option + 右矢印: 次のプロダクションマーカーへ移動"
+        }
+        (Locale::En, "production-markers.024") => "Option + Right Arrow: next production marker",
+        (Locale::Ja, "production-markers.025") => "現在のマーカー:",
+        (Locale::En, "production-markers.025") => "At marker:",
+        (Locale::Ja, "production-markers.026") => "範囲開始を解除",
+        (Locale::En, "production-markers.026") => "Clear Range Start",
+        (Locale::Ja, "production-markers.027") => "再生範囲の開始マーカーを解除しました",
+        (Locale::En, "production-markers.027") => "Cleared playback range start marker",
+        (Locale::Ja, "comparison.001") => "A/B 比較",
+        (Locale::En, "comparison.001") => "A/B Compare",
+        (Locale::Ja, "comparison.002") => "閉じる",
+        (Locale::En, "comparison.002") => "Close",
+        (Locale::Ja, "comparison.003") => "A/B比較を閉じました",
+        (Locale::En, "comparison.003") => "Closed A/B comparison",
+        (Locale::Ja, "comparison.004") => "移動ラインを表示",
+        (Locale::En, "comparison.004") => "Show movement lines",
+        (Locale::Ja, "comparison.005") => "黄: 参照セット　シアン: 現在位置との差分　Esc: 閉じる",
+        (Locale::En, "comparison.005") => "Amber: reference set · Cyan: difference · Esc: close",
+        (Locale::Ja, "comparison.006") => "A/B比較を始める",
+        (Locale::En, "comparison.006") => "Start A/B Compare",
+        (Locale::Ja, "comparison.007") => "別セットを重ねて、位置と移動差を確認します",
+        (Locale::En, "comparison.007") => {
+            "Overlay another set to inspect positions and movement differences"
+        }
+        (Locale::Ja, "comparison.008") => "A/B比較を開始しました（保存・Undoには影響しません）",
+        (Locale::En, "comparison.008") => "Started A/B comparison (does not affect save or Undo)",
+        (Locale::Ja, "comparison.009") => "EscでA/B比較を閉じました",
+        (Locale::En, "comparison.009") => "Closed A/B comparison with Escape",
+        (Locale::Ja, "app-ui.129") => "選択した演者をロック",
+        (Locale::En, "app-ui.129") => "Lock Selected Performers",
+        (Locale::Ja, "app-ui.130") => {
+            "ロックした演者は選択・移動できません。ファイルと書き出しは変更しません。"
+        }
+        (Locale::En, "app-ui.130") => {
+            "Locked performers cannot be selected or moved. Files and exports are unchanged."
+        }
+        (Locale::Ja, "app-ui.131") => "選択した演者を一時的に隠す",
+        (Locale::En, "app-ui.131") => "Temporarily Hide Selected",
+        (Locale::Ja, "app-ui.132") => "隠した演者は斜線で表示され、選択・移動できません。",
+        (Locale::En, "app-ui.132") => {
+            "Hidden performers are slashed on the field and cannot be selected or moved."
+        }
+        (Locale::Ja, "app-ui.133") => "ロック中",
+        (Locale::En, "app-ui.133") => "locked",
+        (Locale::Ja, "app-ui.134") => "一時非表示",
+        (Locale::En, "app-ui.134") => "temporarily hidden",
+        (Locale::Ja, "app-ui.135") => "ロック・非表示をすべて解除",
+        (Locale::En, "app-ui.135") => "Clear Locks & Hidden",
+        (Locale::Ja, "app-ui.136") => {
+            "このセッションの表示・操作フィルターだけを解除します。ドリルとUndo履歴は変更しません。"
+        }
+        (Locale::En, "app-ui.136") => {
+            "Clears only this session's display and interaction filters. The drill and undo history are unchanged."
+        }
+        (Locale::Ja, "app-ui.137") => "演者を戻す…",
+        (Locale::En, "app-ui.137") => "Restore performers…",
+        (Locale::Ja, "app-ui.138") => {
+            "この操作はセッション中の表示・操作フィルターだけを戻します。"
+        }
+        (Locale::En, "app-ui.138") => "This restores only session display and interaction filters.",
+        (Locale::Ja, "app-ui.139") => "このセクションのロックと非表示をすべて解除",
+        (Locale::En, "app-ui.139") => "Restore every filtered performer in this section",
+        (Locale::Ja, "app-ui.140") => "フィルターを解除した演者数:",
+        (Locale::En, "app-ui.140") => "Restored performers:",
+        (Locale::Ja, "app-ui.141") => "戻す",
+        (Locale::En, "app-ui.141") => "Restore",
+        (Locale::Ja, "app-ui.142") => "この演者のロックと一時非表示を解除",
+        (Locale::En, "app-ui.142") => "Remove this performer's lock and temporary hide",
+        (Locale::Ja, "app-ui.143") => "ロック中・一時非表示",
+        (Locale::En, "app-ui.143") => "locked · temporarily hidden",
+        (Locale::Ja, "app-ui.144") => "演者を編集可能な表示に戻しました",
+        (Locale::En, "app-ui.144") => "Restored performer to the editable field",
+        (Locale::Ja, "app-ui.145") => "ロック中",
+        (Locale::En, "app-ui.145") => "locked",
+        (Locale::Ja, "app-ui.146") => "一時非表示",
+        (Locale::En, "app-ui.146") => "temporarily hidden",
+        (Locale::Ja, "app-ui.147") => "セッションフィルター",
+        (Locale::En, "app-ui.147") => "Session filters",
+        (Locale::Ja, "app-ui.148") => "ロック",
+        (Locale::En, "app-ui.148") => "locked",
+        (Locale::Ja, "app-ui.149") => "非表示",
+        (Locale::En, "app-ui.149") => "hidden",
+        (Locale::Ja, "app-ui.150") => "演者のロック・非表示を個別またはセクション単位で戻す",
+        (Locale::En, "app-ui.150") => {
+            "Restore performer locks and hidden performers individually or by section"
+        }
+        (Locale::Ja, "app-ui.151") => "人をロックしました。上部の「直前を戻す」で復帰できます",
+        (Locale::En, "app-ui.151") => {
+            "performer(s) locked. Use Restore last in the status strip to recover"
+        }
+        (Locale::Ja, "app-ui.152") => {
+            "人を一時非表示にしました。上部の「直前を戻す」で復帰できます"
+        }
+        (Locale::En, "app-ui.152") => {
+            "performer(s) temporarily hidden. Use Restore last in the status strip to recover"
+        }
+        (Locale::Ja, "app-ui.153") => "直前を戻す",
+        (Locale::En, "app-ui.153") => "Restore last",
+        (Locale::Ja, "app-ui.154") => {
+            "直前のロック／一時非表示をすべて戻します。ドリルとUndo履歴は変更しません。"
+        }
+        (Locale::En, "app-ui.154") => {
+            "Restore the latest lock or temporary hide. The drill and undo history are unchanged."
+        }
+        (Locale::Ja, "app-ui.155") => "人を編集可能な表示に戻しました",
+        (Locale::En, "app-ui.155") => "performer(s) restored to the editable field",
+        (Locale::Ja, "app-ui.156") => "選択した演者をロック",
+        (Locale::En, "app-ui.156") => "Lock selected",
+        (Locale::Ja, "app-ui.157") => {
+            "この選択を固定して、ほかの演者の編集に集中します。直後に上部から戻せます。"
+        }
+        (Locale::En, "app-ui.157") => {
+            "Lock this group to focus on other performers. You can restore it immediately from the status strip."
+        }
+        (Locale::Ja, "app-ui.158") => "選択した演者を一時的に隠す",
+        (Locale::En, "app-ui.158") => "Hide selected",
+        (Locale::Ja, "app-ui.159") => "この選択を一時的に隠します。直後に上部から戻せます。",
+        (Locale::En, "app-ui.159") => {
+            "Temporarily hide this group. You can restore it immediately from the status strip."
+        }
+        (Locale::Ja, "clinic-ui.001") => "警告から演者をフォーカス",
+        (Locale::En, "clinic-ui.001") => "Focus performers from warnings",
+        (Locale::Ja, "clinic-ui.002") => "衝突",
+        (Locale::En, "clinic-ui.002") => "Collision",
+        (Locale::Ja, "clinic-ui.003") => "この警告の演者を選択してフィールドに表示します",
+        (Locale::En, "clinic-ui.003") => {
+            "Select the performers in this warning and focus them on the field"
+        }
+        (Locale::Ja, "clinic-ui.004") => "衝突の演者を選択しました",
+        (Locale::En, "clinic-ui.004") => "Selected performers in the collision",
+        (Locale::Ja, "clinic-ui.005") => "大きな歩幅",
+        (Locale::En, "clinic-ui.005") => "Large stride",
+        (Locale::Ja, "clinic-ui.006") => "歩幅を確認する演者を選択しました",
+        (Locale::En, "clinic-ui.006") => "Selected performer to inspect stride",
+        (Locale::Ja, "clinic-ui.007") => {
+            "選択と表示位置だけを変更します。ドリルとUndo履歴は変更しません。"
+        }
+        (Locale::En, "clinic-ui.007") => {
+            "Only selection and the viewport change. The drill and undo history stay unchanged."
+        }
+        (Locale::Ja, "close-guard.001") => "保存していない変更があります",
+        (Locale::En, "close-guard.001") => "You have unsaved changes",
+        (Locale::Ja, "close-guard.002") => {
+            "閉じる前に変更を保存しますか？ 保存が完了するまでこのウインドウは開いたままです。"
+        }
+        (Locale::En, "close-guard.002") => {
+            "Do you want to save your changes before closing? This window stays open until saving finishes."
+        }
+        (Locale::Ja, "close-guard.003") => "変更を保存",
+        (Locale::En, "close-guard.003") => "Save Changes",
+        (Locale::Ja, "close-guard.004") => "保存せずに閉じる",
+        (Locale::En, "close-guard.004") => "Discard Changes",
+        (Locale::Ja, "close-guard.005") => "キャンセル",
+        (Locale::En, "close-guard.005") => "Cancel",
+        (Locale::Ja, "close-guard.006") => "保存中… 完了後に閉じます",
+        (Locale::En, "close-guard.006") => "Saving… will close when finished",
+        (Locale::Ja, "close-guard.007") => "保存が完了しました。ウインドウを閉じます。",
+        (Locale::En, "close-guard.007") => "Saved. Closing the window.",
+        (Locale::Ja, "close-guard.008") => "終了をキャンセルしました",
+        (Locale::En, "close-guard.008") => "Cancelled closing the window",
+        (Locale::Ja, "close-guard.009") => "変更を残したまま終了をキャンセルしました",
+        (Locale::En, "close-guard.009") => "Cancelled closing and kept the changes",
+        (Locale::Ja, "document-open-guard.001") => "開く前に変更を保存しますか？",
+        (Locale::En, "document-open-guard.001") => "Save changes before opening?",
+        (Locale::Ja, "document-open-guard.002") => {
+            "現在の変更は、別のドキュメントを開くと置き換えられます。保存してから開くか、変更を破棄してください。"
+        }
+        (Locale::En, "document-open-guard.002") => {
+            "Opening another document replaces your current edits. Save them first, or explicitly discard them."
+        }
+        (Locale::Ja, "document-open-guard.003") => "変更を保存して開く",
+        (Locale::En, "document-open-guard.003") => "Save and Open",
+        (Locale::Ja, "document-open-guard.004") => "変更を破棄して開く",
+        (Locale::En, "document-open-guard.004") => "Discard and Open",
+        (Locale::Ja, "document-open-guard.005") => "キャンセル",
+        (Locale::En, "document-open-guard.005") => "Cancel",
+        (Locale::Ja, "document-open-guard.006") => "保存中… 保存が完了するとファイルを選択できます",
+        (Locale::En, "document-open-guard.006") => {
+            "Saving… choose the document after saving finishes"
+        }
+        (Locale::Ja, "document-open-guard.008") => "ドキュメントを開く操作をキャンセルしました",
+        (Locale::En, "document-open-guard.008") => "Cancelled opening another document",
+        (Locale::Ja, "document-open-guard.009") => {
+            "変更を残したままドキュメントを開く操作をキャンセルしました"
+        }
+        (Locale::En, "document-open-guard.009") => {
+            "Cancelled opening another document and kept the changes"
+        }
+        (Locale::Ja, "count-adjust.001") => "セット尺を調整",
+        (Locale::En, "count-adjust.001") => "Adjust set counts",
+        (Locale::Ja, "count-adjust.002") => {
+            "プレビュー中は保存しません。適用すると1回のUndoで戻せます。後続セットの開始カウントだけが移動します。"
+        }
+        (Locale::En, "count-adjust.002") => {
+            "Preview does not save. Apply creates one Undo step; only later set start counts move."
+        }
+        (Locale::Ja, "count-adjust.003") => "尺をプレビュー",
+        (Locale::En, "count-adjust.003") => "Preview count change",
+        (Locale::Ja, "count-adjust.004") => "後続セットの開始位置",
+        (Locale::En, "count-adjust.004") => "Later set starts",
+        (Locale::Ja, "count-adjust.005") => {
+            "演者位置・ルート・テンポデータは変えません。ルートに合わない尺は適用時に安全に拒否されます。"
+        }
+        (Locale::En, "count-adjust.005") => {
+            "Positions, routes, and tempo data stay unchanged. Unsafe route timing is rejected when applied."
+        }
+        (Locale::Ja, "count-adjust.006") => "適用（Undo 1回）",
+        (Locale::En, "count-adjust.006") => "Apply (one Undo)",
+        (Locale::Ja, "count-adjust.007") => "プレビューを破棄",
+        (Locale::En, "count-adjust.007") => "Discard preview",
+        (Locale::Ja, "count-adjust.008") => {
+            "セット尺を更新できません。ルートのタイミングを確認してください。"
+        }
+        (Locale::En, "count-adjust.008") => "Could not update set counts. Check route timing.",
+        (Locale::Ja, "count-adjust.009") => "セット尺を更新しました。Cmd+Zで戻せます。",
+        (Locale::En, "count-adjust.009") => "Set counts updated. Press Cmd+Z to undo.",
+        (Locale::Ja, "clipboard.001") => "コピーする演者を選択してください",
+        (Locale::En, "clipboard.001") => "Select performers to copy",
+        (Locale::Ja, "clipboard.002") => "人の位置をコピーしました。Cmd+Vでプレビューします。",
+        (Locale::En, "clipboard.002") => "performer positions copied. Press Cmd+V to preview.",
+        (Locale::Ja, "clipboard.003") => "貼り付けるコピーがありません",
+        (Locale::En, "clipboard.003") => "Nothing has been copied yet",
+        (Locale::Ja, "clipboard.004") => "現在のドキュメントに貼り付け可能な演者がいません",
+        (Locale::En, "clipboard.004") => "No copied performers can be pasted into this document",
+        (Locale::Ja, "clipboard.005") => "貼り付けプレビュー中です。適用またはEscで破棄できます。",
+        (Locale::En, "clipboard.005") => "Paste preview ready. Apply it or press Esc to discard.",
+        (Locale::Ja, "clipboard.006") => "貼り付けプレビューを破棄しました",
+        (Locale::En, "clipboard.006") => "Discarded paste preview",
+        (Locale::Ja, "clipboard.007") => "コピーした隊形を貼り付け",
+        (Locale::En, "clipboard.007") => "Paste copied formation",
+        (Locale::Ja, "clipboard.008") => "隊形を貼り付けました。Cmd+Zで戻せます。",
+        (Locale::En, "clipboard.008") => "Formation pasted. Press Cmd+Z to undo.",
+        (Locale::Ja, "clipboard.009") => "隊形をコピー",
+        (Locale::En, "clipboard.009") => "Copy Formation",
+        (Locale::Ja, "clipboard.010") => "隊形を貼り付け…",
+        (Locale::En, "clipboard.010") => "Paste Formation…",
+        (Locale::Ja, "clipboard.011") => "先にコピーする演者を選択してください",
+        (Locale::En, "clipboard.011") => "Select performers to copy first",
+        (Locale::Ja, "clipboard.012") => "先に隊形をコピーしてください",
+        (Locale::En, "clipboard.012") => "Copy a formation first",
+        (Locale::Ja, "clipboard.013") => "貼り付けをプレビュー",
+        (Locale::En, "clipboard.013") => "Preview pasted formation",
+        (Locale::Ja, "clipboard.014") => "人の同じIDの位置を更新します",
+        (Locale::En, "clipboard.014") => "matching stable performer IDs will update",
+        (Locale::Ja, "clipboard.015") => "適用（Undo 1回）",
+        (Locale::En, "clipboard.015") => "Apply (one Undo)",
+        (Locale::Ja, "clipboard.016") => "破棄（Esc）",
+        (Locale::En, "clipboard.016") => "Discard (Esc)",
+        (Locale::Ja, "clipboard.017") => {
+            "コピー元と同じ演者だけを更新します。文書は適用まで変更しません。"
+        }
+        (Locale::En, "clipboard.017") => {
+            "Only the same performers update. The document stays unchanged until Apply."
+        }
+        (Locale::Ja, "clipboard.018") => "隊形をコピー",
+        (Locale::En, "clipboard.018") => "Copy Formation",
+        (Locale::Ja, "clipboard.019") => "隊形を貼り付け…",
+        (Locale::En, "clipboard.019") => "Paste Formation…",
+        (Locale::Ja, "clipboard.020") => "隊形をコピー",
+        (Locale::En, "clipboard.020") => "Copy Formation",
+        (Locale::Ja, "clipboard.021") => "隊形を貼り付け…",
+        (Locale::En, "clipboard.021") => "Paste Formation…",
+        (Locale::Ja, "clipboard.022") => "現在のドキュメントに貼り付け可能な演者がいません",
+        (Locale::En, "clipboard.022") => "No copied performers can be pasted into this document",
+        (Locale::Ja, "clipboard.023") => "選択した同人数の演者に、中心を保って隊形を配置します",
+        (Locale::En, "clipboard.023") => {
+            "the selected equal-size group receives this shape at its current centre"
+        }
+        (Locale::Ja, "clipboard.024") => "行・列順で対応します。文書は適用まで変更しません。",
+        (Locale::En, "clipboard.024") => {
+            "Correspondence follows row/file order. The document stays unchanged until Apply."
+        }
+        (Locale::Ja, "focus-field.001") => "フィールドに集中",
+        (Locale::En, "focus-field.001") => "Focus Field",
+        (Locale::Ja, "focus-field.002") => "フィールド集中モードを開始しました",
+        (Locale::En, "focus-field.002") => "Focus Field enabled",
+        (Locale::Ja, "focus-field.003") => "通常のワークスペースに戻りました",
+        (Locale::En, "focus-field.003") => "Returned to the full workspace",
+        (Locale::Ja, "focus-field.004") => "集中モードを終了",
+        (Locale::En, "focus-field.004") => "Exit Focus",
+        (Locale::Ja, "focus-field.005") => "Esc または ⌘⇧F で通常表示に戻る",
+        (Locale::En, "focus-field.005") => "Press Esc or Cmd+Shift+F to return",
         _ => "[missing message]",
     }
 }

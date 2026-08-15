@@ -18,3 +18,7 @@ harness = false
 [[bench]]
 name = "max_project_save_latency"
 harness = false
+
+[[bench]]
+name = "analytics_performance"
+harness = false
