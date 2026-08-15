@@ -1188,6 +1188,10 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "workspace-inspector.098") => "Soccer",
         (Locale::Ja, "workspace-inspector.127") => "日本の大会規格 (30m四方)",
         (Locale::En, "workspace-inspector.127") => "Japan Floor (30m square)",
+        (Locale::Ja, "workspace-inspector.128") => "パレード隊形をプレビュー",
+        (Locale::En, "workspace-inspector.128") => "Preview parade formation",
+        (Locale::Ja, "workspace-inspector.129") => "Uターンをプレビュー",
+        (Locale::En, "workspace-inspector.129") => "Preview U-turn",
         (Locale::Ja, "workspace-inspector.099") => "ヤード",
         (Locale::En, "workspace-inspector.099") => "yards",
         (Locale::Ja, "workspace-inspector.100") => "メートル",
@@ -2090,6 +2094,14 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "app-ui.161") => "Redo (Ctrl/Cmd+Shift+Z)",
         (Locale::Ja, "app-ui.162") => "カラーテーマ",
         (Locale::En, "app-ui.162") => "Color Theme",
+        (Locale::Ja, "app-ui.163") => "ピンウィール",
+        (Locale::En, "app-ui.163") => "Pinwheel",
+        (Locale::Ja, "app-ui.164") => {
+            "選択した演者を中心点を軸に回転します。"
+        }
+        (Locale::En, "app-ui.164") => {
+            "Rotate the selected performers around their centroid."
+        }
         (Locale::Ja, "clinic-ui.001") => "警告から演者をフォーカス",
         (Locale::En, "clinic-ui.001") => "Focus performers from warnings",
         (Locale::Ja, "clinic-ui.002") => "衝突",

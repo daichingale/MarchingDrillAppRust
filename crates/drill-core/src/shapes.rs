@@ -8,7 +8,7 @@
 use crate::{DrillError, PerformerId, Point, SectionId};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::f32::consts::TAU;
+use std::f32::consts::{PI, TAU};
 
 /// A rectangular block grid of `cols * rows` points in row-major order.
 ///
@@ -291,6 +291,25 @@ pub enum ShapeSpec {
     Text {
         contours: Vec<Vec<Point>>,
     },
+    /// A column turnaround ("Uターン"): a straight outbound leg of
+    /// `leg_length` from `start` in `direction`, a curved turnaround of
+    /// `turn_radius`, then a straight return leg of `leg_length` back in the
+    /// opposite direction, offset perpendicular from the outbound leg by
+    /// `lane_spacing`. When `lane_spacing == 2 * turn_radius` the turnaround
+    /// is a tangent semicircle (a classic hairpin); other combinations still
+    /// produce a continuous path, with a short perpendicular jog connecting
+    /// the arc to the return leg.
+    UTurn {
+        start: Point,
+        /// Direction (radians) of the initial straight leg.
+        direction: f32,
+        /// Length of each straight leg.
+        leg_length: f32,
+        /// Radius of the semicircular turn connecting the two legs.
+        turn_radius: f32,
+        /// Perpendicular distance between the outbound and return legs.
+        lane_spacing: f32,
+    },
 }
 
 impl ShapeSpec {
@@ -435,6 +454,21 @@ impl ShapeSpec {
                     && contours.iter().all(|c| points_ok(c))
                     && contours.iter().map(Vec::len).sum::<usize>() <= MAX_SHAPE_VERTICES
             }
+            Self::UTurn {
+                start,
+                direction,
+                leg_length,
+                turn_radius,
+                lane_spacing,
+            } => {
+                finite(*start)
+                    && direction.is_finite()
+                    && *leg_length >= 0.0
+                    && leg_length.is_finite()
+                    && *turn_radius >= 0.0
+                    && turn_radius.is_finite()
+                    && lane_spacing.is_finite()
+            }
         };
         if ok {
             Ok(())
@@ -574,6 +608,23 @@ impl ShapeSpec {
             ),
             Self::FreePath { vertices } => polyline(vertices, count),
             Self::Text { contours } => sample_text(contours, count),
+            Self::UTurn {
+                start,
+                direction,
+                leg_length,
+                turn_radius,
+                lane_spacing,
+            } => polyline(
+                &uturn_vertices(
+                    *start,
+                    *direction,
+                    leg_length.max(0.0),
+                    turn_radius.max(0.0),
+                    *lane_spacing,
+                    count,
+                ),
+                count,
+            ),
         };
         points.truncate(count);
         if points.len() != count {
@@ -581,6 +632,55 @@ impl ShapeSpec {
         }
         out.append(&mut points);
     }
+}
+
+/// Dense polyline vertices for [`ShapeSpec::UTurn`]: a straight outbound leg,
+/// a semicircular turnaround of `turn_radius`, a perpendicular jog to the
+/// `lane_spacing` offset (zero-length when `lane_spacing == 2 * turn_radius`),
+/// then the straight return leg. Feeding this into [`polyline`] gives uniform
+/// arc-length spacing across the whole hairpin, matching [`FreePath`](ShapeSpec::FreePath).
+fn uturn_vertices(
+    start: Point,
+    direction: f32,
+    leg_length: f32,
+    turn_radius: f32,
+    lane_spacing: f32,
+    count: usize,
+) -> Vec<Point> {
+    let fwd = Point {
+        x: direction.cos(),
+        y: direction.sin(),
+    };
+    let left = Point {
+        x: -direction.sin(),
+        y: direction.cos(),
+    };
+    let along = |p: Point, v: Point, d: f32| Point {
+        x: p.x + v.x * d,
+        y: p.y + v.y * d,
+    };
+    let end_a = along(start, fwd, leg_length);
+    let arc_center = along(end_a, left, turn_radius);
+    let angle0 = (end_a.y - arc_center.y).atan2(end_a.x - arc_center.x);
+    // Sweep the far side of the circle from `arc_center`, curving toward
+    // `left` so the arc bulges away from the outbound leg rather than
+    // crossing back over it.
+    let arc_segments = count.saturating_mul(4).clamp(64, 2_048);
+    let mut verts = Vec::with_capacity(arc_segments + 4);
+    verts.push(start);
+    verts.push(end_a);
+    for i in 1..=arc_segments {
+        let t = i as f32 / arc_segments as f32;
+        let angle = angle0 + PI * t;
+        verts.push(Point {
+            x: arc_center.x + turn_radius * angle.cos(),
+            y: arc_center.y + turn_radius * angle.sin(),
+        });
+    }
+    let lane_end = along(end_a, left, lane_spacing);
+    verts.push(lane_end);
+    verts.push(along(lane_end, fwd, -leg_length));
+    verts
 }
 
 fn rotate_local(c: Point, x: f32, y: f32, a: f32) -> Point {
@@ -1210,6 +1310,13 @@ mod tests {
                     Point { x: 1.0, y: 2.0 },
                 ]],
             },
+            ShapeSpec::UTurn {
+                start: c,
+                direction: 0.3,
+                leg_length: 12.0,
+                turn_radius: 3.0,
+                lane_spacing: 6.0,
+            },
         ];
         for spec in specs {
             spec.validate().unwrap();
@@ -1247,6 +1354,108 @@ mod tests {
             .validate()
             .is_err()
         );
+        assert!(
+            ShapeSpec::UTurn {
+                start: Point::default(),
+                direction: 0.0,
+                leg_length: -1.0,
+                turn_radius: 3.0,
+                lane_spacing: 6.0,
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            ShapeSpec::UTurn {
+                start: Point::default(),
+                direction: 0.0,
+                leg_length: 10.0,
+                turn_radius: f32::NAN,
+                lane_spacing: 6.0,
+            }
+            .validate()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn uturn_sample_has_expected_count_and_endpoints() {
+        let start = Point { x: 5.0, y: 10.0 };
+        let spec = ShapeSpec::UTurn {
+            start,
+            direction: 0.0,
+            leg_length: 12.0,
+            turn_radius: 3.0,
+            lane_spacing: 6.0,
+        };
+        spec.validate().unwrap();
+        let mut out = Vec::new();
+        spec.sample(24, &mut out);
+        assert_eq!(out.len(), 24);
+        assert!(out.iter().all(|p| p.x.is_finite() && p.y.is_finite()));
+        // Outbound leg starts at `start`.
+        assert!(close(out[0], start));
+        // With lane_spacing == 2 * turn_radius the turnaround is a tangent
+        // semicircle, so the return leg ends directly "above" `start` (offset
+        // by lane_spacing perpendicular to the direction of travel).
+        assert!(close(
+            out[23],
+            Point {
+                x: start.x,
+                y: start.y + 6.0
+            }
+        ));
+    }
+
+    #[test]
+    fn uturn_zero_count_and_one_count() {
+        let spec = ShapeSpec::UTurn {
+            start: Point { x: 1.0, y: 1.0 },
+            direction: 0.5,
+            leg_length: 8.0,
+            turn_radius: 2.0,
+            lane_spacing: 4.0,
+        };
+        let mut out = Vec::new();
+        spec.sample(0, &mut out);
+        assert!(out.is_empty());
+        spec.sample(1, &mut out);
+        assert_eq!(out.len(), 1);
+        assert!(close(out[0], Point { x: 1.0, y: 1.0 }));
+    }
+
+    #[test]
+    fn uturn_spacing_is_uniform_by_arc_length() {
+        let spec = ShapeSpec::UTurn {
+            start: Point::default(),
+            direction: 0.25,
+            leg_length: 15.0,
+            turn_radius: 4.0,
+            lane_spacing: 8.0,
+        };
+        let mut out = Vec::new();
+        spec.sample(40, &mut out);
+        assert_uniform_chord_spacing(&out, 0.02);
+    }
+
+    #[test]
+    fn uturn_independent_lane_spacing_still_bounded_and_finite() {
+        // When lane_spacing != 2 * turn_radius the turnaround is no longer a
+        // tangent semicircle (a short perpendicular jog connects the arc to
+        // the return leg), but the path must still be a valid, finite,
+        // exact-count polyline.
+        let spec = ShapeSpec::UTurn {
+            start: Point::default(),
+            direction: 1.0,
+            leg_length: 10.0,
+            turn_radius: 5.0,
+            lane_spacing: 2.0,
+        };
+        spec.validate().unwrap();
+        let mut out = Vec::new();
+        spec.sample(30, &mut out);
+        assert_eq!(out.len(), 30);
+        assert!(out.iter().all(|p| p.x.is_finite() && p.y.is_finite()));
     }
 
     #[test]
