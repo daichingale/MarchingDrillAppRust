@@ -180,7 +180,7 @@ impl DrillApp {
             ui.small(super::i18n::registered(self.locale, "workspace-inspector.014"));
             if self.document.performers.is_empty() {
                 egui::Frame::new()
-                    .fill(Color32::from_rgb(38, 55, 72))
+                    .fill(ui.visuals().faint_bg_color)
                     .inner_margin(10)
                     .corner_radius(5)
                     .show(ui, |ui| {

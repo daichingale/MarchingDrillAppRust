@@ -1,5 +1,5 @@
 use drill_core::Locale;
-use eframe::egui::{self, Color32};
+use eframe::egui;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -122,7 +122,7 @@ impl OnboardingState {
             ui.label(super::i18n::registered(locale, "onboarding.002"));
             ui.add_space(8.0);
             egui::Frame::new()
-                .fill(Color32::from_rgb(27, 37, 49))
+                .fill(ui.visuals().faint_bg_color)
                 .inner_margin(12)
                 .corner_radius(6)
                 .show(ui, |ui| {

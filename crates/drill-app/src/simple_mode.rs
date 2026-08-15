@@ -345,7 +345,7 @@ impl DrillApp {
             });
             ui.add_space(4.0);
             egui::Frame::new()
-                .fill(Color32::from_rgb(27, 37, 49))
+                .fill(ui.visuals().faint_bg_color)
                 .inner_margin(10)
                 .corner_radius(6)
                 .show(ui, |ui| {
@@ -530,7 +530,7 @@ impl DrillApp {
             .round()
             .clamp(0.0, total_counts as f32) as u32;
         egui::Frame::new()
-            .fill(Color32::from_rgb(20, 27, 36))
+            .fill(ui.visuals().faint_bg_color)
             .inner_margin(8)
             .corner_radius(6)
             .show(ui, |ui| {

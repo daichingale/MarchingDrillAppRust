@@ -1,5 +1,7 @@
 #[path = "analytics_state.rs"]
 mod analytics_state;
+#[path = "app_theme.rs"]
+mod app_theme;
 #[path = "app_ui.rs"]
 mod app_ui;
 #[path = "audio_state.rs"]
@@ -468,6 +470,7 @@ pub(crate) struct DrillApp {
     timeline_view: TimelineViewport,
     timeline_follow: bool,
     onboarding: onboarding::OnboardingState,
+    app_theme: app_theme::AppTheme,
     simple_mode: simple_mode::SimpleModeState,
     ever_played: bool,
     locale: Locale,
@@ -608,6 +611,7 @@ impl Default for DrillApp {
             timeline_view: TimelineViewport::fit(playback_end),
             timeline_follow: true,
             onboarding: onboarding::OnboardingState::default(),
+            app_theme: app_theme::AppTheme::default(),
             simple_mode: simple_mode::SimpleModeState::default(),
             ever_played: false,
             locale: Locale::Ja,
@@ -1389,9 +1393,12 @@ impl DrillApp {
         }
     }
     fn new(creation: &eframe::CreationContext<'_>) -> Self {
+        let app_theme = app_theme::AppTheme::load();
+        app_theme.apply(&creation.egui_ctx);
         Self {
             onboarding: onboarding::OnboardingState::load(),
             gpu: gpu_bridge::Bridge::install(creation),
+            app_theme,
             ..Self::default()
         }
     }

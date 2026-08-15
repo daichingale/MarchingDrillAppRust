@@ -2088,6 +2088,8 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "app-ui.160") => "Undo (Ctrl/Cmd+Z)",
         (Locale::Ja, "app-ui.161") => "やり直す (Ctrl/Cmd+Shift+Z)",
         (Locale::En, "app-ui.161") => "Redo (Ctrl/Cmd+Shift+Z)",
+        (Locale::Ja, "app-ui.162") => "カラーテーマ",
+        (Locale::En, "app-ui.162") => "Color Theme",
         (Locale::Ja, "clinic-ui.001") => "警告から演者をフォーカス",
         (Locale::En, "clinic-ui.001") => "Focus performers from warnings",
         (Locale::Ja, "clinic-ui.002") => "衝突",

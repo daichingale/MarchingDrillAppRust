@@ -1,6 +1,19 @@
 use super::*;
 
 impl eframe::App for DrillApp {
+    /// This app never wraps its content in `egui::CentralPanel`, so the
+    /// canvas behind every widget is exactly this clear color. eframe's
+    /// default implementation ignores `visuals` and hardcodes a near-black
+    /// gray, which happened to look plausible under the dark app themes but
+    /// left the whole window canvas black under the Daylight theme (all
+    /// widgets themed correctly, but painted over a background that never
+    /// changed). `visuals` here is `egui_ctx.global_style().visuals`, i.e.
+    /// exactly the currently active `AppTheme`, so this keeps the canvas in
+    /// sync with whatever the user picked from the Color Theme menu.
+    fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
+        visuals.panel_fill.to_normalized_gamma_f32()
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
         // Native close requests are advisory for this frame.  Cancel first so
         // the confirmation sheet always has a chance to be painted.
@@ -54,25 +67,12 @@ impl eframe::App for DrillApp {
         if self.text_export_state.is_running() {
             ui.ctx().request_repaint_after(Duration::from_millis(50));
         }
-        let visuals = ui.visuals_mut();
-        visuals.override_text_color = None;
-        visuals.widgets.noninteractive.fg_stroke.color = Color32::from_gray(225);
-        // `inactive` is egui's normal enabled widget state, not the disabled state.
-        // Keep it readable against the dark button fill; disabled widgets are
-        // dimmed separately by egui's opacity handling.
-        visuals.widgets.inactive.fg_stroke.color = Color32::from_gray(225);
-        visuals.widgets.hovered.fg_stroke.color = Color32::WHITE;
-        visuals.widgets.active.fg_stroke.color = Color32::WHITE;
-        visuals.widgets.open.fg_stroke.color = Color32::WHITE;
-        visuals.widgets.inactive.bg_fill = Color32::from_rgb(36, 45, 58);
-        visuals.widgets.inactive.weak_bg_fill = Color32::from_rgb(36, 45, 58);
-        visuals.widgets.hovered.bg_fill = Color32::from_rgb(52, 66, 84);
-        visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(52, 66, 84);
-        visuals.widgets.active.bg_fill = Color32::from_rgb(67, 88, 112);
-        visuals.widgets.active.weak_bg_fill = Color32::from_rgb(67, 88, 112);
-        visuals.widgets.open.bg_fill = Color32::from_rgb(45, 58, 74);
-        visuals.widgets.open.weak_bg_fill = Color32::from_rgb(45, 58, 74);
-        visuals.selection.bg_fill = Color32::from_rgb(42, 112, 163);
+        // Theming lives entirely in app_theme.rs / DrillApp::new now: this
+        // used to re-hardcode the Studio theme's colors here every frame,
+        // which silently clobbered any other theme the user picked from the
+        // Color Theme menu before this widget tree ever got a chance to
+        // paint with it.
+        ui.visuals_mut().override_text_color = None;
         let now = Instant::now();
         let dt = now.duration_since(self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
@@ -672,6 +672,26 @@ impl eframe::App for DrillApp {
                             self.dirty = true;
                         }
                     }
+                    ui.separator();
+                    // App chrome only: the field view keeps its own
+                    // print-styled drill_render::Theme regardless of this
+                    // choice (see app_theme.rs's module doc comment).
+                    ui.menu_button(super::i18n::registered(self.locale, "app-ui.162"), |ui| {
+                        for candidate in app_theme::AppTheme::ALL {
+                            if ui
+                                .radio_value(
+                                    &mut self.app_theme,
+                                    candidate,
+                                    candidate.label(self.locale),
+                                )
+                                .changed()
+                            {
+                                self.app_theme.apply(ui.ctx());
+                                self.app_theme.persist();
+                                ui.close();
+                            }
+                        }
+                    });
                 });
                 ui.menu_button(super::i18n::registered(self.locale, "app-ui.020"), |ui| {
                     self.command_menu(ui, CommandMenu::Workspace);
@@ -761,7 +781,7 @@ impl eframe::App for DrillApp {
             // canvas-first workspace feel modal. Playback stays here because
             // checking motion is still part of hands-on field work.
             egui::Frame::new()
-                .fill(Color32::from_rgb(25, 33, 44))
+                .fill(ui.visuals().faint_bg_color)
                 .inner_margin(6)
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -1135,7 +1155,7 @@ impl eframe::App for DrillApp {
         if !self.selected.is_empty() {
             let selected_count = self.selected.len();
             egui::Frame::new()
-                .fill(Color32::from_rgb(27, 46, 63))
+                .fill(ui.visuals().faint_bg_color)
                 .inner_margin(8)
                 .corner_radius(6)
                 .show(ui, |ui| {
@@ -1269,7 +1289,7 @@ impl eframe::App for DrillApp {
         }
         if self.show_guidance {
             egui::Frame::new()
-                .fill(Color32::from_rgb(29, 38, 51))
+                .fill(ui.visuals().faint_bg_color)
                 .inner_margin(8)
                 .corner_radius(5)
                 .show(ui, |ui| {
@@ -1297,7 +1317,7 @@ impl eframe::App for DrillApp {
             .observe(!self.selected.is_empty(), self.dirty, self.ever_played);
         if let Some((step, message)) = self.onboarding.coach_message(self.locale) {
             egui::Frame::new()
-                .fill(Color32::from_rgb(38, 55, 72))
+                .fill(ui.visuals().faint_bg_color)
                 .inner_margin(8)
                 .corner_radius(5)
                 .show(ui, |ui| {
@@ -1319,7 +1339,7 @@ impl eframe::App for DrillApp {
         }
         if !self.project_state.crashes.is_empty() && !self.crash_notice_dismissed {
             egui::Frame::new()
-                .fill(Color32::from_rgb(63, 31, 35))
+                .fill(ui.visuals().faint_bg_color)
                 .inner_margin(8)
                 .show(ui, |ui| {
                     ui.horizontal_wrapped(|ui| {
@@ -1342,7 +1362,7 @@ impl eframe::App for DrillApp {
             let mut open = None;
             let mut ignore = None;
             egui::Frame::new()
-                .fill(Color32::from_rgb(54, 42, 20))
+                .fill(ui.visuals().faint_bg_color)
                 .inner_margin(8)
                 .show(ui, |ui| {
                     ui.label(egui::RichText::new(text(self.locale, Text::RecoveryTitle)).strong());
@@ -1401,7 +1421,7 @@ impl eframe::App for DrillApp {
         }
         let total_counts = self.document.timeline_counts();
         egui::Frame::new()
-            .fill(Color32::from_rgb(20, 27, 36))
+            .fill(ui.visuals().faint_bg_color)
             .inner_margin(8)
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
