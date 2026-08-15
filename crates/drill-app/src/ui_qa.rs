@@ -606,6 +606,145 @@ mod tests {
     }
 
     #[test]
+    fn knife_splits_a_known_selection_by_a_known_cut_line_and_touches_no_history() {
+        let mut app = DrillApp::default();
+
+        // Four performers at known positions, two on each side of a
+        // straight vertical cut at x = 0.
+        app.document.sets[app.current_set].positions[0] = Point { x: -10.0, y: 0.0 };
+        app.document.sets[app.current_set].positions[1] = Point { x: -5.0, y: 3.0 };
+        app.document.sets[app.current_set].positions[2] = Point { x: 5.0, y: -2.0 };
+        app.document.sets[app.current_set].positions[3] = Point { x: 10.0, y: 1.0 };
+        app.selected = [0_usize, 1, 2, 3].into_iter().collect();
+
+        // Everything above is test setup, not part of what Knife itself
+        // should be judged against: capture the document/history baseline
+        // only now, so the assertions below prove the cut itself makes no
+        // further document or undo-history change.
+        let document_before = app.document.clone();
+        let revision = app.history.revision();
+
+        // A vertical line (dx = 0, dy = 40) gives cross = -1 * (px - 0), so
+        // side_a (cross >= 0) is exactly the performers with x <= 0.
+        app.apply_knife_cut(Point { x: 0.0, y: -20.0 }, Point { x: 0.0, y: 20.0 });
+
+        let result = app.knife_result.clone().expect("cut produced a result");
+        assert_eq!(result.side_a, [0_usize, 1].into_iter().collect());
+        assert_eq!(result.side_b, [2_usize, 3].into_iter().collect());
+        // The lower-indexed performer (0) is on side_a, so side_a is the
+        // default active selection.
+        assert!(result.active_side_a);
+        assert_eq!(app.selected, result.side_a);
+
+        assert_eq!(app.document, document_before);
+        assert_eq!(app.history.revision(), revision);
+    }
+
+    #[test]
+    fn knife_invert_swaps_sides_without_touching_selection_history_or_undo() {
+        let mut app = DrillApp::default();
+        let revision = app.history.revision();
+        app.document.sets[app.current_set].positions[0] = Point { x: -1.0, y: 0.0 };
+        app.document.sets[app.current_set].positions[1] = Point { x: 1.0, y: 0.0 };
+        app.selected = [0_usize, 1].into_iter().collect();
+
+        app.apply_knife_cut(Point { x: 0.0, y: -5.0 }, Point { x: 0.0, y: 5.0 });
+        let left = app.selected.clone();
+        let stack_depth = app.selection_stack.len();
+
+        app.invert_knife_side();
+        assert_ne!(app.selected, left);
+        assert_eq!(app.selection_stack.len(), stack_depth);
+
+        app.invert_knife_side();
+        assert_eq!(app.selected, left);
+        assert_eq!(app.history.revision(), revision);
+    }
+
+    #[test]
+    fn knife_with_empty_selection_cuts_the_whole_cast() {
+        let mut app = DrillApp::default();
+        app.selected.clear();
+        let total = app.document.performers.len();
+
+        app.apply_knife_cut(Point { x: 0.0, y: -1000.0 }, Point { x: 0.0, y: 1000.0 });
+
+        let result = app.knife_result.expect("cut produced a result");
+        assert_eq!(result.side_a.len() + result.side_b.len(), total);
+    }
+
+    #[test]
+    fn knife_ignores_a_degenerate_zero_length_line() {
+        let mut app = DrillApp::default();
+        app.selected = [0_usize, 1].into_iter().collect();
+        let before = app.selected.clone();
+
+        app.apply_knife_cut(Point { x: 3.0, y: 3.0 }, Point { x: 3.0, y: 3.0 });
+
+        assert!(app.knife_result.is_none());
+        assert_eq!(app.selected, before);
+    }
+
+    #[test]
+    fn glue_merges_recent_selections_and_dedupes_without_touching_undo() {
+        let mut app = DrillApp::default();
+        let document = app.document.clone();
+        let revision = app.history.revision();
+
+        app.replace_selection([0_usize, 1].into_iter().collect());
+        app.replace_selection([1_usize, 2].into_iter().collect());
+        app.replace_selection([3_usize].into_iter().collect());
+        // Stack (oldest..newest) is now [{0,1}, {1,2}]; current is {3}.
+
+        app.glue_merge_recent(2);
+
+        assert_eq!(app.selected, [0_usize, 1, 2, 3].into_iter().collect());
+        // The two merged entries are consumed; the pre-glue selection ({3})
+        // is remembered in their place, so it stays one Restore away.
+        assert_eq!(app.selection_stack.len(), 1);
+        assert!(
+            app.selection_stack
+                .contains(&[3_usize].into_iter().collect())
+        );
+        assert_eq!(app.document, document);
+        assert_eq!(app.history.revision(), revision);
+    }
+
+    #[test]
+    fn glue_merge_one_consumes_only_the_chosen_entry() {
+        let mut app = DrillApp::default();
+        app.replace_selection([0_usize].into_iter().collect());
+        app.replace_selection([1_usize].into_iter().collect());
+        app.replace_selection([2_usize].into_iter().collect());
+        // Stack (oldest..newest) is now [{0}, {1}]; current is {2}.
+
+        app.glue_merge_one(1); // recency 1 = the older entry, {0}.
+
+        assert_eq!(app.selected, [0_usize, 2].into_iter().collect());
+        assert!(app.selection_stack.contains(&[1_usize].into_iter().collect()));
+        assert_eq!(app.selection_stack.len(), 2); // {1} plus the pre-glue {2}.
+    }
+
+    #[test]
+    fn glue_output_can_itself_be_recalled_afterward() {
+        let mut app = DrillApp::default();
+        app.replace_selection([0_usize].into_iter().collect());
+        app.replace_selection([1_usize].into_iter().collect());
+
+        app.glue_merge_one(0); // merges {1} (current) with {0} -> {0, 1}
+        assert_eq!(app.selected, [0_usize, 1].into_iter().collect());
+
+        // Moving on to a new selection should push the glued group onto the
+        // history stack automatically, the same as any other selection
+        // change, without Glue needing its own explicit bookkeeping.
+        app.replace_selection([2_usize].into_iter().collect());
+        assert!(
+            app.selection_stack
+                .contains(&[0_usize, 1].into_iter().collect())
+        );
+    }
+
+    #[test]
     fn undo_and_redo_publish_a_persistent_status_result() {
         let context = egui::Context::default();
         let mut app = DrillApp::default();

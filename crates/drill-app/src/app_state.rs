@@ -388,6 +388,20 @@ pub(crate) struct SetCountDraft {
     pub(crate) moves: u16,
 }
 
+/// The result of a Knife cut, kept only long enough for the writer to pick a
+/// side. Session-only: drawing, inverting, or dismissing a cut never records
+/// an `Edit`; the resulting selection change goes through the same direct
+/// field mutation as every other selection change in this file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct KnifeSplit {
+    /// Performers where the cut line's cross product is `>= 0`.
+    pub(crate) side_a: BTreeSet<usize>,
+    /// Performers on the other side of the cut line.
+    pub(crate) side_b: BTreeSet<usize>,
+    /// True when `side_a` is the currently active selection.
+    pub(crate) active_side_a: bool,
+}
+
 pub(crate) struct DrillApp {
     document: Document,
     view_mode: ViewMode,
@@ -500,6 +514,17 @@ pub(crate) struct DrillApp {
     formation_preview_points: Vec<Point>,
     free_draw_active: bool,
     free_draw_raw: Vec<Point>,
+    /// True while a Knife drag across the field is being captured. Mirrors
+    /// `marquee_origin`'s exclusivity with click-select, drag-move, marquee,
+    /// and free-draw so the field view never interprets a cut drag as one of
+    /// those instead.
+    knife_active: bool,
+    /// Screen-space origin of the in-progress Knife drag.
+    knife_origin: Option<Pos2>,
+    /// The most recent completed cut. Kept so the toolbar can offer
+    /// "invert" without redrawing the line; cleared by a new cut, an
+    /// explicit dismiss, or Escape.
+    knife_result: Option<KnifeSplit>,
     formation_text: String,
     underlay_state: underlay_state::UnderlayState,
     /// Revision-gated background analytics; no heavy analysis executes in an
@@ -642,6 +667,9 @@ impl Default for DrillApp {
             formation_preview_points: Vec::new(),
             free_draw_active: false,
             free_draw_raw: Vec::with_capacity(512),
+            knife_active: false,
+            knife_origin: None,
+            knife_result: None,
             formation_text: "DRILL".into(),
             underlay_state: underlay_state::UnderlayState::default(),
             analytics_state: analytics_state::AnalyticsState::default(),
@@ -792,6 +820,175 @@ impl DrillApp {
         self.hidden_performers.clear();
         self.last_filtered_performers.clear();
         self.visibility_focus = None;
+        self.cancel_knife();
+    }
+
+    /// Splits `base` into the two sides of the straight line from `start` to
+    /// `end`, using a 2D cross-product half-plane test against each
+    /// performer's CURRENT position. A point exactly on the line (`cross ==
+    /// 0.0`) is treated as `side_a`. Returns `None` for a near-zero-length
+    /// line (almost always an accidental click rather than an intended cut)
+    /// or when `base` yields no on-document indexes.
+    fn knife_cut(&self, start: Point, end: Point, base: impl Iterator<Item = usize>) -> Option<KnifeSplit> {
+        let dx = end.x - start.x;
+        let dy = end.y - start.y;
+        if dx.hypot(dy) < 1e-4 {
+            return None;
+        }
+        let positions = &self.document.sets[self.current_set].positions;
+        let mut side_a = BTreeSet::new();
+        let mut side_b = BTreeSet::new();
+        for index in base {
+            let Some(point) = positions.get(index) else {
+                continue;
+            };
+            let cross = dx * (point.y - start.y) - dy * (point.x - start.x);
+            if cross >= 0.0 {
+                side_a.insert(index);
+            } else {
+                side_b.insert(index);
+            }
+        }
+        if side_a.is_empty() && side_b.is_empty() {
+            return None;
+        }
+        // Default to whichever side holds the lower-indexed performer: a
+        // deterministic, predictable anchor the writer can flip with one
+        // click rather than a coin toss.
+        let active_side_a = match (side_a.iter().next(), side_b.iter().next()) {
+            (Some(_), None) => true,
+            (None, Some(_)) => false,
+            (Some(a), Some(b)) => a <= b,
+            (None, None) => unreachable!("guarded above: both sides are non-empty"),
+        };
+        Some(KnifeSplit {
+            side_a,
+            side_b,
+            active_side_a,
+        })
+    }
+
+    /// Starts a Knife drag. Any pending result from a previous cut is
+    /// discarded: a fresh drag begins a fresh decision. Any other exclusive
+    /// canvas mode (a proposed formation, an in-progress free draw, or a
+    /// pending clipboard paste) is cancelled first so the field view never
+    /// has two competing pending actions at once.
+    fn begin_knife(&mut self) {
+        self.cancel_shape_preview();
+        self.cancel_clipboard_paste_preview();
+        self.knife_active = true;
+        self.knife_origin = None;
+        self.knife_result = None;
+        self.status = i18n::registered(self.locale, "app-state.156").into();
+    }
+
+    /// Cancels an in-progress drag and/or dismisses a shown result. Used by
+    /// the toolbar's Cancel/Close buttons and by Escape.
+    fn cancel_knife(&mut self) {
+        self.knife_active = false;
+        self.knife_origin = None;
+        self.knife_result = None;
+    }
+
+    /// Finishes a Knife drag: splits the working selection (or, if nothing
+    /// is selected, the entire cast) by the line from `start` to `end`, and
+    /// applies the default side as the new selection. The pre-cut selection
+    /// is preserved on the session-only selection stack via
+    /// `replace_selection`, exactly like any other selection change, so it
+    /// remains one click away via Restore Previous Selection.
+    fn apply_knife_cut(&mut self, start: Point, end: Point) {
+        self.knife_active = false;
+        self.knife_origin = None;
+        let base: Box<dyn Iterator<Item = usize> + '_> = if self.selected.is_empty() {
+            Box::new(0..self.document.performers.len())
+        } else {
+            Box::new(self.selected.iter().copied())
+        };
+        let Some(split) = self.knife_cut(start, end, base) else {
+            self.knife_result = None;
+            self.status = i18n::registered(self.locale, "app-state.157").into();
+            return;
+        };
+        let active = if split.active_side_a {
+            split.side_a.clone()
+        } else {
+            split.side_b.clone()
+        };
+        self.replace_selection(active);
+        self.knife_result = Some(split);
+        self.status = i18n::registered(self.locale, "app-state.158").into();
+    }
+
+    /// Swaps which side of the last cut is active. This does not touch the
+    /// selection-history stack: the pre-cut selection was already
+    /// remembered once, in `apply_knife_cut`, and flipping sides mid-decision
+    /// is not itself a new selection worth remembering.
+    fn invert_knife_side(&mut self) {
+        let Some(result) = &mut self.knife_result else {
+            return;
+        };
+        result.active_side_a = !result.active_side_a;
+        let next = if result.active_side_a {
+            result.side_a.clone()
+        } else {
+            result.side_b.clone()
+        };
+        self.selected = next
+            .into_iter()
+            .filter(|&index| self.is_selectable_index(index))
+            .collect();
+    }
+
+    /// Merges the selection at `recency` (0 = most recent) into the current
+    /// working selection and removes it from the history stack --
+    /// consistent with `restore_selection_history_at`: pulling a past group
+    /// back out consumes it rather than leaving a stale duplicate behind.
+    fn glue_merge_one(&mut self, recency: usize) {
+        let Some(index) = self
+            .selection_stack
+            .len()
+            .checked_sub(recency.saturating_add(1))
+        else {
+            return;
+        };
+        let source = self.selection_stack.remove(index);
+        let mut merged = self.selected.clone();
+        merged.extend(source.iter().copied());
+        let merged: BTreeSet<usize> = merged
+            .into_iter()
+            .filter(|&index| self.is_selectable_index(index))
+            .collect();
+        if merged != self.selected {
+            self.remember_selection();
+            self.selected = merged;
+        }
+    }
+
+    /// Merges the current selection with the last `count` entries on the
+    /// history stack in one action -- the "combine all shown" Glue
+    /// shortcut. Merged performer indexes are deduplicated by construction
+    /// (`self.selected` and `selection_stack` entries are already
+    /// `BTreeSet`s); there is no per-performer click order to preserve here,
+    /// since `self.selected` itself carries none.
+    fn glue_merge_recent(&mut self, count: usize) {
+        let take = count.min(self.selection_stack.len());
+        if take == 0 {
+            return;
+        }
+        let start = self.selection_stack.len() - take;
+        let drained: Vec<BTreeSet<usize>> = self.selection_stack.drain(start..).collect();
+        let mut merged = self.selected.clone();
+        for set in &drained {
+            merged.extend(set.iter().copied());
+        }
+        let merged: BTreeSet<usize> = merged
+            .into_iter()
+            .filter(|&index| self.is_selectable_index(index))
+            .collect();
+        if merged != self.selected {
+            self.remember_selection();
+            self.selected = merged;
+        }
     }
 
     fn is_locked_index(&self, index: usize) -> bool {
