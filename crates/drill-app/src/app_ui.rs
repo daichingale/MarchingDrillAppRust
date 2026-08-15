@@ -339,6 +339,8 @@ impl eframe::App for DrillApp {
         let cancel_preview = !palette_open
             && (self.formation_preview_spec.is_some()
                 || self.free_draw_active
+                || self.knife_active
+                || self.knife_result.is_some()
                 || self.clipboard_paste_preview.is_some())
             && !ui.ctx().egui_wants_keyboard_input()
             && ui.input_mut(|input| {
@@ -350,6 +352,8 @@ impl eframe::App for DrillApp {
         if cancel_preview {
             if self.clipboard_paste_preview.is_some() {
                 self.cancel_clipboard_paste_preview();
+            } else if self.knife_active || self.knife_result.is_some() {
+                self.cancel_knife();
             } else {
                 self.cancel_shape_preview();
             }
@@ -2394,7 +2398,30 @@ impl eframe::App for DrillApp {
                     // Discard so the visible proposal cannot silently target
                     // a different group of performers.
                     let interaction_locked = self.formation_preview_spec.is_some()
-                        || self.clipboard_paste_preview.is_some();
+                        || self.clipboard_paste_preview.is_some()
+                        || self.knife_active;
+                    if !panning && self.knife_active && response.drag_started() {
+                        self.knife_origin = Some(pointer);
+                    }
+                    if !panning
+                        && self.knife_active
+                        && response.dragged()
+                        && let Some(origin) = self.knife_origin
+                    {
+                        painter.line_segment(
+                            [origin, pointer],
+                            Stroke::new(2.0, Color32::from_rgb(255, 120, 90)),
+                        );
+                    }
+                    if !panning && self.knife_active && response.drag_stopped() {
+                        if let Some(origin) = self.knife_origin.take() {
+                            let start = from_screen(origin);
+                            let end = from_screen(pointer);
+                            self.apply_knife_cut(start, end);
+                        } else {
+                            self.cancel_knife();
+                        }
+                    }
                     if !panning
                         && self.free_draw_active
                         && (response.drag_started() || response.dragged())
@@ -2583,6 +2610,7 @@ impl eframe::App for DrillApp {
                 if !self.selected.is_empty()
                     && self.formation_preview_spec.is_none()
                     && !self.free_draw_active
+                    && !self.knife_active
                 {
                     response.context_menu(|ui| {
                         ui.label(

@@ -252,10 +252,111 @@ impl DrillApp {
                         }
                     },
                 );
+                ui.separator();
+                if ui
+                    .add_enabled(
+                        !self.knife_active,
+                        egui::Button::new(super::i18n::registered(
+                            self.locale,
+                            "workspace-inspector.128",
+                        )),
+                    )
+                    .on_hover_text(super::i18n::registered(self.locale, "workspace-inspector.129"))
+                    .clicked()
+                {
+                    self.begin_knife();
+                }
+                ui.menu_button(
+                    super::i18n::registered(self.locale, "workspace-inspector.130"),
+                    |ui| {
+                        ui.small(super::i18n::registered(
+                            self.locale,
+                            "workspace-inspector.131",
+                        ));
+                        if self.selection_stack.is_empty() {
+                            ui.small(super::i18n::registered(
+                                self.locale,
+                                "workspace-inspector.133",
+                            ));
+                        } else {
+                            if ui
+                                .button(super::i18n::registered(
+                                    self.locale,
+                                    "workspace-inspector.132",
+                                ))
+                                .clicked()
+                            {
+                                self.glue_merge_recent(3);
+                                ui.close();
+                            }
+                            ui.separator();
+                            let entries: Vec<_> =
+                                self.selection_stack.iter().rev().cloned().collect();
+                            for (recency, selection) in entries.into_iter().enumerate() {
+                                let label = self.selection_history_label(&selection);
+                                if ui.button(label).clicked() {
+                                    self.glue_merge_one(recency);
+                                    ui.close();
+                                }
+                            }
+                        }
+                    },
+                );
                 if ui.button(super::i18n::registered(self.locale, "workspace-inspector.076")).on_hover_text(super::i18n::registered(self.locale, "workspace-inspector.077")).clicked() {
                     self.section_manager.open = true;
                 }
             });
+            if self.knife_active {
+                ui.horizontal(|ui| {
+                    ui.small(super::i18n::registered(self.locale, "workspace-inspector.134"));
+                    if ui
+                        .small_button(super::i18n::registered(
+                            self.locale,
+                            "workspace-inspector.135",
+                        ))
+                        .clicked()
+                    {
+                        self.cancel_knife();
+                    }
+                });
+            }
+            if let Some(result) = self.knife_result.clone() {
+                egui::Frame::new()
+                    .fill(ui.visuals().faint_bg_color)
+                    .inner_margin(8)
+                    .corner_radius(5)
+                    .show(ui, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{}: {} / {}",
+                                    super::i18n::registered(self.locale, "workspace-inspector.136"),
+                                    result.side_a.len(),
+                                    result.side_b.len(),
+                                ))
+                                .strong(),
+                            );
+                            if ui
+                                .button(super::i18n::registered(
+                                    self.locale,
+                                    "workspace-inspector.137",
+                                ))
+                                .clicked()
+                            {
+                                self.invert_knife_side();
+                            }
+                            if ui
+                                .button(super::i18n::registered(
+                                    self.locale,
+                                    "workspace-inspector.138",
+                                ))
+                                .clicked()
+                            {
+                                self.cancel_knife();
+                            }
+                        });
+                    });
+            }
             if !self.locked_performers.is_empty() || !self.hidden_performers.is_empty() {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(format!(

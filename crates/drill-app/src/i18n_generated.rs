@@ -2316,6 +2316,38 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "focus-field.004") => "Exit Focus",
         (Locale::Ja, "focus-field.005") => "Esc または ⌘⇧F で通常表示に戻る",
         (Locale::En, "focus-field.005") => "Press Esc or Cmd+Shift+F to return",
+        (Locale::Ja, "app-state.156") => "フィールド上をドラッグして分割線を描いてください",
+        (Locale::En, "app-state.156") => "Drag across the field to draw a cut line",
+        (Locale::Ja, "app-state.157") => "ナイフ: 分割できませんでした（線が短すぎます）",
+        (Locale::En, "app-state.157") => "Knife: could not split (line was too short)",
+        (Locale::Ja, "app-state.158") => "ナイフで選択を分割しました",
+        (Locale::En, "app-state.158") => "Knife split the selection",
+        (Locale::Ja, "workspace-inspector.128") => "ナイフ",
+        (Locale::En, "workspace-inspector.128") => "Knife",
+        (Locale::Ja, "workspace-inspector.129") => {
+            "フィールド上をドラッグして現在の選択を2つに分割します（未選択の場合は全員が対象）"
+        }
+        (Locale::En, "workspace-inspector.129") => {
+            "Drag across the field to split the current selection in two (the whole cast if nothing is selected)"
+        }
+        (Locale::Ja, "workspace-inspector.130") => "グルー",
+        (Locale::En, "workspace-inspector.130") => "Glue",
+        (Locale::Ja, "workspace-inspector.131") => "直近の選択を現在の選択に結合します",
+        (Locale::En, "workspace-inspector.131") => "Merge recent selections into the current one",
+        (Locale::Ja, "workspace-inspector.132") => "直近3件をすべて結合",
+        (Locale::En, "workspace-inspector.132") => "Combine last 3",
+        (Locale::Ja, "workspace-inspector.133") => "直近の選択がありません",
+        (Locale::En, "workspace-inspector.133") => "No recent selections",
+        (Locale::Ja, "workspace-inspector.134") => "ナイフ: 分割線をドラッグしてください",
+        (Locale::En, "workspace-inspector.134") => "Knife: drag to draw the cut line",
+        (Locale::Ja, "workspace-inspector.135") => "キャンセル",
+        (Locale::En, "workspace-inspector.135") => "Cancel",
+        (Locale::Ja, "workspace-inspector.136") => "ナイフ結果",
+        (Locale::En, "workspace-inspector.136") => "Knife result",
+        (Locale::Ja, "workspace-inspector.137") => "反転",
+        (Locale::En, "workspace-inspector.137") => "Invert",
+        (Locale::Ja, "workspace-inspector.138") => "閉じる",
+        (Locale::En, "workspace-inspector.138") => "Close",
         _ => "[missing message]",
     }
 }
