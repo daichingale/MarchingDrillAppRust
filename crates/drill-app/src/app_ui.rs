@@ -2383,6 +2383,9 @@ impl eframe::App for DrillApp {
                     }
                     if selected {
                         painter.circle_stroke(pos, 11.0, Stroke::new(2.0, Color32::WHITE));
+                        if self.selected.len() >= 2 {
+                            self.paint_selection_rank_badge(&painter, pos, index);
+                        }
                     }
                 }
                 if let Some(pointer) = response.interact_pointer_pos() {
@@ -2712,6 +2715,42 @@ impl eframe::App for DrillApp {
 }
 
 impl DrillApp {
+    /// Draws the small numbered badge marking a selected performer's rank in
+    /// the current click order (1 = first clicked). Callers gate on
+    /// `self.selected.len() >= 2` first — a badge on a single selected dot
+    /// is just noise. Positioned at the dot's bottom-right, a deliberately
+    /// different corner from the locked-badge "L" at top-right
+    /// (`pos + Vec2::new(7.0, -8.0)`), so a performer that is both locked
+    /// and selected shows both badges without overlap. The radius grows
+    /// with digit count so 10+ ranks aren't clipped.
+    pub(crate) fn paint_selection_rank_badge(
+        &self,
+        painter: &egui::Painter,
+        pos: Pos2,
+        index: usize,
+    ) {
+        let Some(rank) = self.selected.iter().position(|&i| i == index).map(|p| p + 1) else {
+            return;
+        };
+        let mut digits: u32 = 1;
+        let mut remaining = rank;
+        while remaining >= 10 {
+            remaining /= 10;
+            digits += 1;
+        }
+        let radius = 7.5 + 2.3 * (digits - 1) as f32;
+        let center = pos + Vec2::new(8.0, 9.0);
+        painter.circle_filled(center, radius, Color32::from_rgb(245, 197, 66));
+        painter.circle_stroke(center, radius, Stroke::new(1.0, Color32::from_black_alpha(200)));
+        painter.text(
+            center,
+            egui::Align2::CENTER_CENTER,
+            rank.to_string(),
+            egui::FontId::proportional(10.0),
+            Color32::BLACK,
+        );
+    }
+
     fn show_recent_projects(&mut self, ctx: &egui::Context) {
         if !self.show_recent_projects {
             return;
