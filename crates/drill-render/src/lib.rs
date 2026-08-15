@@ -200,6 +200,13 @@ pub struct Theme {
     pub hash: Rgba,
     pub text: Rgba,
     pub dot_stroke: Rgba,
+    /// Style for the two "center line" reference lines (field midpoint on
+    /// each axis -- the 50-yard-line equivalent, and its cross-axis twin so
+    /// depth-oriented presets like [`drill_core::GridConfig::japan_floor`]
+    /// get an equally prominent reference). Bolder than `major` so these
+    /// specific lines read as *the* reference lines rather than just another
+    /// grid line, matching how printed field charts bold the 50.
+    pub center: Rgba,
 }
 
 impl Theme {
@@ -211,6 +218,7 @@ impl Theme {
         hash: Rgba(225, 232, 236, 130),
         text: Rgba(240, 244, 242, 255),
         dot_stroke: Rgba(20, 24, 29, 255),
+        center: Rgba(225, 232, 236, 215),
     };
 
     /// White floor, fine cyan sub-grid, black lines/markers -- the look of a
@@ -226,6 +234,7 @@ impl Theme {
         hash: Rgba(20, 20, 20, 190),
         text: Rgba(20, 20, 20, 255),
         dot_stroke: Rgba(20, 20, 20, 255),
+        center: Rgba(20, 20, 20, 235),
     };
 }
 
@@ -690,12 +699,30 @@ pub fn build_field_2d(scene: &Scene<'_>, _scratch: &mut BuildScratch, out: &mut 
     out.close_layer(Layer::GridMinor, start);
 
     start = out.commands.len();
-    let major_count = (grid.width / grid.major_line_interval.max(0.001)).floor() as u32;
-    for i in 0..=major_count {
-        let x = (i as f32 * grid.major_line_interval).min(grid.width);
+    let major_interval = grid.major_line_interval.max(0.001);
+    let major_count_x = (grid.width / major_interval).floor() as u32;
+    for i in 0..=major_count_x {
+        let x = (i as f32 * major_interval).min(grid.width);
         out.commands.push(DrawCmd::Line {
             a: map(Point { x, y: 0.0 }),
             b: map(Point { x, y: grid.height }),
+            width: 1.0,
+            color: scene.theme.major,
+        });
+    }
+    // Horizontal major lines at the same interval as the vertical ones above,
+    // so both axes carry equal visual weight. Previously only the vertical
+    // (yard-line-style) axis got this treatment; the horizontal axis relied
+    // solely on the much fainter step-grid minor lines and on `grid.hashes`,
+    // which is empty for presets with no hash marks (e.g. `GridConfig::indoor`,
+    // `GridConfig::japan_floor`), leaving that axis with no interior lines at
+    // all beyond the two sideline edges.
+    let major_count_y = (grid.height / major_interval).floor() as u32;
+    for i in 0..=major_count_y {
+        let y = (i as f32 * major_interval).min(grid.height);
+        out.commands.push(DrawCmd::Line {
+            a: map(Point { x: 0.0, y }),
+            b: map(Point { x: grid.width, y }),
             width: 1.0,
             color: scene.theme.major,
         });
@@ -726,6 +753,40 @@ pub fn build_field_2d(scene: &Scene<'_>, _scratch: &mut BuildScratch, out: &mut 
             color: scene.theme.sideline,
         });
     }
+
+    // Center reference lines -- the 50-yard-line equivalent on the x axis and
+    // its depth-axis counterpart -- drawn in `theme.center` on top of the
+    // regular major grid so the field's midpoint reads clearly on both axes
+    // regardless of whether it happens to land on a `major_line_interval`
+    // multiple (it does for the default/soccer/japan_floor presets; for
+    // `indoor` it does not, so this adds a distinct line rather than only
+    // re-coloring an existing one).
+    let center_x = grid.width * 0.5;
+    out.commands.push(DrawCmd::Line {
+        a: map(Point {
+            x: center_x,
+            y: 0.0,
+        }),
+        b: map(Point {
+            x: center_x,
+            y: grid.height,
+        }),
+        width: 1.75,
+        color: scene.theme.center,
+    });
+    let center_y = grid.height * 0.5;
+    out.commands.push(DrawCmd::Line {
+        a: map(Point {
+            x: 0.0,
+            y: center_y,
+        }),
+        b: map(Point {
+            x: grid.width,
+            y: center_y,
+        }),
+        width: 1.75,
+        color: scene.theme.center,
+    });
     out.close_layer(Layer::GridMajor, start);
 
     start = out.commands.len();
@@ -827,13 +888,28 @@ pub fn build_field_camera(
             out.commands.push(DrawCmd::Line { a, b, width, color });
         }
     };
-    let x_lines = (grid.width / grid.major_line_interval.max(0.001)).floor() as u32;
+    let major_interval = grid.major_line_interval.max(0.001);
+    let x_lines = (grid.width / major_interval).floor() as u32;
     for index in 0..=x_lines {
-        let x = (index as f32 * grid.major_line_interval).min(grid.width);
+        let x = (index as f32 * major_interval).min(grid.width);
         line(
             out,
             Point { x, y: 0.0 },
             Point { x, y: grid.height },
+            1.0,
+            scene.theme.major,
+        );
+    }
+    // Mirror the vertical major lines onto the horizontal axis -- see the
+    // matching comment in `build_field_2d` for why this axis previously had
+    // no interior lines at all for presets without hash marks.
+    let y_lines = (grid.height / major_interval).floor() as u32;
+    for index in 0..=y_lines {
+        let y = (index as f32 * major_interval).min(grid.height);
+        line(
+            out,
+            Point { x: 0.0, y },
+            Point { x: grid.width, y },
             1.0,
             scene.theme.major,
         );
@@ -847,6 +923,32 @@ pub fn build_field_camera(
             scene.theme.sideline,
         );
     }
+    line(
+        out,
+        Point {
+            x: grid.width * 0.5,
+            y: 0.0,
+        },
+        Point {
+            x: grid.width * 0.5,
+            y: grid.height,
+        },
+        1.75,
+        scene.theme.center,
+    );
+    line(
+        out,
+        Point {
+            x: 0.0,
+            y: grid.height * 0.5,
+        },
+        Point {
+            x: grid.width,
+            y: grid.height * 0.5,
+        },
+        1.75,
+        scene.theme.center,
+    );
     out.close_layer(Layer::GridMajor, start);
     for layer in [
         Layer::GridMinor,

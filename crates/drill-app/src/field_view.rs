@@ -328,6 +328,55 @@ impl DrillApp {
             }
             unit += grid.major_line_interval.max(0.25);
         }
+        // Mirror the vertical yard-line grid onto the depth axis so both read
+        // with equal weight in the 3D stadium view too -- previously this axis
+        // had only the (often empty) `grid.hashes` lines below.
+        let mut depth = 0.0;
+        while depth <= grid.height + 0.001 {
+            let major = (depth / (grid.major_line_interval * 2.0)).fract().abs() < 0.001;
+            if let (Some(a), Some(b)) = (
+                field(Point { x: 0.0, y: depth }),
+                field(Point {
+                    x: grid.width,
+                    y: depth,
+                }),
+            ) {
+                painter.line_segment(
+                    [a, b],
+                    Stroke::new(
+                        if major { 1.5 } else { 0.5 },
+                        Color32::from_white_alpha(if major { 120 } else { 45 }),
+                    ),
+                );
+            }
+            depth += grid.major_line_interval.max(0.25);
+        }
+        // Center reference lines, bolder than the regular major grid --
+        // mirrors `drill_render::Theme::center`.
+        if let (Some(a), Some(b)) = (
+            field(Point {
+                x: grid.width * 0.5,
+                y: 0.0,
+            }),
+            field(Point {
+                x: grid.width * 0.5,
+                y: grid.height,
+            }),
+        ) {
+            painter.line_segment([a, b], Stroke::new(2.0, Color32::from_white_alpha(200)));
+        }
+        if let (Some(a), Some(b)) = (
+            field(Point {
+                x: 0.0,
+                y: grid.height * 0.5,
+            }),
+            field(Point {
+                x: grid.width,
+                y: grid.height * 0.5,
+            }),
+        ) {
+            painter.line_segment([a, b], Stroke::new(2.0, Color32::from_white_alpha(200)));
+        }
         for hash in &grid.hashes {
             if let (Some(a), Some(b)) = (
                 field(Point {
