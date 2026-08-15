@@ -704,7 +704,11 @@ impl DrillApp {
         };
         for (index, &point) in self.frame_positions.iter().enumerate() {
             if self.selected.contains(&index) {
-                painter.circle_stroke(to_screen(point), 11.0, Stroke::new(2.0, Color32::WHITE));
+                let pos = to_screen(point);
+                painter.circle_stroke(pos, 11.0, Stroke::new(2.0, Color32::WHITE));
+                if self.selected.len() >= 2 {
+                    self.paint_selection_rank_badge(&painter, pos, index);
+                }
             }
         }
         if !selectable {
@@ -985,6 +989,9 @@ impl DrillApp {
             }
             if selected {
                 painter.circle_stroke(pos, 12.0, Stroke::new(2.5, Color32::WHITE));
+                if self.selected.len() >= 2 {
+                    self.paint_selection_rank_badge(painter, pos, index);
+                }
             }
         }
     }
