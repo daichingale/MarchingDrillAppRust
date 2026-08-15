@@ -149,6 +149,57 @@ pub fn field_svg(doc: &Document, set_index: usize, width_px: f32, height_px: f32
         x += interval;
     }
 
+    // Horizontal major lines at the same interval as the vertical yard lines
+    // above, so the depth axis reads with equal visual weight. Previously
+    // this axis had no interior lines at all beyond the field border for any
+    // preset without `grid.hashes` entries (e.g. `GridConfig::indoor`,
+    // `GridConfig::japan_floor`).
+    let mut y = 0.0_f32;
+    while y <= gh + 1e-3 {
+        let (x1, y1) = map(0.0, y);
+        let (x2, _y2) = map(gw, y);
+        let edge = y < 1e-3 || (y - gh).abs() < 1e-3;
+        let stroke_w = if edge { 2.0 } else { 1.0 };
+        let _ = write!(
+            body,
+            "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"#ffffff\" \
+             stroke-width=\"{}\" stroke-opacity=\"0.85\"/>",
+            px(x1),
+            px(y1),
+            px(x2),
+            px(y1),
+            px(stroke_w)
+        );
+        y += interval;
+    }
+
+    // Center reference lines -- the field midpoint on each axis, bolder than
+    // the regular major grid (mirrors `Theme::center` in `drill_render`, the
+    // live/PDF renderer's equivalent emphasis) so the field's center reads
+    // clearly regardless of whether it lands on an `interval` multiple.
+    let (cx1, cy1) = map(gw * 0.5, 0.0);
+    let (_cx2, cy2) = map(gw * 0.5, gh);
+    let _ = write!(
+        body,
+        "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"#ffffff\" \
+         stroke-width=\"2.5\" stroke-opacity=\"1\"/>",
+        px(cx1),
+        px(cy1),
+        px(cx1),
+        px(cy2)
+    );
+    let (cx3, cy3) = map(0.0, gh * 0.5);
+    let (cx4, _cy4) = map(gw, gh * 0.5);
+    let _ = write!(
+        body,
+        "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"#ffffff\" \
+         stroke-width=\"2.5\" stroke-opacity=\"1\"/>",
+        px(cx3),
+        px(cy3),
+        px(cx4),
+        px(cy3)
+    );
+
     // Horizontal hash lines + labels.
     for hash in &grid.hashes {
         if hash.position < 0.0 || hash.position > gh {
