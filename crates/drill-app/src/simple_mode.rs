@@ -627,8 +627,7 @@ impl DrillApp {
                 .button(i18n::registered(self.locale, "simple-mode.025"))
                 .clicked()
             {
-                self.seek_to_count(self.playback_start);
-                self.playing = false;
+                self.navigate_to_global_count(self.playback_start);
             }
             if ui
                 .add_sized(

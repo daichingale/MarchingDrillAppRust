@@ -49,7 +49,7 @@ pub(crate) struct AudioState {
     output: Option<AudioOutput>,
     buckets: Vec<Peak>,
     click_schedule: drill_audio::ClickSchedule,
-    last_click_config: Option<(drill_audio::ClickSettings, f64, f32, u32)>,
+    last_click_config: Option<(drill_audio::ClickSettings, f64, drill_core::tempo::TempoMap, u32)>,
     pub status: StatusMessage,
 }
 
@@ -194,8 +194,12 @@ impl AudioState {
             },
             AudioOutput::output_sample_rate,
         );
-        let signature = (*settings, end_count, tempo.bpm_at(0.0), rate);
-        if self.last_click_config == Some(signature) {
+        // The full tempo map (not just its bpm at count 0) must be part of the
+        // signature: a tempo change anchored anywhere after count 0 needs to
+        // invalidate the cached click schedule too, or the click track can go
+        // stale after a mid-show tempo edit.
+        let signature = (*settings, end_count, tempo.clone(), rate);
+        if self.last_click_config.as_ref() == Some(&signature) {
             return self.click_schedule.events().len();
         }
         drill_audio::ClickSchedule::build_into(

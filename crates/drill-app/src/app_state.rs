@@ -689,6 +689,8 @@ impl DrillApp {
             self.set_count_draft = None;
             return;
         }
+        let previous_total = self.document.timeline_counts();
+        let was_following_whole_show = self.playback_end >= previous_total;
         let edit = Edit::SetCounts {
             set_id: draft.set_id,
             counts: SetCounts {
@@ -697,7 +699,13 @@ impl DrillApp {
             },
         };
         if self.execute_edit(edit, i18n::registered(self.locale, "count-adjust.008")) {
-            self.playback_end = self.document.timeline_counts();
+            let new_total = self.document.timeline_counts();
+            self.playback_end = if was_following_whole_show {
+                new_total
+            } else {
+                self.playback_end.min(new_total)
+            };
+            self.playback_start = self.playback_start.min(self.playback_end.saturating_sub(1));
             self.timeline_view.normalize(self.playback_end);
             self.set_count_draft = None;
             self.status = i18n::registered(self.locale, "count-adjust.009").into();
@@ -1134,10 +1142,7 @@ impl DrillApp {
             UiCommand::DuplicateSet => self.duplicate_current_set(),
             UiCommand::ManageSections => self.section_manager.open = true,
             UiCommand::PlayPause => self.toggle_playback(context),
-            UiCommand::RangeStart => {
-                self.seek_to_count(self.playback_start);
-                self.playing = false;
-            }
+            UiCommand::RangeStart => self.navigate_to_global_count(self.playback_start),
             UiCommand::RangeCurrentSet => {
                 let start = self.document.global_count(self.current_set, 0.0) as u32;
                 self.playback_start = start;
@@ -1148,6 +1153,22 @@ impl DrillApp {
             UiCommand::RangeWholeShow => {
                 self.playback_start = 0;
                 self.playback_end = self.document.timeline_counts();
+            }
+            UiCommand::MarkRangeStart => {
+                let current_global = self
+                    .document
+                    .global_count(self.current_set, self.count_position);
+                self.playback_start =
+                    (current_global.round() as u32).min(self.playback_end.saturating_sub(1));
+            }
+            UiCommand::MarkRangeEnd => {
+                let current_global = self
+                    .document
+                    .global_count(self.current_set, self.count_position);
+                let total_counts = self.document.timeline_counts();
+                self.playback_end = (current_global.round() as u32)
+                    .max(self.playback_start + 1)
+                    .min(total_counts);
             }
             UiCommand::PreviousProductionMarker => self.navigate_production_marker(false),
             UiCommand::NextProductionMarker => self.navigate_production_marker(true),

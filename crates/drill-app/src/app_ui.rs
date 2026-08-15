@@ -592,8 +592,7 @@ impl eframe::App for DrillApp {
                         ui.close();
                     }
                     if ui.button(text(self.locale, Text::RangeStart)).clicked() {
-                        self.seek_to_count(self.playback_start);
-                        self.playing = false;
+                        self.navigate_to_global_count(self.playback_start);
                         ui.close();
                     }
                     ui.separator();
@@ -905,8 +904,7 @@ impl eframe::App for DrillApp {
                     .on_hover_text(super::i18n::registered(self.locale, "app-ui.028"))
                     .clicked()
                 {
-                    self.seek_to_count(self.playback_start);
-                    self.playing = false;
+                    self.navigate_to_global_count(self.playback_start);
                 }
                 if ui
                     .add_enabled(self.history.can_undo(), egui::Button::new("← Undo"))
@@ -1507,16 +1505,6 @@ impl eframe::App for DrillApp {
         let current_global = self
             .document
             .global_count(self.current_set, self.count_position);
-        let accepts_timeline_shortcut = !ui.ctx().egui_wants_keyboard_input();
-        if accepts_timeline_shortcut && ui.input(|input| input.key_pressed(egui::Key::I)) {
-            self.playback_start =
-                (current_global.round() as u32).min(self.playback_end.saturating_sub(1));
-        }
-        if accepts_timeline_shortcut && ui.input(|input| input.key_pressed(egui::Key::O)) {
-            self.playback_end = (current_global.round() as u32)
-                .max(self.playback_start + 1)
-                .min(total_counts);
-        }
         if self.timeline_follow
             && self.playing
             && !self

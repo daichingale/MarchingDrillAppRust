@@ -75,18 +75,24 @@ impl DrillApp {
                 .show(ui, |ui| {
             ui.heading(super::i18n::registered(self.locale, "workspace-inspector.001"));
             ui.small(super::i18n::registered(self.locale, "workspace-inspector.002"));
-            for (index, set) in self.document.sets.iter().enumerate() {
-                let text = format!("{}  ·  {} counts", set.name, set.counts);
+            // Collect summaries up front so the mutable navigation call below
+            // isn't fighting an active immutable borrow of `self.document.sets`.
+            let set_summaries: Vec<(usize, String)> = self
+                .document
+                .sets
+                .iter()
+                .enumerate()
+                .map(|(index, set)| (index, format!("{}  ·  {} counts", set.name, set.counts)))
+                .collect();
+            for (index, text) in set_summaries {
                 if ui
                     .selectable_label(index == self.current_set, text)
                     .clicked()
                 {
-                    self.current_set = index;
-                    self.count_position = 0.0;
-                    self.playing = false;
-                    // Performer identity is stable across sets; preserve the
-                    // working group while the designer compares or adjusts a
-                    // transition.
+                    // Performer identity is stable across sets; navigate_to_set
+                    // preserves the working group while the designer compares
+                    // or adjusts a transition, and also pauses/reseeks audio.
+                    self.navigate_to_set(index);
                 }
             }
             if ui.button(super::i18n::registered(self.locale, "workspace-inspector.003")).clicked() {
