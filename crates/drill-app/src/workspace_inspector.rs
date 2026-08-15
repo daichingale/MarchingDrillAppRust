@@ -522,6 +522,47 @@ impl DrillApp {
                                 if ui.button(super::i18n::registered(self.locale, "workspace-inspector.116")).clicked() {
                                     self.preview_shape(shapes::ShapeSpec::Cross { center, arm_length: rx.max(ry), arm_width: rx.min(ry) * 0.7 });
                                 }
+                                if ui.button(super::i18n::registered(self.locale, "workspace-inspector.128")).clicked() {
+                                    // Parade block: an evenly spaced rank/file grid on the
+                                    // document's own grid step, unlike show blocks (BlockFit)
+                                    // which stretch to fit an arbitrary bounding box.
+                                    let n = self.selected.len().max(1);
+                                    let cols = (n as f32).sqrt().ceil() as usize;
+                                    let rows = n.div_ceil(cols.max(1));
+                                    let grid = &self.document.grid;
+                                    let dx = grid.horizontal_units / grid.horizontal_steps.max(1) as f32;
+                                    let dy = grid.vertical_units / grid.vertical_steps.max(1) as f32;
+                                    let width = cols.saturating_sub(1) as f32 * dx;
+                                    let height = rows.saturating_sub(1) as f32 * dy;
+                                    let top_left = Point { x: center.x - width * 0.5, y: center.y - height * 0.5 };
+                                    self.preview_shape(shapes::ShapeSpec::Block { top_left, cols, rows, dx, dy });
+                                }
+                                if ui.button(super::i18n::registered(self.locale, "workspace-inspector.129")).clicked() {
+                                    // U-turn: outbound leg along the bounding box's long axis,
+                                    // turnaround radius sized from the short axis, starting at
+                                    // one end of the box.
+                                    let width = (max.x - min.x).max(1.0);
+                                    let height = (max.y - min.y).max(1.0);
+                                    let along_x = width >= height;
+                                    let (direction, leg_length, short_dim) = if along_x {
+                                        (0.0, width, height)
+                                    } else {
+                                        (std::f32::consts::FRAC_PI_2, height, width)
+                                    };
+                                    let turn_radius = (short_dim * 0.5).max(1.5);
+                                    let start = if along_x {
+                                        Point { x: min.x, y: center.y }
+                                    } else {
+                                        Point { x: center.x, y: min.y }
+                                    };
+                                    self.preview_shape(shapes::ShapeSpec::UTurn {
+                                        start,
+                                        direction,
+                                        leg_length,
+                                        turn_radius,
+                                        lane_spacing: turn_radius * 2.0,
+                                    });
+                                }
                             });
                             ui.horizontal_wrapped(|ui| {
                                 if ui.button(super::i18n::registered(self.locale, "workspace-inspector.038")).clicked()

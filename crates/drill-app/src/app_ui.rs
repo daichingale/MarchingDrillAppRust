@@ -1218,6 +1218,28 @@ impl eframe::App for DrillApp {
                                 ui.close();
                             }
                         });
+                        ui.menu_button(super::i18n::registered(self.locale, "app-ui.163"), |ui| {
+                            ui.small(super::i18n::registered(self.locale, "app-ui.164"));
+                            ui.horizontal_wrapped(|ui| {
+                                for degrees in
+                                    [-90.0_f32, -45.0, -30.0, -15.0, 15.0, 30.0, 45.0, 90.0]
+                                {
+                                    let label = if degrees > 0.0 {
+                                        format!("+{degrees:.0}°")
+                                    } else {
+                                        format!("{degrees:.0}°")
+                                    };
+                                    if ui.button(label).clicked() {
+                                        let points = self.selected_points();
+                                        self.commit_layout(editing::rotate_about_centroid(
+                                            &points,
+                                            degrees.to_radians(),
+                                        ));
+                                        ui.close();
+                                    }
+                                }
+                            });
+                        });
                         ui.separator();
                         if ui
                             .button(super::i18n::registered(self.locale, "clipboard.018"))
