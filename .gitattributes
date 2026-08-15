@@ -10,6 +10,8 @@
 *.drill.json         text eol=lf
 *.svg                text eol=lf
 *.csv                text eol=lf
+*.tsv                text eol=lf
+*.digest             text eol=lf
 
 # Keep Rust and manifests LF so goldens embedded in tests stay stable.
 *.rs                 text eol=lf
