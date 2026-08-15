@@ -1,5 +1,6 @@
 //! Thin egui consumer for backend-neutral display lists.
 
+use drill_core::Symbol;
 use drill_render::{DisplayList, DrawCmd, Layer, Rgba, Vec2};
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke};
 
@@ -61,6 +62,66 @@ fn paint_layers(painter: &egui::Painter, origin: Pos2, list: &DisplayList, layer
     }
 }
 
+/// Reference implementation of the shared marker geometry documented on
+/// `drill_render::DrawCmd::Dot::symbol`. `center` is already in screen space
+/// (the caller has applied the paint origin). Polygon shapes reuse
+/// `drill_render::symbol_points` so this stays bit-identical to what the SVG
+/// exporter draws, just rasterized instead of pathed.
+fn paint_symbol(
+    painter: &egui::Painter,
+    center: Pos2,
+    radius: f32,
+    fill: Color32,
+    stroke: Color32,
+    symbol: Symbol,
+) {
+    match symbol {
+        Symbol::Circle => {
+            painter.circle_filled(center, radius, fill);
+            painter.circle_stroke(center, radius, Stroke::new(1.0, stroke));
+        }
+        Symbol::Square => {
+            let half = radius * 0.8;
+            let rect = Rect::from_center_size(center, egui::Vec2::splat(half * 2.0));
+            painter.rect_filled(rect, 0.0, fill);
+            painter.rect_stroke(rect, 0.0, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
+        }
+        Symbol::Cross => {
+            let arm = radius;
+            let width = (radius * 0.4).max(1.0);
+            painter.line_segment(
+                [
+                    Pos2::new(center.x - arm, center.y - arm),
+                    Pos2::new(center.x + arm, center.y + arm),
+                ],
+                Stroke::new(width, stroke),
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(center.x - arm, center.y + arm),
+                    Pos2::new(center.x + arm, center.y - arm),
+                ],
+                Stroke::new(width, stroke),
+            );
+        }
+        Symbol::Triangle | Symbol::Diamond | Symbol::Star => {
+            let points = drill_render::symbol_points(
+                Vec2 { x: center.x, y: center.y },
+                radius,
+                symbol,
+            )
+            .into_iter()
+            .map(|p| Pos2::new(p.x, p.y))
+            .collect();
+            painter.add(egui::Shape::convex_polygon(
+                points,
+                fill,
+                Stroke::new(1.0, stroke),
+            ));
+        }
+    }
+}
+
 fn paint_command(painter: &egui::Painter, origin: Pos2, list: &DisplayList, command: &DrawCmd) {
     match *command {
         DrawCmd::FieldFill { rect, fill } => {
@@ -82,10 +143,16 @@ fn paint_command(painter: &egui::Painter, origin: Pos2, list: &DisplayList, comm
             radius,
             fill,
             stroke,
+            symbol,
         } => {
-            let center = position(origin, center);
-            painter.circle_filled(center, radius, color(fill));
-            painter.circle_stroke(center, radius, Stroke::new(1.0, color(stroke)));
+            paint_symbol(
+                painter,
+                position(origin, center),
+                radius,
+                color(fill),
+                color(stroke),
+                symbol,
+            );
         }
         DrawCmd::Text {
             at,

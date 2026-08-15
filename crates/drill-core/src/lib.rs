@@ -288,7 +288,14 @@ pub struct Performer {
     pub id: PerformerId,
     pub label: String,
     pub section: SectionId,
-    #[serde(default)]
+    /// Documents saved before `Symbol::Cross` became the default marker
+    /// carry no `symbol` field at all; back-fill those with the marker they
+    /// were actually drawn with (`Circle`) so loading an old project doesn't
+    /// silently change what's on screen, or mismatch a chart already
+    /// printed from it. Callers constructing a brand-new `Performer` should
+    /// set `symbol: Symbol::default()` (`Cross`) explicitly instead of
+    /// relying on this legacy-only fallback.
+    #[serde(default = "legacy_default_symbol")]
     pub symbol: Symbol,
     #[serde(default)]
     pub color: OptionalColor,
@@ -300,6 +307,10 @@ pub struct Performer {
 
 fn default_height_m() -> f32 {
     1.7
+}
+
+fn legacy_default_symbol() -> Symbol {
+    Symbol::Circle
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -354,7 +365,7 @@ impl Document {
                 id: PerformerId::new(i as u32 + 1).expect("demo performer id is non-zero"),
                 label: format!("{}{}", (b'A' + (i / 10).min(25) as u8) as char, i % 10 + 1),
                 section: SectionId::new(1).expect("demo section id is non-zero"),
-                symbol: Symbol::Circle,
+                symbol: Symbol::Cross,
                 color: Some([245, 197, 66]).into(),
                 height_m: default_height_m(),
                 kind: PerformerKind::Wind,

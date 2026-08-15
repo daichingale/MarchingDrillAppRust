@@ -5,7 +5,7 @@
 
 use drill_core::show_heatmap::FieldOccupancy;
 use drill_core::transition::{self, TransitionPlan};
-use drill_core::{Document, GridStyle, PerformerId, Point, SetId};
+use drill_core::{Document, GridStyle, PerformerId, Point, SetId, Symbol};
 use std::cell::RefCell;
 use std::fmt::Write as _;
 
@@ -64,6 +64,11 @@ pub enum DrawCmd {
         radius: f32,
         fill: Rgba,
         stroke: Rgba,
+        /// Marker shape. Backends that don't yet implement per-symbol
+        /// rendering (SVG/PDF/GPU as of this field's introduction) may fall
+        /// back to drawing every symbol as `Circle`; `egui_backend`'s CPU
+        /// path is the reference implementation with full shape support.
+        symbol: Symbol,
     },
     Text {
         at: Vec2,
@@ -206,6 +211,21 @@ impl Theme {
         hash: Rgba(225, 232, 236, 130),
         text: Rgba(240, 244, 242, 255),
         dot_stroke: Rgba(20, 24, 29, 255),
+    };
+
+    /// White floor, fine cyan sub-grid, black lines/markers -- the look of a
+    /// printed Pyware-style drill chart, used as the app's default field
+    /// view. `Symbol::Cross` (the default marker) is drawn in `dot_stroke`
+    /// only (see `paint_symbol`/`write_symbol_svg`), so section colors
+    /// still show through on the shapes that use `fill`.
+    pub const PRINT_LIGHT: Self = Self {
+        turf: Rgba(255, 255, 255, 255),
+        sideline: Rgba(20, 20, 20, 255),
+        major: Rgba(70, 70, 70, 210),
+        minor: Rgba(150, 210, 228, 170),
+        hash: Rgba(20, 20, 20, 190),
+        text: Rgba(20, 20, 20, 255),
+        dot_stroke: Rgba(20, 20, 20, 255),
     };
 }
 
@@ -738,6 +758,7 @@ pub fn build_field_2d(scene: &Scene<'_>, _scratch: &mut BuildScratch, out: &mut 
                     Rgba(color[0], color[1], color[2], 255)
                 },
                 stroke: scene.theme.dot_stroke,
+                symbol: performer.symbol,
             });
             out.stats.dots_emitted += 1;
         } else {
@@ -846,6 +867,7 @@ pub fn build_field_camera(
                 radius: scene.options.dot_radius * scene.viewport.ui_scale.max(0.1),
                 fill: Rgba(color[0], color[1], color[2], 255),
                 stroke: scene.theme.dot_stroke,
+                symbol: performer.symbol,
             });
             out.stats.dots_emitted += 1;
         } else {
@@ -972,16 +994,9 @@ pub fn display_list_svg(list: &DisplayList) -> String {
                 radius,
                 fill,
                 stroke,
+                symbol,
             } => {
-                let _ = writeln!(
-                    out,
-                    "<circle cx=\"{}\" cy=\"{}\" r=\"{}\" fill=\"{}\" stroke=\"{}\"/>",
-                    svg_number(center.x),
-                    svg_number(center.y),
-                    svg_number(radius),
-                    svg_color(fill),
-                    svg_color(stroke)
-                );
+                write_symbol_svg(&mut out, center, radius, fill, stroke, symbol);
             }
             DrawCmd::Text {
                 at,
@@ -1031,7 +1046,7 @@ pub fn field_svg(document: &Document, set_index: usize, width: f32, height: f32)
                     ui_scale: 1.0,
                 },
                 options: &RenderOptions::default(),
-                theme: &Theme::SCREEN_DARK,
+                theme: &Theme::PRINT_LIGHT,
             },
             &mut BuildScratch,
             &mut list,
@@ -1069,6 +1084,107 @@ fn svg_color(color: Rgba) -> String {
             color.2,
             f32::from(color.3) / 255.0
         )
+    }
+}
+
+/// Shared marker geometry every backend renders to: given a center and
+/// `radius`, each `Symbol` occupies roughly the same visual weight as a
+/// circle of that radius (areas are approximately matched, not exact).
+/// `egui_backend::paint_symbol` is the other implementation of this same
+/// spec; keep both in sync if the geometry changes.
+///
+/// - `Circle`: radius `radius`.
+/// - `Square`: half-side `0.8 * radius` (area-matched to the circle).
+/// - `Triangle`: upward-pointing, circumradius `radius`.
+/// - `Diamond`: a square rotated 45 degrees, points `radius` from center.
+/// - `Cross`: two diagonal strokes, half-length `radius`.
+/// - `Star`: five points, outer radius `radius`, inner radius `0.5 * radius`.
+fn write_symbol_svg(out: &mut String, center: Vec2, radius: f32, fill: Rgba, stroke: Rgba, symbol: Symbol) {
+    let fill_attr = svg_color(fill);
+    let stroke_attr = svg_color(stroke);
+    match symbol {
+        Symbol::Circle => {
+            let _ = writeln!(
+                out,
+                "<circle cx=\"{}\" cy=\"{}\" r=\"{}\" fill=\"{}\" stroke=\"{}\"/>",
+                svg_number(center.x),
+                svg_number(center.y),
+                svg_number(radius),
+                fill_attr,
+                stroke_attr
+            );
+        }
+        Symbol::Square => {
+            let half = radius * 0.8;
+            let _ = writeln!(
+                out,
+                "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{}\" stroke=\"{}\"/>",
+                svg_number(center.x - half),
+                svg_number(center.y - half),
+                svg_number(half * 2.0),
+                svg_number(half * 2.0),
+                fill_attr,
+                stroke_attr
+            );
+        }
+        Symbol::Triangle | Symbol::Diamond | Symbol::Star => {
+            let points = symbol_points(center, radius, symbol);
+            let path = points
+                .iter()
+                .map(|p| format!("{},{}", svg_number(p.x), svg_number(p.y)))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let _ = writeln!(
+                out,
+                "<polygon points=\"{path}\" fill=\"{fill_attr}\" stroke=\"{stroke_attr}\"/>"
+            );
+        }
+        Symbol::Cross => {
+            let arm = radius;
+            let _ = writeln!(
+                out,
+                "<g stroke=\"{stroke_attr}\" stroke-width=\"{}\" fill=\"none\">\
+                 <line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\"/>\
+                 <line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\"/>\
+                 </g>",
+                svg_number((radius * 0.4).max(1.0)),
+                svg_number(center.x - arm),
+                svg_number(center.y - arm),
+                svg_number(center.x + arm),
+                svg_number(center.y + arm),
+                svg_number(center.x - arm),
+                svg_number(center.y + arm),
+                svg_number(center.x + arm),
+                svg_number(center.y - arm),
+            );
+        }
+    }
+}
+
+/// Vertex list for the polygon-based symbols, shared by every backend that
+/// needs concrete points (SVG polygons, GPU triangle fans, PDF paths, egui's
+/// `convex_polygon`). Angles start straight up and go clockwise, matching
+/// screen Y-down space. Returns an empty `Vec` for `Circle`/`Square`/`Cross`,
+/// which every backend draws with a dedicated primitive instead.
+pub fn symbol_points(center: Vec2, radius: f32, symbol: Symbol) -> Vec<Vec2> {
+    let vertex = |angle: f32, r: f32| Vec2 {
+        x: center.x + r * angle.sin(),
+        y: center.y - r * angle.cos(),
+    };
+    match symbol {
+        Symbol::Triangle => (0..3)
+            .map(|i| vertex(std::f32::consts::TAU * i as f32 / 3.0, radius))
+            .collect(),
+        Symbol::Diamond => (0..4)
+            .map(|i| vertex(std::f32::consts::FRAC_PI_2 * i as f32, radius))
+            .collect(),
+        Symbol::Star => (0..10)
+            .map(|i| {
+                let r = if i % 2 == 0 { radius } else { radius * 0.5 };
+                vertex(std::f32::consts::PI * i as f32 / 5.0, r)
+            })
+            .collect(),
+        Symbol::Circle | Symbol::Square | Symbol::Cross => Vec::new(),
     }
 }
 
@@ -1154,19 +1270,36 @@ mod tests {
         let a = display_list_svg(&list);
         let b = display_list_svg(&list);
         assert_eq!(a, b);
-        let first = list.layer(Layer::Dot).first().expect("demo dot");
-        let DrawCmd::Dot { center, .. } = first else {
-            panic!("dot layer invariant")
-        };
-        assert!(a.contains(&format!(
-            "cx=\"{}\" cy=\"{}\"",
-            svg_number(center.x),
-            svg_number(center.y)
-        )));
+        // The default performer symbol (Symbol::Cross) draws as a `<g>` of
+        // `<line>`s, not a `<circle>` (see write_symbol_svg); count either
+        // shape so this doesn't depend on which marker is the default.
         assert_eq!(
-            a.matches("<circle").count(),
+            a.matches("<circle").count() + a.matches("<g stroke").count(),
             list.stats().dots_emitted as usize
         );
+    }
+
+    #[test]
+    fn svg_backend_circle_symbol_uses_display_list_coordinates() {
+        let mut list = DisplayList::new();
+        list.viewport = Viewport {
+            size: Vec2 { x: 20.0, y: 10.0 },
+            ui_scale: 1.0,
+        };
+        list.commands.push(DrawCmd::Dot {
+            center: Vec2 { x: 6.25, y: 4.5 },
+            radius: 1.0,
+            fill: Rgba(255, 0, 0, 255),
+            stroke: Rgba(0, 0, 0, 255),
+            symbol: Symbol::Circle,
+        });
+        list.close_layer(Layer::Dot, 0);
+        let svg = display_list_svg(&list);
+        assert!(svg.contains(&format!(
+            "cx=\"{}\" cy=\"{}\"",
+            svg_number(6.25),
+            svg_number(4.5)
+        )));
     }
 
     #[test]
@@ -1189,6 +1322,7 @@ mod tests {
             radius: 1.25,
             fill: Rgba(255, 128, 0, 255),
             stroke: Rgba(0, 0, 0, 255),
+            symbol: Symbol::Circle,
         });
         list.close_layer(Layer::Dot, 0);
         assert_eq!(

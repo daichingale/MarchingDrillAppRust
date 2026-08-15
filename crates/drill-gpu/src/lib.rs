@@ -156,11 +156,16 @@ impl GpuFrame {
         self.instances
             .reserve(count.saturating_sub(self.instances.capacity()));
         for command in list.commands() {
+            // TODO(symbol-shapes): the GPU instance buffer has no shape
+            // field yet, so every performer still renders as a circle
+            // regardless of `Performer.symbol`. `egui_backend`'s CPU path
+            // is the reference implementation with full shape support.
             let DrawCmd::Dot {
                 center,
                 radius,
                 fill,
                 stroke,
+                ..
             } = *command
             else {
                 continue;

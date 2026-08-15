@@ -55,6 +55,7 @@ fn field_2d_matrix_preserves_cpu_centers_colors_radius_and_dpi() {
                     radius,
                     fill,
                     stroke,
+                    ..
                 } => Some((*center, *radius, *fill, *stroke)),
                 _ => None,
             })

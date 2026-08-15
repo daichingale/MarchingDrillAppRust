@@ -61,11 +61,12 @@ pub fn performers_in_subset(document: &Document, subset: SubsetId) -> Option<&[P
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Symbol {
-    #[default]
     Circle,
     Square,
     Triangle,
     Diamond,
+    /// Default marker: the standard "X" used on printed drill charts.
+    #[default]
     Cross,
     Star,
 }

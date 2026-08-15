@@ -188,7 +188,7 @@ pub fn render_pdf_with_underlay(
                                     ui_scale: 1.0,
                                 },
                                 options: &RenderOptions::default(),
-                                theme: &Theme::SCREEN_DARK,
+                                theme: &Theme::PRINT_LIGHT,
                             },
                             &mut BuildScratch,
                             &mut list,

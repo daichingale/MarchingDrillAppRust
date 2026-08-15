@@ -685,7 +685,7 @@ impl DrillApp {
                 ui_scale: 1.0,
             },
             options: &render_options,
-            theme: &drill_render::Theme::SCREEN_DARK,
+            theme: &drill_render::Theme::PRINT_LIGHT,
         };
         drill_render::build_field_2d(&scene, &mut self.render_scratch, &mut self.display_list);
         egui_backend::paint(&painter, rect.min, &self.display_list);

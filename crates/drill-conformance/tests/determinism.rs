@@ -17,7 +17,10 @@ fn display_list_svg_is_byte_deterministic() {
     let second = set_svg(&document, 1);
     assert_eq!(first.as_bytes(), second.as_bytes());
     // Performer dots are present in addition to optional dotted-grid geometry.
-    assert!(first.matches("<circle").count() >= 16);
+    // The default performer symbol is Symbol::Cross, drawn as a `<g>` of two
+    // `<line>`s rather than a `<circle>` (see write_symbol_svg); count both
+    // shapes so this doesn't depend on which marker is the default.
+    assert!(first.matches("<circle").count() + first.matches("<g stroke").count() >= 16);
 }
 
 #[test]

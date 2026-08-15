@@ -5,7 +5,7 @@ pub mod pdf;
 pub mod report;
 
 use drill_core::video::{EncoderBackend, VideoExportConfig};
-use drill_core::{Document, Point};
+use drill_core::{Document, Point, Symbol};
 use drill_jobs::{Job, JobErrorCode, JobFailure, JobKind, ProgressHandle};
 use drill_render::{
     BuildScratch, RenderOptions, Scene, Theme, Viewport, build_field_2d, build_field_camera,
@@ -192,10 +192,8 @@ impl RasterSurface {
                     radius,
                     fill,
                     stroke,
-                } => {
-                    self.circle(center, radius + 1.0, stroke);
-                    self.circle(center, radius, fill);
-                }
+                    symbol,
+                } => self.symbol(center, radius, fill, stroke, symbol),
                 DrawCmd::Text { .. } => stats.text_skipped = stats.text_skipped.saturating_add(1),
             }
         }
@@ -266,6 +264,50 @@ impl RasterSurface {
                 if dx * dx + dy * dy <= rr {
                     self.blend(x, y, color);
                 }
+            }
+        }
+    }
+
+    /// Matches `write_symbol_svg`'s geometry (see its doc comment) for
+    /// `Circle`/`Square`/`Cross`. `Triangle`/`Diamond`/`Star` fall back to a
+    /// circle here: this rasterizer has no polygon fill primitive yet, and a
+    /// video frame or PDF raster preview reads fine as a circle in the
+    /// meantime. `egui_backend`'s CPU path (the on-screen editor) is the one
+    /// that must render every shape correctly.
+    fn symbol(&mut self, center: Vec2, radius: f32, fill: Rgba, stroke: Rgba, symbol: Symbol) {
+        match symbol {
+            Symbol::Square => {
+                let half = radius * 0.8;
+                let outer = Rect {
+                    min: Vec2 { x: center.x - half - 1.0, y: center.y - half - 1.0 },
+                    max: Vec2 { x: center.x + half + 1.0, y: center.y + half + 1.0 },
+                };
+                let inner = Rect {
+                    min: Vec2 { x: center.x - half, y: center.y - half },
+                    max: Vec2 { x: center.x + half, y: center.y + half },
+                };
+                self.fill_rect(outer, stroke);
+                self.fill_rect(inner, fill);
+            }
+            Symbol::Cross => {
+                let arm = radius;
+                let width = (radius * 0.4).max(1.0);
+                self.line(
+                    Vec2 { x: center.x - arm, y: center.y - arm },
+                    Vec2 { x: center.x + arm, y: center.y + arm },
+                    width,
+                    stroke,
+                );
+                self.line(
+                    Vec2 { x: center.x - arm, y: center.y + arm },
+                    Vec2 { x: center.x + arm, y: center.y - arm },
+                    width,
+                    stroke,
+                );
+            }
+            Symbol::Circle | Symbol::Triangle | Symbol::Diamond | Symbol::Star => {
+                self.circle(center, radius + 1.0, stroke);
+                self.circle(center, radius, fill);
             }
         }
     }
@@ -901,7 +943,7 @@ pub fn render_frames<W: FrameWriter, C: ExportControl>(
                 ui_scale: 1.0,
             },
             options: &options,
-            theme: &Theme::SCREEN_DARK,
+            theme: &Theme::PRINT_LIGHT,
         };
         if request.use_3d_camera
             && let Some(camera) = request.document.camera_program.evaluate(count as f32)
