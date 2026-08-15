@@ -430,6 +430,56 @@ mod tests {
         assert_eq!(app.document, before);
     }
 
+    /// "Follow the Leader" auto-generates intermediate Sets instead of a
+    /// live continuous-path primitive (the Pyware-style version the user
+    /// found hard to fine-tune after the fact), so this exercises the same
+    /// invariants the design rests on: the right number of ordinary Sets
+    /// land right after the current one, performers outside the moving
+    /// group hold their position across every inserted set, and the whole
+    /// multi-set insertion is a single undoable action.
+    #[test]
+    fn follow_the_leader_inserts_sets_as_a_single_undo_transaction() {
+        let mut app = DrillApp {
+            selected: [0, 1, 2].into_iter().collect(),
+            ..DrillApp::default()
+        };
+        let before = app.document.clone();
+        let initial_sets = app.document.sets.len();
+        let start = app.document.sets[app.current_set].positions[0];
+        let end = Point {
+            x: (start.x + 20.0).min(app.document.grid.width),
+            y: start.y,
+        };
+        // Performer 3 is not part of the moving group; it must hold its
+        // existing position across every inserted set.
+        let bystander = 3usize;
+        let bystander_pos = app.document.sets[app.current_set].positions[bystander];
+
+        app.apply_follow_the_leader(
+            drill_core::shapes::ShapeSpec::FreePath {
+                vertices: vec![start, end],
+            },
+            5,
+        );
+
+        assert_eq!(app.document.sets.len(), initial_sets + 5);
+        assert_eq!(app.current_set, 1);
+        for set in &app.document.sets[1..=5] {
+            assert_eq!(set.positions[bystander], bystander_pos);
+        }
+        // Rank 0 (the leader, performer 0) has zero delay, so it reaches
+        // the path's end exactly at the final inserted set.
+        let last = &app.document.sets[5];
+        assert!((last.positions[0].x - end.x).abs() < 1.0);
+        assert!((last.positions[0].y - end.y).abs() < 1.0);
+        // Rank 2 (the last follower) lags behind and has not caught up to
+        // the leader by the final inserted set.
+        assert_ne!(last.positions[2], last.positions[0]);
+
+        assert!(app.history.undo(&mut app.document));
+        assert_eq!(app.document, before);
+    }
+
     #[test]
     fn escape_command_cancels_preview_before_clearing_selection() {
         let context = egui::Context::default();

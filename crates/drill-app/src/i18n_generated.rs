@@ -1258,6 +1258,58 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "workspace-inspector.125") => "Rotate the selected performers 15° counter-clockwise",
         (Locale::Ja, "workspace-inspector.126") => "選択した演者を時計回りに15°回転します",
         (Locale::En, "workspace-inspector.126") => "Rotate the selected performers 15° clockwise",
+        (Locale::Ja, "workspace-inspector.128") => "フォローザリーダー",
+        (Locale::En, "workspace-inspector.128") => "Follow the Leader",
+        (Locale::Ja, "workspace-inspector.129") => {
+            "選択した演者(2名以上)が同じ経路を順番に追いかけるように、中間セットを自動生成します。生成後は他のセットと同じように個々のドットを自由に編集できます。"
+        }
+        (Locale::En, "workspace-inspector.129") => {
+            "Generates intermediate sets so the selected group (2+) traces the same path one after another, like a snake maneuver. Every generated set can be hand-edited afterward just like any other set."
+        }
+        (Locale::Ja, "workspace-inspector.130") => "経路を描く",
+        (Locale::En, "workspace-inspector.130") => "Draw Path",
+        (Locale::Ja, "workspace-inspector.131") => {
+            "選択した演者がなぞる経路をドラッグして描きます"
+        }
+        (Locale::En, "workspace-inspector.131") => {
+            "Drag to draw the path the selected group will follow"
+        }
+        (Locale::Ja, "workspace-inspector.132") => "フォロー",
+        (Locale::En, "workspace-inspector.132") => "Follow",
+        (Locale::Ja, "workspace-inspector.133") => {
+            "フォローザリーダーには2名以上の選択が必要です"
+        }
+        (Locale::En, "workspace-inspector.133") => {
+            "Follow the Leader needs at least two selected performers"
+        }
+        (Locale::Ja, "workspace-inspector.134") => "セットIDを割り当てられませんでした",
+        (Locale::En, "workspace-inspector.134") => "Couldn't allocate a new set ID",
+        (Locale::Ja, "workspace-inspector.135") => "フォローザリーダーの適用に失敗しました",
+        (Locale::En, "workspace-inspector.135") => "Failed to apply Follow the Leader",
+        (Locale::Ja, "workspace-inspector.136") => {
+            "フォローザリーダーの中間セットを追加しました"
+        }
+        (Locale::En, "workspace-inspector.136") => {
+            "Added Follow the Leader intermediate sets"
+        }
+        (Locale::Ja, "workspace-inspector.137") => "経路が無効です",
+        (Locale::En, "workspace-inspector.137") => "Invalid path",
+        (Locale::Ja, "workspace-inspector.138") => "中間セット数",
+        (Locale::En, "workspace-inspector.138") => "Intermediate sets",
+        (Locale::Ja, "workspace-inspector.139") => "生成する中間セットの数",
+        (Locale::En, "workspace-inspector.139") => "Number of intermediate sets to generate",
+        (Locale::Ja, "workspace-inspector.140") => "フォローザリーダーを適用",
+        (Locale::En, "workspace-inspector.140") => "Apply Follow the Leader",
+        (Locale::Ja, "workspace-inspector.141") => "先に経路を描いてください",
+        (Locale::En, "workspace-inspector.141") => "Draw a path first",
+        (Locale::Ja, "workspace-inspector.142") => "直線を使用",
+        (Locale::En, "workspace-inspector.142") => "Use a Straight Line",
+        (Locale::Ja, "workspace-inspector.143") => {
+            "選択範囲の対角線を経路として使用します"
+        }
+        (Locale::En, "workspace-inspector.143") => {
+            "Uses the selection's bounding diagonal as the path"
+        }
         (Locale::Ja, "export-status.016") => {
             "先に事前検査を実行し、表示された問題を解決してください"
         }

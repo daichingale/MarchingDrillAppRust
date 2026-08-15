@@ -562,6 +562,83 @@ impl DrillApp {
                             }
                         },
                     );
+                    ui.collapsing(
+                        super::i18n::registered(self.locale, "workspace-inspector.128"),
+                        |ui| {
+                            ui.small(super::i18n::registered(self.locale, "workspace-inspector.129"));
+                            let has_group = self.selected.len() >= 2;
+                            ui.horizontal_wrapped(|ui| {
+                                if ui
+                                    .add_enabled(
+                                        has_group,
+                                        egui::Button::new(super::i18n::registered(self.locale, "workspace-inspector.130")),
+                                    )
+                                    .on_hover_text(super::i18n::registered(self.locale, "workspace-inspector.131"))
+                                    .clicked()
+                                {
+                                    self.begin_free_draw();
+                                }
+                                if let Some((min, max)) = self.selection_bounds()
+                                    && ui
+                                        .add_enabled(
+                                            has_group,
+                                            egui::Button::new(super::i18n::registered(self.locale, "workspace-inspector.142")),
+                                        )
+                                        .on_hover_text(super::i18n::registered(self.locale, "workspace-inspector.143"))
+                                        .clicked()
+                                {
+                                    self.preview_shape(shapes::ShapeSpec::Line { start: min, end: max });
+                                }
+                            });
+                            if !has_group {
+                                ui.colored_label(
+                                    Color32::from_rgb(255, 184, 77),
+                                    super::i18n::registered(self.locale, "workspace-inspector.133"),
+                                );
+                            } else if self.free_draw_active {
+                                ui.colored_label(
+                                    Color32::from_rgb(100, 220, 255),
+                                    super::i18n::registered(self.locale, "workspace-inspector.031"),
+                                );
+                            }
+                            ui.horizontal(|ui| {
+                                ui.label(super::i18n::registered(self.locale, "workspace-inspector.138"));
+                                ui.add(
+                                    egui::DragValue::new(&mut self.follow_leader_steps)
+                                        .range(1..=32)
+                                        .suffix(" set"),
+                                )
+                                .on_hover_text(super::i18n::registered(self.locale, "workspace-inspector.139"));
+                            });
+                            let path_ready = has_group && self.formation_preview_spec.is_some();
+                            ui.horizontal_wrapped(|ui| {
+                                if ui
+                                    .add_enabled(
+                                        path_ready,
+                                        egui::Button::new(super::i18n::registered(self.locale, "workspace-inspector.140")),
+                                    )
+                                    .on_hover_text(super::i18n::registered(self.locale, "workspace-inspector.141"))
+                                    .clicked()
+                                    && let Some(spec) = self.formation_preview_spec.take()
+                                {
+                                    self.formation_preview_points.clear();
+                                    self.free_draw_active = false;
+                                    self.free_draw_raw.clear();
+                                    let steps = self.follow_leader_steps as usize;
+                                    self.apply_follow_the_leader(spec, steps);
+                                }
+                                if ui
+                                    .add_enabled(
+                                        self.formation_preview_spec.is_some() || self.free_draw_active,
+                                        egui::Button::new(super::i18n::registered(self.locale, "workspace-inspector.027")),
+                                    )
+                                    .clicked()
+                                {
+                                    self.cancel_shape_preview();
+                                }
+                            });
+                        },
+                    );
                     ui.label(egui::RichText::new(super::i18n::registered(self.locale, "workspace-inspector.087")).strong());
                     ui.horizontal_wrapped(|ui| {
                         if ui
