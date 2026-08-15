@@ -564,10 +564,18 @@ impl DrillApp {
                     );
                     ui.label(egui::RichText::new(super::i18n::registered(self.locale, "workspace-inspector.087")).strong());
                     ui.horizontal_wrapped(|ui| {
-                        if ui.small_button("↶ 15°").clicked() {
+                        if ui
+                            .small_button("－15°")
+                            .on_hover_text(super::i18n::registered(self.locale, "workspace-inspector.125"))
+                            .clicked()
+                        {
                             self.transform_selection(1.0, -15.0_f32.to_radians());
                         }
-                        if ui.small_button("↷ 15°").clicked() {
+                        if ui
+                            .small_button("＋15°")
+                            .on_hover_text(super::i18n::registered(self.locale, "workspace-inspector.126"))
+                            .clicked()
+                        {
                             self.transform_selection(1.0, 15.0_f32.to_radians());
                         }
                         if ui.small_button("＋ 10%").clicked() {
@@ -868,6 +876,9 @@ impl DrillApp {
                     }
                     if ui.small_button(super::i18n::registered(self.locale, "workspace-inspector.098")).clicked() {
                         preset = Some(GridConfig::soccer());
+                    }
+                    if ui.small_button(super::i18n::registered(self.locale, "workspace-inspector.127")).clicked() {
+                        preset = Some(GridConfig::japan_floor());
                     }
                 });
                 ui.horizontal(|ui| {

@@ -889,13 +889,15 @@ impl eframe::App for DrillApp {
                     self.playing = false;
                 }
                 if ui
-                    .add_enabled(self.history.can_undo(), egui::Button::new("↶ Undo"))
+                    .add_enabled(self.history.can_undo(), egui::Button::new("← Undo"))
+                    .on_hover_text(super::i18n::registered(self.locale, "app-ui.160"))
                     .clicked()
                 {
                     self.execute_command(UiCommand::Undo, ui.ctx());
                 }
                 if ui
-                    .add_enabled(self.history.can_redo(), egui::Button::new("↷ Redo"))
+                    .add_enabled(self.history.can_redo(), egui::Button::new("→ Redo"))
+                    .on_hover_text(super::i18n::registered(self.locale, "app-ui.161"))
                     .clicked()
                 {
                     self.execute_command(UiCommand::Redo, ui.ctx());

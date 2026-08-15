@@ -78,7 +78,7 @@ foreach ($entry in $reviewed) {
 # Locale-neutral raw UI tokens are deliberately tiny and reviewed: arrows and
 # mathematical controls carry no language; DCI 8-to-5 is a notation standard;
 # CG is an editable section-name example, not interface prose.
-$neutralUi = @('→', '−', '＋', '×', '↶ 15°', '↷ 15°', '＋ 10%', '－ 10%', 'DCI 8-to-5', 'CG')
+$neutralUi = @('→', '−', '＋', '×', '－15°', '＋15°', '＋ 10%', '－ 10%', 'DCI 8-to-5', 'CG')
 $rawUiPattern = '\.(?:heading|label|button|small_button|checkbox|on_hover_text|on_disabled_hover_text|text|hint_text)\(\s*"((?:\\.|[^"\\])*)"'
 foreach ($file in Get-ChildItem $sourceRoot -Filter *.rs | Where-Object Name -NotIn @('i18n.rs', 'i18n_generated.rs', 'ui_qa.rs')) {
     foreach ($match in [regex]::Matches([IO.File]::ReadAllText($file.FullName), $rawUiPattern)) {

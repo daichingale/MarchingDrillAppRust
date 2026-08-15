@@ -1186,6 +1186,8 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "workspace-inspector.097") => "Indoor",
         (Locale::Ja, "workspace-inspector.098") => "サッカー",
         (Locale::En, "workspace-inspector.098") => "Soccer",
+        (Locale::Ja, "workspace-inspector.127") => "日本の大会規格 (30m四方)",
+        (Locale::En, "workspace-inspector.127") => "Japan Floor (30m square)",
         (Locale::Ja, "workspace-inspector.099") => "ヤード",
         (Locale::En, "workspace-inspector.099") => "yards",
         (Locale::Ja, "workspace-inspector.100") => "メートル",
@@ -1252,6 +1254,10 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "workspace-inspector.124") => {
             "Choose an earlier working group. Your current selection stays in the session history."
         }
+        (Locale::Ja, "workspace-inspector.125") => "選択した演者を反時計回りに15°回転します",
+        (Locale::En, "workspace-inspector.125") => "Rotate the selected performers 15° counter-clockwise",
+        (Locale::Ja, "workspace-inspector.126") => "選択した演者を時計回りに15°回転します",
+        (Locale::En, "workspace-inspector.126") => "Rotate the selected performers 15° clockwise",
         (Locale::Ja, "export-status.016") => {
             "先に事前検査を実行し、表示された問題を解決してください"
         }
@@ -1384,8 +1390,8 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "app-ui.066") => "Space: Play / Pause",
         (Locale::Ja, "app-ui.067") => "Ctrl/Cmd+S: 保存　Ctrl/Cmd+Z: 元に戻す",
         (Locale::En, "app-ui.067") => "Ctrl/Cmd+S: Save  Ctrl/Cmd+Z: Undo",
-        (Locale::Ja, "inspector-media.056") => "↺ 次セットを自動割り当て（移動最小化）",
-        (Locale::En, "inspector-media.056") => "↺ Auto-assign Next Set (minimize movement)",
+        (Locale::Ja, "inspector-media.056") => "⇄ 次セットを自動割り当て（移動最小化）",
+        (Locale::En, "inspector-media.056") => "⇄ Auto-assign Next Set (minimize movement)",
         (Locale::Ja, "inspector-media.057") => {
             "演者の担当ドットを入れ替え、隊形はそのままに総移動距離を最小化します"
         }
@@ -2078,6 +2084,10 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "app-ui.159") => {
             "Temporarily hide this group. You can restore it immediately from the status strip."
         }
+        (Locale::Ja, "app-ui.160") => "元に戻す (Ctrl/Cmd+Z)",
+        (Locale::En, "app-ui.160") => "Undo (Ctrl/Cmd+Z)",
+        (Locale::Ja, "app-ui.161") => "やり直す (Ctrl/Cmd+Shift+Z)",
+        (Locale::En, "app-ui.161") => "Redo (Ctrl/Cmd+Shift+Z)",
         (Locale::Ja, "clinic-ui.001") => "警告から演者をフォーカス",
         (Locale::En, "clinic-ui.001") => "Focus performers from warnings",
         (Locale::Ja, "clinic-ui.002") => "衝突",

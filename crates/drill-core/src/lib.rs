@@ -157,6 +157,30 @@ impl GridConfig {
         }
     }
 
+    /// 全日本マーチングコンテストで一般的なフロアドリル会場（体育館アリーナ等）
+    /// の規格: 30m四方、メートル法。ハッシュマーク（アメフト場のヤードライン
+    /// 基準線）は屋内フロアには存在しないため空にする。
+    ///
+    /// ステップ幅は世界的に広く使われる「8 to 5」（5ヤードを8歩で移動 = 1歩
+    /// 22.5インチ）をメートル換算してそのまま維持する: 5yd = 4.572m。主要線
+    /// の間隔は視認性を優先し、切りの良い5m刻みにする（ステップ細分化とは
+    /// 独立した値なので、8-to-5の歩幅計算には影響しない）。
+    pub fn japan_floor() -> Self {
+        const FIVE_YARDS_IN_METERS: f32 = 4.572;
+        Self {
+            width: 30.0,
+            height: 30.0,
+            unit: Unit::Meters,
+            horizontal_steps: 8,
+            horizontal_units: FIVE_YARDS_IN_METERS,
+            vertical_steps: 8,
+            vertical_units: FIVE_YARDS_IN_METERS,
+            major_line_interval: 5.0,
+            hashes: Vec::new(),
+            ..Self::default()
+        }
+    }
+
     pub fn snap(&self, point: Point) -> Point {
         if !self.snap_enabled {
             return point;

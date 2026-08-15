@@ -756,13 +756,23 @@ mod tests {
             x: app.document.grid.width,
             y: app.document.grid.height,
         });
+        // The snapped boundary point need not sit on an exact multiple of
+        // the step size (it doesn't for every grid preset), so a single
+        // nudge isn't guaranteed to already be clamped. Take the first
+        // nudge as "reach the boundary" and treat its resulting position as
+        // the baseline for the actual no-op check below.
         app.nudge_selected(4, 0);
         let point = app.selected_points()[0];
-        assert_eq!(point.x, app.document.grid.width);
+        assert!(point.x <= app.document.grid.width);
         assert!(point.y <= app.document.grid.height);
         assert_eq!(point, app.document.grid.snap(point));
-        // The no-op at the boundary is not another undo entry.
-        assert_eq!(app.history.revision(), revision);
+        let clamped_revision = app.history.revision();
+
+        // A further nudge in the same direction cannot move past the field
+        // edge, so it must be a no-op: same position, no new undo entry.
+        app.nudge_selected(4, 0);
+        assert_eq!(app.selected_points()[0], point);
+        assert_eq!(app.history.revision(), clamped_revision);
     }
 
     #[test]

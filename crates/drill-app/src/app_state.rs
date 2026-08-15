@@ -527,7 +527,26 @@ pub(crate) struct DrillApp {
 
 impl Default for DrillApp {
     fn default() -> Self {
-        let document = Document::demo(8, 10);
+        let mut document = Document::demo(8, 10);
+        // `Document::demo`'s block/arc formations are authored against the
+        // default 100x53.333yd football grid. Swap in the standard Japanese
+        // floor-drill footprint (30m square, All-Japan Marching Contest) and
+        // let `replace_grid` proportionally rescale performer positions so
+        // nobody starts off-field. The camera program is grid-dependent too
+        // (it frames the field), so it's rebuilt after the swap rather than
+        // reused from `demo`.
+        document.replace_grid(GridConfig::japan_floor(), true);
+        // Proportional rescaling lands positions near, but not exactly on,
+        // the new grid's snap lattice (its step size doesn't evenly divide
+        // the old one's). Re-snap so the demo starts fully on-grid, matching
+        // what a real snapped edit would produce.
+        let grid = document.grid.clone();
+        for set in &mut document.sets {
+            for point in &mut set.positions {
+                *point = grid.snap(*point);
+            }
+        }
+        document.camera_program = drill_core::camera::CameraProgram::default_for_grid(&document.grid);
         let playback_end = document.timeline_counts();
         let camera = Camera::press_box(&document.grid);
         Self {

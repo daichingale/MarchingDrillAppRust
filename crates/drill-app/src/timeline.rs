@@ -209,8 +209,8 @@ impl TimelineLabelLayout {
         // egui's monospace glyph advance at these font sizes is below 7 pt.
         // Add padding so this remains conservative across platform fonts.
         let text_width = |characters: usize| characters as f32 * 7.0 + 4.0;
-        let in_width = text_width(format!("▸ IN {playback_start}").chars().count());
-        let out_width = text_width(format!("OUT {playback_end} ◂").chars().count());
+        let in_width = text_width(format!("▶ IN {playback_start}").chars().count());
+        let out_width = text_width(format!("OUT {playback_end} ◀").chars().count());
         let now_width = text_width(format!("NOW {global:.2}").chars().count());
 
         let in_x = (range_left + 5.0).clamp(rect.left() + 5.0, rect.right() - in_width);
@@ -512,14 +512,14 @@ pub(crate) fn draw_count_track(
     painter.text(
         labels.in_pos,
         egui::Align2::LEFT_TOP,
-        format!("▸ IN {playback_start}"),
+        format!("▶ IN {playback_start}"),
         egui::FontId::monospace(11.0),
         Color32::from_rgb(100, 235, 165),
     );
     painter.text(
         labels.out_pos,
         egui::Align2::RIGHT_TOP,
-        format!("OUT {playback_end} ◂"),
+        format!("OUT {playback_end} ◀"),
         egui::FontId::monospace(11.0),
         Color32::from_rgb(255, 190, 92),
     );
@@ -958,8 +958,8 @@ mod tests {
                     );
                 }
                 let text_width = |text: &str| text.chars().count() as f32 * 7.0 + 4.0;
-                let in_width = text_width("▸ IN 123456");
-                let out_width = text_width("OUT 234567 ◂");
+                let in_width = text_width("▶ IN 123456");
+                let out_width = text_width("OUT 234567 ◀");
                 let now_width = text_width("NOW 123456.75");
                 assert!(layout.in_pos.x + in_width <= rect.right() + f32::EPSILON);
                 assert!(layout.out_pos.x - out_width >= rect.left() - f32::EPSILON);
