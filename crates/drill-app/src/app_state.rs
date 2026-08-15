@@ -1313,11 +1313,11 @@ impl DrillApp {
     fn apply_follow_the_leader(&mut self, spec: shapes::ShapeSpec, steps: usize) {
         let group: Vec<usize> = self.selected.iter().copied().collect();
         if group.len() < 2 {
-            self.status = i18n::registered(self.locale, "workspace-inspector.133").into();
+            self.status = i18n::registered(self.locale, "workspace-inspector.173").into();
             return;
         }
         if steps == 0 || spec.validate().is_err() {
-            self.status = i18n::registered(self.locale, "workspace-inspector.137").into();
+            self.status = i18n::registered(self.locale, "workspace-inspector.153").into();
             return;
         }
         let Some(source) = self.document.sets.get(self.current_set).cloned() else {
@@ -1332,7 +1332,7 @@ impl DrillApp {
         let mut dense = Vec::with_capacity(RESOLUTION);
         spec.sample(RESOLUTION, &mut dense);
         if dense.len() < 2 {
-            self.status = i18n::registered(self.locale, "workspace-inspector.137").into();
+            self.status = i18n::registered(self.locale, "workspace-inspector.175").into();
             return;
         }
         let sample_progress = |progress: f32| -> Point {
@@ -1359,12 +1359,12 @@ impl DrillApp {
         let mut inserted = Vec::with_capacity(steps);
         for t in 0..steps {
             let Some(next_id) = next_raw_id.checked_add(1) else {
-                self.status = i18n::registered(self.locale, "workspace-inspector.134").into();
+                self.status = i18n::registered(self.locale, "workspace-inspector.150").into();
                 return;
             };
             next_raw_id = next_id;
             let Some(set_id) = drill_core::SetId::new(next_id) else {
-                self.status = i18n::registered(self.locale, "workspace-inspector.134").into();
+                self.status = i18n::registered(self.locale, "workspace-inspector.174").into();
                 return;
             };
             let t_norm = (t + 1) as f32 / steps as f32;
@@ -1380,7 +1380,7 @@ impl DrillApp {
                 id: set_id,
                 name: format!(
                     "{} {}",
-                    i18n::registered(self.locale, "workspace-inspector.132"),
+                    i18n::registered(self.locale, "workspace-inspector.148"),
                     t + 1
                 ),
                 annotation: Default::default(),
@@ -1401,13 +1401,13 @@ impl DrillApp {
             Edit::ReplaceDocument {
                 document: Box::new(next),
             },
-            i18n::registered(self.locale, "workspace-inspector.135"),
+            i18n::registered(self.locale, "workspace-inspector.151"),
         ) {
             self.current_set = insert_at;
             self.count_position = 0.0;
             self.status = format!(
                 "{} {}",
-                i18n::registered(self.locale, "workspace-inspector.136"),
+                i18n::registered(self.locale, "workspace-inspector.152"),
                 step_count
             );
         }

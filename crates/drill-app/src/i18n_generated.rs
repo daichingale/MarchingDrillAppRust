@@ -1262,56 +1262,56 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "workspace-inspector.125") => "Rotate the selected performers 15° counter-clockwise",
         (Locale::Ja, "workspace-inspector.126") => "選択した演者を時計回りに15°回転します",
         (Locale::En, "workspace-inspector.126") => "Rotate the selected performers 15° clockwise",
-        (Locale::Ja, "workspace-inspector.128") => "フォローザリーダー",
-        (Locale::En, "workspace-inspector.128") => "Follow the Leader",
-        (Locale::Ja, "workspace-inspector.129") => {
+        (Locale::Ja, "workspace-inspector.144") => "フォローザリーダー",
+        (Locale::En, "workspace-inspector.144") => "Follow the Leader",
+        (Locale::Ja, "workspace-inspector.145") => {
             "選択した演者(2名以上)が同じ経路を順番に追いかけるように、中間セットを自動生成します。生成後は他のセットと同じように個々のドットを自由に編集できます。"
         }
-        (Locale::En, "workspace-inspector.129") => {
+        (Locale::En, "workspace-inspector.145") => {
             "Generates intermediate sets so the selected group (2+) traces the same path one after another, like a snake maneuver. Every generated set can be hand-edited afterward just like any other set."
         }
-        (Locale::Ja, "workspace-inspector.130") => "経路を描く",
-        (Locale::En, "workspace-inspector.130") => "Draw Path",
-        (Locale::Ja, "workspace-inspector.131") => {
+        (Locale::Ja, "workspace-inspector.146") => "経路を描く",
+        (Locale::En, "workspace-inspector.146") => "Draw Path",
+        (Locale::Ja, "workspace-inspector.147") => {
             "選択した演者がなぞる経路をドラッグして描きます"
         }
-        (Locale::En, "workspace-inspector.131") => {
+        (Locale::En, "workspace-inspector.147") => {
             "Drag to draw the path the selected group will follow"
         }
-        (Locale::Ja, "workspace-inspector.132") => "フォロー",
-        (Locale::En, "workspace-inspector.132") => "Follow",
-        (Locale::Ja, "workspace-inspector.133") => {
+        (Locale::Ja, "workspace-inspector.148") => "フォロー",
+        (Locale::En, "workspace-inspector.148") => "Follow",
+        (Locale::Ja, "workspace-inspector.149") => {
             "フォローザリーダーには2名以上の選択が必要です"
         }
-        (Locale::En, "workspace-inspector.133") => {
+        (Locale::En, "workspace-inspector.149") => {
             "Follow the Leader needs at least two selected performers"
         }
-        (Locale::Ja, "workspace-inspector.134") => "セットIDを割り当てられませんでした",
-        (Locale::En, "workspace-inspector.134") => "Couldn't allocate a new set ID",
-        (Locale::Ja, "workspace-inspector.135") => "フォローザリーダーの適用に失敗しました",
-        (Locale::En, "workspace-inspector.135") => "Failed to apply Follow the Leader",
-        (Locale::Ja, "workspace-inspector.136") => {
+        (Locale::Ja, "workspace-inspector.150") => "セットIDを割り当てられませんでした",
+        (Locale::En, "workspace-inspector.150") => "Couldn't allocate a new set ID",
+        (Locale::Ja, "workspace-inspector.151") => "フォローザリーダーの適用に失敗しました",
+        (Locale::En, "workspace-inspector.151") => "Failed to apply Follow the Leader",
+        (Locale::Ja, "workspace-inspector.152") => {
             "フォローザリーダーの中間セットを追加しました"
         }
-        (Locale::En, "workspace-inspector.136") => {
+        (Locale::En, "workspace-inspector.152") => {
             "Added Follow the Leader intermediate sets"
         }
-        (Locale::Ja, "workspace-inspector.137") => "経路が無効です",
-        (Locale::En, "workspace-inspector.137") => "Invalid path",
-        (Locale::Ja, "workspace-inspector.138") => "中間セット数",
-        (Locale::En, "workspace-inspector.138") => "Intermediate sets",
-        (Locale::Ja, "workspace-inspector.139") => "生成する中間セットの数",
-        (Locale::En, "workspace-inspector.139") => "Number of intermediate sets to generate",
-        (Locale::Ja, "workspace-inspector.140") => "フォローザリーダーを適用",
-        (Locale::En, "workspace-inspector.140") => "Apply Follow the Leader",
-        (Locale::Ja, "workspace-inspector.141") => "先に経路を描いてください",
-        (Locale::En, "workspace-inspector.141") => "Draw a path first",
-        (Locale::Ja, "workspace-inspector.142") => "直線を使用",
-        (Locale::En, "workspace-inspector.142") => "Use a Straight Line",
-        (Locale::Ja, "workspace-inspector.143") => {
+        (Locale::Ja, "workspace-inspector.153") => "経路が無効です",
+        (Locale::En, "workspace-inspector.153") => "Invalid path",
+        (Locale::Ja, "workspace-inspector.154") => "中間セット数",
+        (Locale::En, "workspace-inspector.154") => "Intermediate sets",
+        (Locale::Ja, "workspace-inspector.155") => "生成する中間セットの数",
+        (Locale::En, "workspace-inspector.155") => "Number of intermediate sets to generate",
+        (Locale::Ja, "workspace-inspector.156") => "フォローザリーダーを適用",
+        (Locale::En, "workspace-inspector.156") => "Apply Follow the Leader",
+        (Locale::Ja, "workspace-inspector.157") => "先に経路を描いてください",
+        (Locale::En, "workspace-inspector.157") => "Draw a path first",
+        (Locale::Ja, "workspace-inspector.158") => "直線を使用",
+        (Locale::En, "workspace-inspector.158") => "Use a Straight Line",
+        (Locale::Ja, "workspace-inspector.159") => {
             "選択範囲の対角線を経路として使用します"
         }
-        (Locale::En, "workspace-inspector.143") => {
+        (Locale::En, "workspace-inspector.159") => {
             "Uses the selection's bounding diagonal as the path"
         }
         (Locale::Ja, "export-status.016") => {
@@ -2322,32 +2322,46 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "app-state.157") => "Knife: could not split (line was too short)",
         (Locale::Ja, "app-state.158") => "ナイフで選択を分割しました",
         (Locale::En, "app-state.158") => "Knife split the selection",
-        (Locale::Ja, "workspace-inspector.128") => "ナイフ",
-        (Locale::En, "workspace-inspector.128") => "Knife",
-        (Locale::Ja, "workspace-inspector.129") => {
+        (Locale::Ja, "workspace-inspector.160") => "ナイフ",
+        (Locale::En, "workspace-inspector.160") => "Knife",
+        (Locale::Ja, "workspace-inspector.161") => {
             "フィールド上をドラッグして現在の選択を2つに分割します（未選択の場合は全員が対象）"
         }
-        (Locale::En, "workspace-inspector.129") => {
+        (Locale::En, "workspace-inspector.161") => {
             "Drag across the field to split the current selection in two (the whole cast if nothing is selected)"
         }
-        (Locale::Ja, "workspace-inspector.130") => "グルー",
-        (Locale::En, "workspace-inspector.130") => "Glue",
-        (Locale::Ja, "workspace-inspector.131") => "直近の選択を現在の選択に結合します",
-        (Locale::En, "workspace-inspector.131") => "Merge recent selections into the current one",
-        (Locale::Ja, "workspace-inspector.132") => "直近3件をすべて結合",
-        (Locale::En, "workspace-inspector.132") => "Combine last 3",
-        (Locale::Ja, "workspace-inspector.133") => "直近の選択がありません",
-        (Locale::En, "workspace-inspector.133") => "No recent selections",
-        (Locale::Ja, "workspace-inspector.134") => "ナイフ: 分割線をドラッグしてください",
-        (Locale::En, "workspace-inspector.134") => "Knife: drag to draw the cut line",
-        (Locale::Ja, "workspace-inspector.135") => "キャンセル",
-        (Locale::En, "workspace-inspector.135") => "Cancel",
-        (Locale::Ja, "workspace-inspector.136") => "ナイフ結果",
-        (Locale::En, "workspace-inspector.136") => "Knife result",
-        (Locale::Ja, "workspace-inspector.137") => "反転",
-        (Locale::En, "workspace-inspector.137") => "Invert",
-        (Locale::Ja, "workspace-inspector.138") => "閉じる",
-        (Locale::En, "workspace-inspector.138") => "Close",
+        (Locale::Ja, "workspace-inspector.162") => "グルー",
+        (Locale::En, "workspace-inspector.162") => "Glue",
+        (Locale::Ja, "workspace-inspector.163") => "直近の選択を現在の選択に結合します",
+        (Locale::En, "workspace-inspector.163") => "Merge recent selections into the current one",
+        (Locale::Ja, "workspace-inspector.164") => "直近3件をすべて結合",
+        (Locale::En, "workspace-inspector.164") => "Combine last 3",
+        (Locale::Ja, "workspace-inspector.165") => "直近の選択がありません",
+        (Locale::En, "workspace-inspector.165") => "No recent selections",
+        (Locale::Ja, "workspace-inspector.166") => "ナイフ: 分割線をドラッグしてください",
+        (Locale::En, "workspace-inspector.166") => "Knife: drag to draw the cut line",
+        (Locale::Ja, "workspace-inspector.167") => "キャンセル",
+        (Locale::En, "workspace-inspector.167") => "Cancel",
+        (Locale::Ja, "workspace-inspector.168") => "ナイフ結果",
+        (Locale::En, "workspace-inspector.168") => "Knife result",
+        (Locale::Ja, "workspace-inspector.169") => "反転",
+        (Locale::En, "workspace-inspector.169") => "Invert",
+        (Locale::Ja, "workspace-inspector.170") => "閉じる",
+        (Locale::En, "workspace-inspector.170") => "Close",
+        (Locale::Ja, "workspace-inspector.171") => "描画中: フィールド上をドラッグ",
+        (Locale::En, "workspace-inspector.171") => "Drawing: drag on the field",
+        (Locale::Ja, "workspace-inspector.172") => "破棄",
+        (Locale::En, "workspace-inspector.172") => "Discard",
+        (Locale::Ja, "workspace-inspector.173") => {
+            "フォローザリーダーには2名以上の選択が必要です"
+        }
+        (Locale::En, "workspace-inspector.173") => {
+            "Follow the Leader needs at least two selected performers"
+        }
+        (Locale::Ja, "workspace-inspector.174") => "セットIDを割り当てられませんでした",
+        (Locale::En, "workspace-inspector.174") => "Couldn't allocate a new set ID",
+        (Locale::Ja, "workspace-inspector.175") => "経路が無効です",
+        (Locale::En, "workspace-inspector.175") => "Invalid path",
         _ => "[missing message]",
     }
 }

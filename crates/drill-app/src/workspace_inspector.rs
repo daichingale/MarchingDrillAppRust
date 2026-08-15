@@ -258,31 +258,31 @@ impl DrillApp {
                         !self.knife_active,
                         egui::Button::new(super::i18n::registered(
                             self.locale,
-                            "workspace-inspector.128",
+                            "workspace-inspector.160",
                         )),
                     )
-                    .on_hover_text(super::i18n::registered(self.locale, "workspace-inspector.129"))
+                    .on_hover_text(super::i18n::registered(self.locale, "workspace-inspector.161"))
                     .clicked()
                 {
                     self.begin_knife();
                 }
                 ui.menu_button(
-                    super::i18n::registered(self.locale, "workspace-inspector.130"),
+                    super::i18n::registered(self.locale, "workspace-inspector.162"),
                     |ui| {
                         ui.small(super::i18n::registered(
                             self.locale,
-                            "workspace-inspector.131",
+                            "workspace-inspector.163",
                         ));
                         if self.selection_stack.is_empty() {
                             ui.small(super::i18n::registered(
                                 self.locale,
-                                "workspace-inspector.133",
+                                "workspace-inspector.165",
                             ));
                         } else {
                             if ui
                                 .button(super::i18n::registered(
                                     self.locale,
-                                    "workspace-inspector.132",
+                                    "workspace-inspector.164",
                                 ))
                                 .clicked()
                             {
@@ -308,11 +308,11 @@ impl DrillApp {
             });
             if self.knife_active {
                 ui.horizontal(|ui| {
-                    ui.small(super::i18n::registered(self.locale, "workspace-inspector.134"));
+                    ui.small(super::i18n::registered(self.locale, "workspace-inspector.166"));
                     if ui
                         .small_button(super::i18n::registered(
                             self.locale,
-                            "workspace-inspector.135",
+                            "workspace-inspector.167",
                         ))
                         .clicked()
                     {
@@ -330,7 +330,7 @@ impl DrillApp {
                             ui.label(
                                 egui::RichText::new(format!(
                                     "{}: {} / {}",
-                                    super::i18n::registered(self.locale, "workspace-inspector.136"),
+                                    super::i18n::registered(self.locale, "workspace-inspector.168"),
                                     result.side_a.len(),
                                     result.side_b.len(),
                                 ))
@@ -339,7 +339,7 @@ impl DrillApp {
                             if ui
                                 .button(super::i18n::registered(
                                     self.locale,
-                                    "workspace-inspector.137",
+                                    "workspace-inspector.169",
                                 ))
                                 .clicked()
                             {
@@ -348,7 +348,7 @@ impl DrillApp {
                             if ui
                                 .button(super::i18n::registered(
                                     self.locale,
-                                    "workspace-inspector.138",
+                                    "workspace-inspector.170",
                                 ))
                                 .clicked()
                             {
@@ -711,17 +711,17 @@ impl DrillApp {
                         },
                     );
                     ui.collapsing(
-                        super::i18n::registered(self.locale, "workspace-inspector.128"),
+                        super::i18n::registered(self.locale, "workspace-inspector.144"),
                         |ui| {
-                            ui.small(super::i18n::registered(self.locale, "workspace-inspector.129"));
+                            ui.small(super::i18n::registered(self.locale, "workspace-inspector.145"));
                             let has_group = self.selected.len() >= 2;
                             ui.horizontal_wrapped(|ui| {
                                 if ui
                                     .add_enabled(
                                         has_group,
-                                        egui::Button::new(super::i18n::registered(self.locale, "workspace-inspector.130")),
+                                        egui::Button::new(super::i18n::registered(self.locale, "workspace-inspector.146")),
                                     )
-                                    .on_hover_text(super::i18n::registered(self.locale, "workspace-inspector.131"))
+                                    .on_hover_text(super::i18n::registered(self.locale, "workspace-inspector.147"))
                                     .clicked()
                                 {
                                     self.begin_free_draw();
@@ -730,9 +730,9 @@ impl DrillApp {
                                     && ui
                                         .add_enabled(
                                             has_group,
-                                            egui::Button::new(super::i18n::registered(self.locale, "workspace-inspector.142")),
+                                            egui::Button::new(super::i18n::registered(self.locale, "workspace-inspector.158")),
                                         )
-                                        .on_hover_text(super::i18n::registered(self.locale, "workspace-inspector.143"))
+                                        .on_hover_text(super::i18n::registered(self.locale, "workspace-inspector.159"))
                                         .clicked()
                                 {
                                     self.preview_shape(shapes::ShapeSpec::Line { start: min, end: max });
@@ -741,31 +741,31 @@ impl DrillApp {
                             if !has_group {
                                 ui.colored_label(
                                     Color32::from_rgb(255, 184, 77),
-                                    super::i18n::registered(self.locale, "workspace-inspector.133"),
+                                    super::i18n::registered(self.locale, "workspace-inspector.149"),
                                 );
                             } else if self.free_draw_active {
                                 ui.colored_label(
                                     Color32::from_rgb(100, 220, 255),
-                                    super::i18n::registered(self.locale, "workspace-inspector.031"),
+                                    super::i18n::registered(self.locale, "workspace-inspector.171"),
                                 );
                             }
                             ui.horizontal(|ui| {
-                                ui.label(super::i18n::registered(self.locale, "workspace-inspector.138"));
+                                ui.label(super::i18n::registered(self.locale, "workspace-inspector.154"));
                                 ui.add(
                                     egui::DragValue::new(&mut self.follow_leader_steps)
                                         .range(1..=32)
                                         .suffix(" set"),
                                 )
-                                .on_hover_text(super::i18n::registered(self.locale, "workspace-inspector.139"));
+                                .on_hover_text(super::i18n::registered(self.locale, "workspace-inspector.155"));
                             });
                             let path_ready = has_group && self.formation_preview_spec.is_some();
                             ui.horizontal_wrapped(|ui| {
                                 if ui
                                     .add_enabled(
                                         path_ready,
-                                        egui::Button::new(super::i18n::registered(self.locale, "workspace-inspector.140")),
+                                        egui::Button::new(super::i18n::registered(self.locale, "workspace-inspector.156")),
                                     )
-                                    .on_hover_text(super::i18n::registered(self.locale, "workspace-inspector.141"))
+                                    .on_hover_text(super::i18n::registered(self.locale, "workspace-inspector.157"))
                                     .clicked()
                                     && let Some(spec) = self.formation_preview_spec.take()
                                 {
@@ -778,7 +778,7 @@ impl DrillApp {
                                 if ui
                                     .add_enabled(
                                         self.formation_preview_spec.is_some() || self.free_draw_active,
-                                        egui::Button::new(super::i18n::registered(self.locale, "workspace-inspector.027")),
+                                        egui::Button::new(super::i18n::registered(self.locale, "workspace-inspector.172")),
                                     )
                                     .clicked()
                                 {
