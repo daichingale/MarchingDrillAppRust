@@ -501,6 +501,11 @@ pub(crate) struct DrillApp {
     free_draw_active: bool,
     free_draw_raw: Vec<Point>,
     formation_text: String,
+    /// Number of intermediate Sets the "Follow the Leader" tool generates
+    /// between the current set and the next one. Session UI state only,
+    /// deliberately kept out of the document/undo history like
+    /// `formation_text`.
+    follow_leader_steps: u32,
     underlay_state: underlay_state::UnderlayState,
     /// Revision-gated background analytics; no heavy analysis executes in an
     /// egui frame callback.
@@ -643,6 +648,7 @@ impl Default for DrillApp {
             free_draw_active: false,
             free_draw_raw: Vec::with_capacity(512),
             formation_text: "DRILL".into(),
+            follow_leader_steps: 6,
             underlay_state: underlay_state::UnderlayState::default(),
             analytics_state: analytics_state::AnalyticsState::default(),
             heatmap_enabled: false,
@@ -1090,6 +1096,124 @@ impl DrillApp {
         self.current_set = insert_at;
         self.count_position = 0.0;
         self.dirty = true;
+    }
+
+    /// Auto-generates a "follow the leader" snake maneuver as `steps`
+    /// ordinary intermediate Sets inserted between the current set and the
+    /// next one, rather than modeling it as a continuous path-with-timing
+    /// primitive. Pyware's version of this maneuver authors one continuous
+    /// path with live per-performer timing offsets; the user found that hard
+    /// to fine-tune after the fact. Because every inserted Set here is just
+    /// an ordinary `Set`, the user can go back and hand-edit any individual
+    /// dot afterward exactly like any other set.
+    ///
+    /// `self.selected` (in ascending performer-index order -- this codebase
+    /// does not track click order, see the caller's selection UI) supplies
+    /// the ordered group: rank 0 is the leader, furthest along `spec` at
+    /// every inserted set; rank r follows `1/len` of a lap behind rank r-1.
+    /// Performers outside the group hold their existing position, copied
+    /// unchanged from the set being split, in every inserted set.
+    fn apply_follow_the_leader(&mut self, spec: shapes::ShapeSpec, steps: usize) {
+        let group: Vec<usize> = self.selected.iter().copied().collect();
+        if group.len() < 2 {
+            self.status = i18n::registered(self.locale, "workspace-inspector.133").into();
+            return;
+        }
+        if steps == 0 || spec.validate().is_err() {
+            self.status = i18n::registered(self.locale, "workspace-inspector.137").into();
+            return;
+        }
+        let Some(source) = self.document.sets.get(self.current_set).cloned() else {
+            return;
+        };
+
+        // Dense arc-length-uniform samples of the path so any fractional
+        // progress in [0, 1] can be looked up by interpolating between the
+        // two nearest samples; a fixed high resolution keeps this accurate
+        // regardless of `steps` or the group size.
+        const RESOLUTION: usize = 512;
+        let mut dense = Vec::with_capacity(RESOLUTION);
+        spec.sample(RESOLUTION, &mut dense);
+        if dense.len() < 2 {
+            self.status = i18n::registered(self.locale, "workspace-inspector.137").into();
+            return;
+        }
+        let sample_progress = |progress: f32| -> Point {
+            let progress = progress.clamp(0.0, 1.0);
+            let scaled = progress * (dense.len() - 1) as f32;
+            let i0 = scaled.floor() as usize;
+            let i1 = (i0 + 1).min(dense.len() - 1);
+            dense[i0].lerp(dense[i1], scaled - i0 as f32)
+        };
+
+        // Each rank lags the one ahead of it by a fixed 1/len share of the
+        // path: the leader (rank 0) reaches the end exactly at the final
+        // inserted set, and each follower's own window opens later so the
+        // group reads as a staggered snake rather than a straight-line move.
+        // Followers whose window hasn't opened yet (progress would be
+        // negative) sit at the path's start point; a rank whose window
+        // finishes before `steps` runs out holds at the path's end point.
+        let delay_per_rank = 1.0 / group.len() as f32;
+        let insert_at = self.current_set + 1;
+        let mut next = self.document.clone();
+        let grid = next.grid.clone();
+
+        let mut next_raw_id = next.sets.iter().map(|set| set.id.get()).max().unwrap_or(0);
+        let mut inserted = Vec::with_capacity(steps);
+        for t in 0..steps {
+            let Some(next_id) = next_raw_id.checked_add(1) else {
+                self.status = i18n::registered(self.locale, "workspace-inspector.134").into();
+                return;
+            };
+            next_raw_id = next_id;
+            let Some(set_id) = drill_core::SetId::new(next_id) else {
+                self.status = i18n::registered(self.locale, "workspace-inspector.134").into();
+                return;
+            };
+            let t_norm = (t + 1) as f32 / steps as f32;
+            let mut positions = source.positions.clone();
+            for (rank, &index) in group.iter().enumerate() {
+                let progress = t_norm - rank as f32 * delay_per_rank;
+                let point = sample_progress(progress);
+                if let Some(slot) = positions.get_mut(index) {
+                    *slot = grid.snap(point);
+                }
+            }
+            inserted.push(Set {
+                id: set_id,
+                name: format!(
+                    "{} {}",
+                    i18n::registered(self.locale, "workspace-inspector.132"),
+                    t + 1
+                ),
+                annotation: Default::default(),
+                counts: 4,
+                hold: 0,
+                routes: Default::default(),
+                shape: None,
+                positions,
+            });
+        }
+
+        let step_count = inserted.len();
+        for (offset, set) in inserted.into_iter().enumerate() {
+            next.sets.insert(insert_at + offset, set);
+        }
+
+        if self.execute_edit(
+            Edit::ReplaceDocument {
+                document: Box::new(next),
+            },
+            i18n::registered(self.locale, "workspace-inspector.135"),
+        ) {
+            self.current_set = insert_at;
+            self.count_position = 0.0;
+            self.status = format!(
+                "{} {}",
+                i18n::registered(self.locale, "workspace-inspector.136"),
+                step_count
+            );
+        }
     }
 
     fn execute_command(&mut self, command: UiCommand, context: &egui::Context) {
