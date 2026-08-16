@@ -33,9 +33,11 @@ impl ProductionMarkersPanel {
     }
 
     fn seek(app: &mut DrillApp, count: u32) {
-        let (set, local) = app.document.locate_count(count as f32);
-        app.current_set = set;
-        app.count_position = local;
+        // Same landing point as before; `navigation_seek_to_count` adds the
+        // short visual glide the other rehearsal-navigation entry points use,
+        // so jumping from a marker row looks like the same gesture as jumping
+        // from the set list. Audio below is still seeked straight to `count`.
+        app.navigation_seek_to_count(count);
         app.playing = false;
         app.audio_state.pause();
         if let Some(track) = &app.document.audio {
