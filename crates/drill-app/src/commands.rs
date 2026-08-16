@@ -68,6 +68,7 @@ pub(crate) enum Command {
     WorkspaceReview,
     WorkspacePresent,
     ToggleGuidance,
+    TogglePerfHud,
     GettingStarted,
     LegalNotices,
 }
@@ -120,6 +121,24 @@ impl Shortcut {
         }
     }
 
+    /// True for chords that require an extra Shift or Alt on top of the
+    /// platform command modifier (e.g. Cmd+Shift+S).
+    ///
+    /// `consume_shortcut` below uses this to try these chords before their
+    /// plainer counterparts (e.g. Cmd+S), independent of `SPECS`' declared
+    /// order. That matters because egui's own shortcut matching
+    /// (`Modifiers::matches_logically`, which `egui::InputState::
+    /// consume_shortcut` uses) ignores *extra* Shift/Alt on the actual
+    /// keypress: a plain `Command(S)` pattern also matches an incoming
+    /// Cmd+Shift+S. Left to `SPECS`' array order -- which exists to control
+    /// menu display, not shortcut priority -- whichever spec merely
+    /// happened to sit earlier would permanently shadow a more specific one
+    /// sharing its base key. See
+    /// `no_shortcut_is_shadowed_by_a_looser_earlier_spec`.
+    fn is_extra_specific(self) -> bool {
+        matches!(self, Self::CommandShift(_) | Self::CommandAlt(_))
+    }
+
     /// Resolve a physical key chord without depending on egui frame state.
     /// This is the authoritative mapping used by both the UI and semantic QA.
     #[cfg(test)]
@@ -155,7 +174,13 @@ pub(crate) fn command_for_chord(
     })
 }
 
-/// Consume at most one enabled application command in deterministic spec order.
+/// Consume at most one enabled application command.
+///
+/// Tries chords needing an extra Shift/Alt (see
+/// `Shortcut::is_extra_specific`) before plainer ones sharing the same base
+/// key, then falls back to `SPECS`' declared order -- which stays free to
+/// track menu display, not shortcut priority. No heap allocation: this runs
+/// on every frame a keyboard shortcut could fire.
 pub(crate) fn consume_shortcut(
     ui: &mut egui::Ui,
     context: Context,
@@ -164,7 +189,7 @@ pub(crate) fn consume_shortcut(
     if ui.ctx().egui_wants_keyboard_input() || ui.ctx().text_edit_focused() {
         return None;
     }
-    SPECS.iter().find_map(|spec| {
+    let mut try_consume = |spec: &Spec| {
         let shortcut = spec.shortcut?;
         if spec.command.enabled(context, locale).is_ok()
             && ui.input_mut(|input| input.consume_shortcut(&shortcut.value()))
@@ -173,7 +198,17 @@ pub(crate) fn consume_shortcut(
         } else {
             None
         }
-    })
+    };
+    SPECS
+        .iter()
+        .filter(|spec| spec.shortcut.is_some_and(Shortcut::is_extra_specific))
+        .find_map(&mut try_consume)
+        .or_else(|| {
+            SPECS
+                .iter()
+                .filter(|spec| !spec.shortcut.is_some_and(Shortcut::is_extra_specific))
+                .find_map(&mut try_consume)
+        })
 }
 
 pub(crate) const SPECS: &[Spec] = &[
@@ -445,6 +480,11 @@ pub(crate) const SPECS: &[Spec] = &[
         shortcut: None,
     },
     Spec {
+        command: Command::TogglePerfHud,
+        menu: Menu::View,
+        shortcut: Some(Shortcut::CommandShift(egui::Key::P)),
+    },
+    Spec {
         command: Command::GettingStarted,
         menu: Menu::Help,
         shortcut: Some(Shortcut::Plain(egui::Key::F1)),
@@ -536,6 +576,7 @@ impl Command {
             (_, WorkspacePresent) => super::i18n::registered(locale, "workspace-preset.003"),
             (Locale::Ja, ToggleGuidance) => "操作ガイドを切替",
             (Locale::En, ToggleGuidance) => "Toggle Guidance",
+            (_, TogglePerfHud) => super::i18n::registered(locale, "perf-hud.010"),
             (Locale::Ja, GettingStarted) => "はじめかた・全ショートカット…",
             (Locale::En, GettingStarted) => "Getting Started & Shortcuts…",
             (Locale::Ja, LegalNotices) => "ライセンス・第三者通知…",
@@ -772,6 +813,106 @@ mod tests {
             assert_eq!(command_for_chord(modifiers, key, false), Some(spec.command));
             assert_eq!(command_for_chord(modifiers, key, true), None);
         }
+    }
+
+    /// The test above checks exact-match uniqueness via `Shortcut::matches`,
+    /// which is *not* what runs at the keyboard: `consume_shortcut` (this
+    /// file) dispatches through real `egui::InputState::consume_shortcut`,
+    /// which matches modifiers with `Modifiers::matches_logically` --
+    /// documented by egui as ignoring *extra* Shift/Alt on the actual
+    /// keypress. So a plain `Command(K)` spec also matches an incoming
+    /// Cmd+Shift+K. This is a real bug class, not a theoretical one: it once
+    /// made Cmd+Shift+S (`SaveAs`) silently perform a plain `Save`, and
+    /// Cmd+Shift+P (`TogglePerfHud`, added alongside this test) would have
+    /// been shadowed by `OpenPrint` the same way. `consume_shortcut` now
+    /// tries every "extra specific" chord (`Shortcut::is_extra_specific`)
+    /// ahead of plainer ones sharing a base key, independent of `SPECS`'
+    /// declared order (which stays free to track menu display). This drives
+    /// the *real* dispatch function -- not the exact-match test helper above
+    /// -- through every such pair in the live table, so any future addition
+    /// that breaks this is caught here rather than at a keyboard.
+    #[test]
+    fn extra_specific_chords_always_resolve_over_their_plainer_counterpart() {
+        let mut checked_at_least_one_pair = false;
+        for extra in SPECS
+            .iter()
+            .filter(|spec| spec.shortcut.is_some_and(Shortcut::is_extra_specific))
+        {
+            let extra_shortcut = extra.shortcut.unwrap().value();
+            let Some(plainer) = SPECS.iter().find(|spec| {
+                spec.shortcut.is_some_and(|shortcut| {
+                    !shortcut.is_extra_specific()
+                        && shortcut.value().logical_key == extra_shortcut.logical_key
+                })
+            }) else {
+                continue;
+            };
+            checked_at_least_one_pair = true;
+            let resolved = resolve_via_real_egui_dispatch(extra_shortcut.modifiers, extra_shortcut.logical_key);
+            assert_eq!(
+                resolved,
+                Some(extra.command),
+                "{:?}'s own chord resolved to {resolved:?} instead -- shadowed by its \
+                 plainer sibling {:?}",
+                extra.command,
+                plainer.command
+            );
+        }
+        assert!(
+            checked_at_least_one_pair,
+            "test is vacuous: no extra-specific/plain pair currently shares a base key"
+        );
+    }
+
+    /// Drives the real, non-test `consume_shortcut` (not `command_for_chord`,
+    /// which uses the exact-match helper) through a real `egui::Context`, so
+    /// assertions reflect what actually happens at the keyboard.
+    #[cfg(test)]
+    fn resolve_via_real_egui_dispatch(modifiers: egui::Modifiers, key: egui::Key) -> Option<Command> {
+        let egui_ctx = egui::Context::default();
+        let full_context = Context {
+            can_undo: true,
+            can_redo: true,
+            has_performers: true,
+            has_selection: true,
+            has_recent_selection: true,
+            has_formation_clipboard: true,
+            has_multiple_selection: true,
+            can_edit_selection: true,
+            has_sets: true,
+            has_previous_production_marker: true,
+            has_next_production_marker: true,
+            has_previous_set: true,
+            has_next_set: true,
+        };
+        let mut raw_input = egui::RawInput::default();
+        raw_input.modifiers = modifiers;
+        raw_input.events.push(egui::Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed: true,
+            repeat: false,
+            modifiers,
+        });
+        let mut resolved = None;
+        let _ = egui_ctx.run_ui(raw_input, |ui| {
+            resolved = consume_shortcut(ui, full_context, Locale::En);
+        });
+        resolved
+    }
+
+    /// Concrete anchor for the HUD's own chord specifically, kept alongside
+    /// the general sweep above for a readable failure if only this one
+    /// regresses.
+    #[test]
+    fn command_shift_p_resolves_to_the_perf_hud_toggle_not_open_print() {
+        assert_eq!(
+            resolve_via_real_egui_dispatch(
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                egui::Key::P
+            ),
+            Some(Command::TogglePerfHud)
+        );
     }
 
     #[test]

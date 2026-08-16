@@ -36,6 +36,8 @@ mod legal_notices;
 mod mobile_viewer_state;
 #[path = "onboarding.rs"]
 mod onboarding;
+#[path = "perf_hud.rs"]
+mod perf_hud;
 #[path = "plugin_state.rs"]
 mod plugin_state;
 #[path = "print_state.rs"]
@@ -496,6 +498,9 @@ pub(crate) struct DrillApp {
     update_state: update_state::UpdateState,
     import_state: import_state::ImportState,
     gpu: Option<gpu_bridge::Bridge>,
+    /// Toggleable frame-pacing overlay. Session-only diagnostics: never part
+    /// of the document, never touches undo history.
+    perf_hud: perf_hud::PerfHud,
     plugin_state: plugin_state::PluginUiState,
     text_export_state: text_export_state::TextExportState,
     subset_snapshot_state: subset_snapshot_state::SubsetSnapshotState,
@@ -653,6 +658,7 @@ impl Default for DrillApp {
             update_state: update_state::UpdateState::default(),
             import_state: import_state::ImportState::default(),
             gpu: None,
+            perf_hud: perf_hud::PerfHud::default(),
             plugin_state: plugin_state::PluginUiState::default(),
             text_export_state: text_export_state::TextExportState::default(),
             subset_snapshot_state: subset_snapshot_state::SubsetSnapshotState::default(),
@@ -1566,6 +1572,7 @@ impl DrillApp {
             UiCommand::WorkspaceReview => self.apply_workspace_preset(WorkspacePreset::Review),
             UiCommand::WorkspacePresent => self.apply_workspace_preset(WorkspacePreset::Present),
             UiCommand::ToggleGuidance => self.show_guidance = !self.show_guidance,
+            UiCommand::TogglePerfHud => self.perf_hud.toggle(),
             UiCommand::GettingStarted => self.onboarding.show_help = true,
             UiCommand::LegalNotices => self.show_legal_notices = true,
         }
@@ -2179,7 +2186,14 @@ impl DrillApp {
                 self.audio_state.set_mix(track.gain_linear(), track.muted);
                 self.audio_state.play();
             }
-            context.request_repaint_after(Duration::from_millis(16));
+            // Advance playback is `dt`-based (see `controller::playback_decision`),
+            // so it does not need a fixed 60fps tick -- it needs "as often as
+            // vsync allows." `request_repaint_after(16ms)` hard-caps playback
+            // at 60fps even on a 144/240Hz monitor; a bare `request_repaint()`
+            // asks for the very next frame and lets the compositor pace it.
+            // Only reached inside `if self.playing`, so this cannot busy-spin
+            // while paused.
+            context.request_repaint();
         }
     }
 
