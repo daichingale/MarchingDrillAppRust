@@ -62,6 +62,24 @@ impl AppTheme {
             egui::ThemePreference::Light
         });
         ctx.set_visuals(visuals);
+        // Not a color, but this is the one chokepoint every context passes
+        // through (startup in `bootstrap.rs`, restore in `DrillApp::new`, and
+        // every user theme switch), so the app's motion budget is pinned here
+        // rather than being re-set from three places.
+        //
+        // `Style::animation_time` is what `Context::animate_bool_responsive`
+        // reads, which is what every `CollapsingHeader` in the inspector uses
+        // for its open/close tween. egui's default is 0.2s; at the density of
+        // a drill inspector -- where sections get opened and closed constantly
+        // while chasing a coordinate -- that reads as a lurch rather than a
+        // reveal. 0.15s keeps the easing legible without ever making the
+        // writer wait on it.
+        // `all_styles_mut` rather than `global_style_mut`: egui keeps separate
+        // dark and light `Style` slots, and this app switches between them
+        // (Daylight is light, the other two are dark). Writing only the active
+        // slot would silently lose the tuning the first time the user crossed
+        // that boundary from a context we didn't re-apply.
+        ctx.all_styles_mut(|style| style.animation_time = COLLAPSE_ANIMATION_SECONDS);
     }
 
     pub(crate) fn load() -> Self {
@@ -86,6 +104,80 @@ impl AppTheme {
 
 fn preferences_path() -> Option<PathBuf> {
     Some(super::project_state::app_data_dir().join("theme.json"))
+}
+
+/// Open/close tween length for every `CollapsingHeader` in the app, via
+/// `Style::animation_time`. See [`AppTheme::apply`].
+const COLLAPSE_ANIMATION_SECONDS: f32 = 0.15;
+
+/// Softens the Studio/Daylight/Nightline switch from a hard flash into a
+/// dissolve, by washing the outgoing theme's dominant color over the new one
+/// for a moment and fading it out.
+///
+/// A true per-field interpolation of `egui::Visuals` was considered and
+/// rejected. `Visuals` is ~40 colors plus strokes, shadows, corner radii and
+/// booleans; several of those fields (`dark_mode`, `collapsing_header_frame`,
+/// text-cursor settings) have no meaningful midpoint, and any field egui adds
+/// in a future version would silently drop out of the transition and pop.
+/// That is a lot of fragile surface for an effect the eye reads for 180ms.
+/// One full-window veil of `panel_fill` -- the color that covers most of the
+/// window in every one of these themes -- gets the perceptual result, degrades
+/// gracefully, and cannot go stale.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ThemeFade {
+    /// Outgoing panel color and seconds elapsed, or `None` when idle.
+    active: Option<(Color32, f32)>,
+}
+
+impl ThemeFade {
+    /// Short on purpose. The switch must still read as immediate; this only
+    /// removes the hard edge, it is not meant to be watched.
+    const DURATION: f32 = 0.18;
+    /// Deliberately below 1.0. A fully opaque first frame would make the
+    /// window blink to a flat color, which is a worse artifact than the
+    /// flash it replaces.
+    const PEAK_ALPHA: f32 = 0.8;
+
+    /// Call with the theme being switched *away from*, just before applying
+    /// the new one.
+    pub(crate) fn begin(&mut self, outgoing: AppTheme) {
+        self.active = Some((outgoing.visuals().panel_fill, 0.0));
+    }
+
+    /// Advances the fade by `dt` and paints this frame of it. Returns true
+    /// while the fade is still running, so the caller keeps the repaint loop
+    /// alive for exactly that long and no longer.
+    pub(crate) fn paint(&mut self, ctx: &egui::Context, dt: f32) -> bool {
+        let Some((color, elapsed)) = self.active.as_mut() else {
+            return false;
+        };
+        *elapsed += dt;
+        let t = *elapsed / Self::DURATION;
+        if t >= 1.0 {
+            self.active = None;
+            return false;
+        }
+        // Quadratic ease-out on the alpha: the outgoing theme is more than
+        // half gone within the first 55ms, so the new theme is what the eye
+        // actually settles on, with the old one trailing off behind it.
+        let fade = 1.0 - t;
+        let alpha = Self::PEAK_ALPHA * fade * fade;
+        let veil = Color32::from_rgba_unmultiplied(
+            color.r(),
+            color.g(),
+            color.b(),
+            (alpha * 255.0).round() as u8,
+        );
+        // A dedicated foreground layer: z-ordered above the panels regardless
+        // of when in the frame this runs, and it never registers interaction,
+        // so the UI underneath stays fully clickable throughout the fade.
+        ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("app-theme-fade"),
+        ))
+        .rect_filled(ctx.viewport_rect(), 0.0, veil);
+        true
+    }
 }
 
 /// The original theme, unchanged from `bootstrap.rs`'s previous hardcoded

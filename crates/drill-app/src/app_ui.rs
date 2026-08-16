@@ -322,10 +322,17 @@ impl eframe::App for DrillApp {
             }
             ui.ctx().request_repaint_after(Duration::from_millis(16));
         }
-        let set_counts = self.document.sets[self.current_set].counts.max(1) as f32;
+        self.advance_view_motion(ui.ctx(), dt);
+        // The renderer reads the *visual* playhead, which is the logical one
+        // except during the ~150ms after a navigation jump. Everything above
+        // this line -- playback, audio, edits -- has already run against the
+        // logical position, so nothing downstream of a glide can leak into
+        // the document.
+        let (render_set, render_count) = self.render_playhead();
+        let set_counts = self.document.sets[render_set].counts.max(1) as f32;
         self.document.positions_at(
-            self.current_set,
-            self.count_position / set_counts,
+            render_set,
+            render_count / set_counts,
             &mut self.frame_positions,
         );
         self.command_palette.open_if_requested(ui.ctx());
@@ -681,6 +688,7 @@ impl eframe::App for DrillApp {
                     // choice (see app_theme.rs's module doc comment).
                     ui.menu_button(super::i18n::registered(self.locale, "app-ui.162"), |ui| {
                         for candidate in app_theme::AppTheme::ALL {
+                            let outgoing = self.app_theme;
                             if ui
                                 .radio_value(
                                     &mut self.app_theme,
@@ -689,6 +697,12 @@ impl eframe::App for DrillApp {
                                 )
                                 .changed()
                             {
+                                // Capture the theme being left *before*
+                                // `apply` overwrites `Visuals`, so the fade
+                                // veil is painted in the color the user is
+                                // looking at right now, not the one they're
+                                // about to see.
+                                self.theme_fade.begin(outgoing);
                                 self.app_theme.apply(ui.ctx());
                                 self.app_theme.persist();
                                 ui.close();
@@ -1531,13 +1545,23 @@ impl eframe::App for DrillApp {
         let current_global = self
             .document
             .global_count(self.current_set, self.count_position);
+        // Follow used to `center_on` the frame the playhead crossed the
+        // margin, which snaps the whole track sideways at the exact moment
+        // the user is watching it move. Now it only sets a target and
+        // `advance_view_motion` eases toward it. Re-evaluating the margin
+        // every frame (rather than latching the first target) means the
+        // recentre tracks the live playhead while it is still outside the
+        // margin, then coasts to a stop once it is back inside.
         if self.timeline_follow
             && self.playing
             && !self
                 .timeline_view
                 .contains_with_margin(current_global, 0.08)
         {
-            self.timeline_view.center_on(current_global, total_counts);
+            self.timeline_follow_glide = Some(
+                self.timeline_view
+                    .settled_center_start(current_global, total_counts),
+            );
         }
         ui.horizontal(|ui| {
             ui.strong(super::i18n::registered(self.locale, "app-ui.055"));
@@ -1598,11 +1622,14 @@ impl eframe::App for DrillApp {
                 total_counts
             ));
         });
+        // The NOW line glides with the field, so a set jump moves one playhead
+        // across two views rather than teleporting each of them separately.
+        let (playhead_set, playhead_count) = self.render_playhead();
         let timeline_change = draw_count_track(
             ui,
             &self.document,
-            self.current_set,
-            self.count_position,
+            playhead_set,
+            playhead_count,
             self.playback_start,
             self.playback_end,
             &mut self.timeline_view,

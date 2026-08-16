@@ -62,9 +62,51 @@ impl TimelineViewport {
         count >= self.start + margin && count <= self.start + self.span - margin
     }
 
-    pub(crate) fn center_on(&mut self, count: f32, total: u32) {
-        self.start = count - self.span * 0.5;
+    /// The `start` that would put `count` in the middle of the viewport, after
+    /// clamping to the range `normalize` would allow. Clamping here (rather
+    /// than leaving it to `normalize` afterwards) is what lets
+    /// [`Self::glide_start_toward`] recognise that it has arrived when the
+    /// requested centre is off either end of the show.
+    pub(crate) fn settled_center_start(self, count: f32, total: u32) -> f32 {
+        self.clamp_start(count - self.span * 0.5, total)
+    }
+
+    fn clamp_start(self, start: f32, total: u32) -> f32 {
+        let total = total.max(1) as f32;
+        let span = self.span.clamp(Self::MIN_SPAN.min(total), total);
+        start.clamp(0.0, (total - span).max(0.0))
+    }
+
+    /// Eases `start` toward `target_start` and reports whether it is still
+    /// moving.
+    ///
+    /// Playback follow used to `center_on` the instant the playhead crossed
+    /// the margin, which is a discontinuity dropped on the user at the exact
+    /// moment they are watching motion. This glides instead.
+    ///
+    /// The step is the dt-correct exponential `1 - e^(-dt/tau)`, not the
+    /// common `x += (target - x) * k`: the latter is a per-*frame* fraction
+    /// and so converges twice as fast at 120Hz as at 60Hz, i.e. the feel of
+    /// the app would depend on the monitor. This form is identical at any
+    /// refresh rate.
+    pub(crate) fn glide_start_toward(&mut self, target_start: f32, dt: f32, total: u32) -> bool {
+        /// Time to close ~63% of the remaining distance. Chosen so a typical
+        /// recentre is visually done inside ~200ms.
+        const TAU_SECONDS: f32 = 0.07;
+        /// Sub-pixel at any realistic zoom; below this, snap and stop so the
+        /// app can go idle instead of chasing an asymptote forever.
+        const SETTLE_COUNTS: f32 = 0.02;
+
+        let target_start = self.clamp_start(target_start, total);
+        let delta = target_start - self.start;
+        if delta.abs() <= SETTLE_COUNTS || dt <= 0.0 {
+            self.start = target_start;
+            self.normalize(total);
+            return false;
+        }
+        self.start += delta * (1.0 - (-dt / TAU_SECONDS).exp());
         self.normalize(total);
+        true
     }
 }
 
@@ -919,10 +961,45 @@ mod tests {
             span: 40.0,
         };
         assert!(!viewport.contains_with_margin(138.0, 0.08));
-        viewport.center_on(138.0, 1_000);
+        // `center_on` was replaced by a glide (see `glide_start_toward`'s doc
+        // comment): drive it with generous per-step dt until it reports
+        // convergence, which is exactly what a long-running app does across
+        // many real frames. The destination must match the old instant jump.
+        let target = viewport.settled_center_start(138.0, 1_000);
+        while viewport.glide_start_toward(target, 1.0, 1_000) {}
         assert_eq!(viewport.span, 40.0);
         assert_eq!(viewport.start, 118.0);
         assert!(viewport.contains_with_margin(138.0, 0.08));
+    }
+
+    #[test]
+    fn glide_is_frame_rate_independent() {
+        // Covering the same total time in many small steps (240Hz) or few
+        // large ones (60Hz) must land on the same spot, within float noise.
+        // This is the property that makes `x += (target - x) * k` wrong and
+        // the `1 - e^(-dt/tau)` form correct: the former's per-frame fraction
+        // compounds differently depending on step count for the same elapsed
+        // time, so it would fail this exact check.
+        let target = 500.0;
+        let total = 1_000;
+
+        let mut fast = TimelineViewport {
+            start: 0.0,
+            span: 40.0,
+        };
+        for _ in 0..240 {
+            fast.glide_start_toward(target - fast.span * 0.5, 1.0 / 240.0, total);
+        }
+
+        let mut slow = TimelineViewport {
+            start: 0.0,
+            span: 40.0,
+        };
+        for _ in 0..60 {
+            slow.glide_start_toward(target - slow.span * 0.5, 1.0 / 60.0, total);
+        }
+
+        assert!((fast.start - slow.start).abs() < 0.01);
     }
     #[test]
     fn zoomed_seek_uses_visible_counts() {

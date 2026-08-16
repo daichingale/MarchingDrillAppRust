@@ -402,6 +402,110 @@ pub(crate) struct KnifeSplit {
     pub(crate) active_side_a: bool,
 }
 
+/// A short, purely *visual* easing of the playhead toward a navigation
+/// target, so a jump between sets reads as a move the eye can follow instead
+/// of a cut to an unrelated picture.
+///
+/// This deliberately holds no authority over anything. `current_set` and
+/// `count_position` are still assigned synchronously by the navigation
+/// functions, so every headless caller -- including the ui_qa acceptance
+/// tests, which call `navigate_to_set` and assert on the destination on the
+/// very next line -- observes the same state it always has. This struct only
+/// answers "where should the renderer draw the playhead *this* frame", in
+/// global count space, and is never read by the document, the undo history,
+/// or the audio clock.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct NavGlide {
+    active: Option<Glide>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Glide {
+    /// Global count the glide departs from.
+    from: f32,
+    /// Global count it converges to; always the already-committed logical
+    /// position.
+    to: f32,
+    elapsed: f32,
+    duration: f32,
+}
+
+impl NavGlide {
+    /// Below this the jump is already within a set's own visual noise, and
+    /// easing it just adds latency to something that read as instant anyway.
+    const MIN_DISTANCE_COUNTS: f32 = 0.75;
+    /// Floor and ceiling on the glide length. A drill writer triggers set
+    /// navigation thousands of times a session, so this budget is about
+    /// legibility, not spectacle: long enough to show direction, short enough
+    /// that it can never be what the user is waiting on.
+    const MIN_DURATION: f32 = 0.10;
+    const MAX_DURATION: f32 = 0.20;
+    /// Longer jumps get slightly longer glides, so crossing the whole show
+    /// does not have to move at an absurd apparent speed to fit the floor.
+    const SECONDS_PER_COUNT: f32 = 0.0016;
+
+    /// Starts (or redirects) a glide arriving at `to_global`.
+    ///
+    /// Call this *before* committing the logical seek, passing the position
+    /// being left. If a glide is already in flight the new one departs from
+    /// wherever the eye currently is rather than from the stale original
+    /// origin, so rapid next/next/next never snaps backwards.
+    fn begin(&mut self, from_global: f32, to_global: f32) {
+        let from = self.position().unwrap_or(from_global);
+        let distance = (to_global - from).abs();
+        if !distance.is_finite() || distance < Self::MIN_DISTANCE_COUNTS {
+            self.active = None;
+            return;
+        }
+        self.active = Some(Glide {
+            from,
+            to: to_global,
+            elapsed: 0.0,
+            duration: (Self::MIN_DURATION + distance * Self::SECONDS_PER_COUNT)
+                .min(Self::MAX_DURATION),
+        });
+    }
+
+    /// Abandons any glide in flight, so the next frame draws the logical
+    /// position exactly.
+    fn settle(&mut self) {
+        self.active = None;
+    }
+
+    /// The global count to draw, or `None` when settled (draw the logical
+    /// position).
+    fn position(&self) -> Option<f32> {
+        self.active.map(|glide| {
+            let t = (glide.elapsed / glide.duration).clamp(0.0, 1.0);
+            // Cubic ease-out: leaves immediately -- so the jump still feels
+            // like a direct response to the keystroke -- and decelerates into
+            // the target, which is the part that tells the eye where to stop
+            // looking.
+            let eased = 1.0 - (1.0 - t).powi(3);
+            glide.from + (glide.to - glide.from) * eased
+        })
+    }
+
+    /// Advances by `dt` and reports whether a glide is still running. Time is
+    /// accumulated rather than the position being stepped by a per-frame
+    /// fraction, so the curve is identical at 60, 144 and 240Hz by
+    /// construction.
+    fn advance(&mut self, dt: f32) -> bool {
+        let Some(glide) = self.active.as_mut() else {
+            return false;
+        };
+        glide.elapsed += dt.max(0.0);
+        if glide.elapsed >= glide.duration {
+            // Settling by dropping the glide (rather than pinning it at t=1)
+            // means the renderer falls back to the logical position exactly,
+            // with no residual float error, and the app goes idle.
+            self.active = None;
+            return false;
+        }
+        true
+    }
+}
+
 pub(crate) struct DrillApp {
     document: Document,
     view_mode: ViewMode,
@@ -483,8 +587,17 @@ pub(crate) struct DrillApp {
     section_manager: section_manager::SectionManager,
     timeline_view: TimelineViewport,
     timeline_follow: bool,
+    /// Where playback follow wants `timeline_view.start` to end up, in counts.
+    /// `None` when the viewport is already there. Purely a view concern, like
+    /// `timeline_view` itself.
+    timeline_follow_glide: Option<f32>,
+    /// Visual-only easing of the playhead after a navigation jump. See
+    /// [`NavGlide`]: the logical playhead has already arrived.
+    nav_glide: NavGlide,
     onboarding: onboarding::OnboardingState,
     app_theme: app_theme::AppTheme,
+    /// Runs the brief dissolve between color themes; idle otherwise.
+    theme_fade: app_theme::ThemeFade,
     simple_mode: simple_mode::SimpleModeState,
     ever_played: bool,
     locale: Locale,
@@ -640,8 +753,11 @@ impl Default for DrillApp {
             section_manager: section_manager::SectionManager::default(),
             timeline_view: TimelineViewport::fit(playback_end),
             timeline_follow: true,
+            timeline_follow_glide: None,
+            nav_glide: NavGlide::default(),
             onboarding: onboarding::OnboardingState::default(),
             app_theme: app_theme::AppTheme::default(),
+            theme_fade: app_theme::ThemeFade::default(),
             simple_mode: simple_mode::SimpleModeState::default(),
             ever_played: false,
             locale: Locale::Ja,
@@ -1624,7 +1740,7 @@ impl DrillApp {
         else {
             return;
         };
-        self.seek_to_count(target_count);
+        self.navigation_seek_to_count(target_count);
         self.playing = false;
         self.audio_state.pause();
         if let Some(track) = &self.document.audio {
@@ -2069,6 +2185,72 @@ impl DrillApp {
         self.count_position = local_count;
     }
 
+    /// [`Self::seek_to_count`] plus a visual glide, for the *rehearsal
+    /// navigation* commands (set list, next/prev set, return to range start,
+    /// Go To Count, production markers).
+    ///
+    /// The logical result is byte-for-byte what `seek_to_count` produces, on
+    /// the same line -- the glide is bookkeeping on the side. Playback and the
+    /// audio clock are untouched here: the callers still pause and seek audio
+    /// straight to the destination, because a gliding audio scrub would be a
+    /// bug, not a feature.
+    fn navigation_seek_to_count(&mut self, count: u32) {
+        let leaving = self
+            .document
+            .global_count(self.current_set, self.count_position);
+        let target = count.min(self.document.timeline_counts()) as f32;
+        self.nav_glide.begin(leaving, target);
+        self.seek_global(target);
+    }
+
+    /// Steps every purely-visual animation for this frame and keeps the
+    /// repaint loop alive for exactly as long as something is moving.
+    ///
+    /// Nothing in here writes logical state, so when everything is settled
+    /// this costs one branch and the app is free to go fully idle.
+    pub(crate) fn advance_view_motion(&mut self, context: &egui::Context, dt: f32) {
+        // Two cases where easing the playhead would be wrong rather than
+        // nice. During playback the playhead is already moving continuously,
+        // and a second interpolation layered on top reads as a stutter. While
+        // a pointer button is held the user is manipulating the field, and
+        // `frame_positions` -- which is both what gets drawn and what drag and
+        // hit-testing measure against -- must describe the set actually being
+        // edited, not an in-between picture.
+        if self.playing || context.input(|input| input.pointer.any_down()) {
+            self.nav_glide.settle();
+        }
+        if self.nav_glide.advance(dt) {
+            context.request_repaint();
+        }
+        if let Some(target) = self.timeline_follow_glide {
+            let total = self.document.timeline_counts();
+            if self.timeline_view.glide_start_toward(target, dt, total) {
+                context.request_repaint();
+            } else {
+                self.timeline_follow_glide = None;
+            }
+        }
+        if self.theme_fade.paint(context, dt) {
+            context.request_repaint();
+        }
+    }
+
+    /// Where the playhead should be *drawn* this frame, as
+    /// `(set_index, local_count)`.
+    ///
+    /// Equal to the logical `(current_set, count_position)` unless a
+    /// navigation glide is in flight. The conversion runs through
+    /// `locate_count` every frame precisely because `count_position` is local
+    /// to a set: interpolating it directly would run backwards, or off the
+    /// end, the moment a jump crossed a set boundary.
+    pub(crate) fn render_playhead(&self) -> (usize, f32) {
+        self.nav_glide
+            .position()
+            .map_or((self.current_set, self.count_position), |global| {
+                self.document.locate_count(global)
+            })
+    }
+
     /// A set's written coordinates are its arrival picture. Counts between
     /// set starts are a playback/interpolation preview, never a second
     /// mutable copy of that picture.
@@ -2104,7 +2286,7 @@ impl DrillApp {
         };
         let set_name = set.name.clone();
         let target = self.document.global_count(set_index, 0.0).round() as u32;
-        self.seek_to_count(target);
+        self.navigation_seek_to_count(target);
         self.playing = false;
         self.audio_state.pause();
         if let Some(track) = &self.document.audio {
@@ -2136,7 +2318,7 @@ impl DrillApp {
     /// clocks, and leaves the current performer working group untouched.
     fn navigate_to_global_count(&mut self, target: u32) {
         let target = target.min(self.document.timeline_counts());
-        self.seek_to_count(target);
+        self.navigation_seek_to_count(target);
         self.playing = false;
         self.audio_state.pause();
         if let Some(track) = &self.document.audio {
