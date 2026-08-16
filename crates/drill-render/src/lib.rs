@@ -673,27 +673,51 @@ pub fn build_field_2d(scene: &Scene<'_>, _scratch: &mut BuildScratch, out: &mut 
         let ny = (grid.height / dy).floor().max(0.0) as u32;
         let total = nx.saturating_add(ny).max(1);
         let stride = total.div_ceil(scene.options.max_minor_lines.max(1)).max(1);
-        let mut i = stride;
-        while i < nx {
-            let x = i as f32 * dx;
+
+        // Centered (radiating out from the midpoint by whole strides)
+        // rather than counted up from x=0/y=0: the step size generally
+        // doesn't divide width/height evenly, and edge-anchored counting
+        // dumps that entire leftover remainder on whichever edge counting
+        // happened to end at, which reads as a visibly stretched sliver on
+        // just that one edge. Centering splits the same leftover into a
+        // small, symmetric gap at both edges instead. `k == 0` (the
+        // midpoint itself) is skipped since it's already covered by the
+        // dedicated bold center line drawn below.
+        let stride_x = dx * stride as f32;
+        let center_x = grid.width * 0.5;
+        let max_kx = (center_x / stride_x).ceil() as i32 + 1;
+        for k in -max_kx..=max_kx {
+            if k == 0 {
+                continue;
+            }
+            let x = center_x + k as f32 * stride_x;
+            if x <= 0.0 || x >= grid.width {
+                continue;
+            }
             out.commands.push(DrawCmd::Line {
                 a: map(Point { x, y: 0.0 }),
                 b: map(Point { x, y: grid.height }),
                 width: 0.5,
                 color: scene.theme.minor,
             });
-            i = i.saturating_add(stride);
         }
-        let mut i = stride;
-        while i < ny {
-            let y = i as f32 * dy;
+        let stride_y = dy * stride as f32;
+        let center_y = grid.height * 0.5;
+        let max_ky = (center_y / stride_y).ceil() as i32 + 1;
+        for k in -max_ky..=max_ky {
+            if k == 0 {
+                continue;
+            }
+            let y = center_y + k as f32 * stride_y;
+            if y <= 0.0 || y >= grid.height {
+                continue;
+            }
             out.commands.push(DrawCmd::Line {
                 a: map(Point { x: 0.0, y }),
                 b: map(Point { x: grid.width, y }),
                 width: 0.5,
                 color: scene.theme.minor,
             });
-            i = i.saturating_add(stride);
         }
     }
     out.close_layer(Layer::GridMinor, start);

@@ -173,8 +173,9 @@ impl GridConfig {
     ///
     /// キャンバス自体（`width`/`height`、演者を配置できる範囲）は競技エリア
     /// ちょうどではなく、周囲にリハーサル・待機スペースの余白を持たせて
-    /// 横45m×縦40mとする。実際の30m競技エリアと、その内側の目安として20m
-    /// のラインを`reference_frames`で中央基準の太枠として描画する。
+    /// 横46m×縦40mとする（横を偶数にして中心座標を割り切れる値にし、左右
+    /// 対称に見えるようにする）。実際の30m競技エリアと、その内側の目安と
+    /// して20mのラインを`reference_frames`で中央基準の太枠として描画する。
     ///
     /// ステップ幅は世界的に広く使われる「8 to 5」（5ヤードを8歩で移動 = 1歩
     /// 22.5インチ）をメートル換算してそのまま維持する: 5yd = 4.572m。主要線
@@ -183,7 +184,7 @@ impl GridConfig {
     pub fn japan_floor() -> Self {
         const FIVE_YARDS_IN_METERS: f32 = 4.572;
         Self {
-            width: 45.0,
+            width: 46.0,
             height: 40.0,
             unit: Unit::Meters,
             horizontal_steps: 8,
@@ -307,20 +308,36 @@ impl GridConfig {
     /// exactly on a fine line, at the cost of a sub-step (at most half a
     /// step) shift from the "ideal" round-number position, which is
     /// imperceptible next to a visibly misaligned line.
+    ///
+    /// Positions radiate outward from the axis's own midpoint (`k = 0` is
+    /// the center line itself) rather than counting up from one edge: an
+    /// edge-anchored count puts every line's position at the mercy of
+    /// wherever counting from that one edge happens to land, which reads as
+    /// visibly off-center whenever the axis length isn't itself an exact
+    /// multiple of `2 * interval` (e.g. a 45m canvas isn't a multiple of
+    /// 10m) -- exactly the "counted from the corner, not the middle"
+    /// mismatch this fixes. Centering also means any lines that don't reach
+    /// evenly to the true edge leave a symmetric gap on *both* sides instead
+    /// of accumulating all the leftover space on whichever edge counting
+    /// happened to end on.
     fn major_positions(axis_len: f32, interval: f32, step_units: f32, steps: u16) -> Vec<f32> {
         let interval = interval.max(0.001);
         let step = step_units / f32::from(steps.max(1));
-        let count = (axis_len / interval).floor() as u32;
-        (0..=count)
-            .map(|i| {
-                let raw = (i as f32 * interval).min(axis_len);
+        let center = axis_len * 0.5;
+        let max_k = (center / interval).floor() as i32;
+        let mut positions: Vec<f32> = (-max_k..=max_k)
+            .map(|k| {
+                let raw = (center + k as f32 * interval).clamp(0.0, axis_len);
                 if step > 0.0 {
                     (raw / step).round() * step
                 } else {
                     raw
                 }
             })
-            .collect()
+            .collect();
+        positions.sort_by(f32::total_cmp);
+        positions.dedup_by(|a, b| (*a - *b).abs() < 1e-4);
+        positions
     }
 
     /// Bounds of each centered square in `reference_frames`, as
@@ -2418,33 +2435,49 @@ mod tests {
 
     #[test]
     fn major_line_positions_stay_close_to_the_round_number_interval() {
+        // Positions radiate outward from the axis midpoint, so the "ideal"
+        // round-number position for each line is the nearest multiple of
+        // `interval` measured from the center, not from x=0.
         let grid = GridConfig::japan_floor();
         let interval = grid.major_line_interval;
         let dx = grid.horizontal_units / f32::from(grid.horizontal_steps);
-        for (i, x) in grid.horizontal_major_positions().iter().enumerate() {
-            let ideal = i as f32 * interval;
+        let center = grid.width * 0.5;
+        for x in grid.horizontal_major_positions() {
+            let offset_in_intervals = (x - center) / interval;
+            let ideal = center + offset_in_intervals.round() * interval;
             assert!(
                 (x - ideal).abs() <= dx * 0.5 + 1e-3,
-                "major line {i} drifted too far from its round-number position: ideal={ideal} actual={x}"
+                "major line drifted too far from its round-number position: ideal={ideal} actual={x}"
             );
         }
     }
 
     #[test]
-    fn major_line_positions_include_endpoints_and_are_ordered() {
+    fn major_line_positions_are_ordered_in_bounds_and_centered() {
         let grid = GridConfig::default();
-        let xs = grid.horizontal_major_positions();
-        assert_eq!(xs.first().copied(), Some(0.0));
-        assert!(xs.windows(2).all(|w| w[0] < w[1]));
-        let ys = grid.vertical_major_positions();
-        assert_eq!(ys.first().copied(), Some(0.0));
-        assert!(ys.windows(2).all(|w| w[0] < w[1]));
+        for (positions, axis_len) in [
+            (grid.horizontal_major_positions(), grid.width),
+            (grid.vertical_major_positions(), grid.height),
+        ] {
+            assert!(positions.windows(2).all(|w| w[0] < w[1]));
+            assert!(positions.iter().all(|&p| (0.0..=axis_len).contains(&p)));
+            // Centered: the outermost lines on each side sit roughly the
+            // same distance from the midpoint (within one major interval --
+            // the axis length need not be an exact multiple of it).
+            let center = axis_len * 0.5;
+            let first_gap = center - positions.first().copied().unwrap_or(center);
+            let last_gap = positions.last().copied().unwrap_or(center) - center;
+            assert!(
+                (first_gap - last_gap).abs() <= grid.major_line_interval,
+                "positions aren't centered: first_gap={first_gap} last_gap={last_gap}"
+            );
+        }
     }
 
     #[test]
     fn japan_floor_canvas_is_larger_than_its_reference_frames() {
         let grid = GridConfig::japan_floor();
-        assert_eq!(grid.width, 45.0);
+        assert_eq!(grid.width, 46.0);
         assert_eq!(grid.height, 40.0);
         assert_eq!(grid.reference_frames, vec![30.0, 20.0]);
         // The frames must actually fit inside the canvas with room to
