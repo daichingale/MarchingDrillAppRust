@@ -83,6 +83,15 @@ pub struct GridConfig {
     pub hashes: Vec<GridLine>,
     #[serde(default)]
     pub coordinate_notation: coordinates::CoordinateNotation,
+    /// Side lengths (in grid units) of centered square reference frames
+    /// drawn as bold nested boundaries -- e.g. a 30m contest-floor boundary
+    /// inside a larger practice canvas, with a 20m inner reference frame.
+    /// Each frame is centered on the grid's own midpoint, independent of
+    /// `width`/`height`, which describe the full canvas a performer may be
+    /// placed on (deliberately larger than the contest floor itself, to
+    /// leave staging/rehearsal room around the marked boundary).
+    #[serde(default)]
+    pub reference_frames: Vec<f32>,
 }
 
 impl Default for GridConfig {
@@ -113,6 +122,7 @@ impl Default for GridConfig {
                 },
             ],
             coordinate_notation: coordinates::CoordinateNotation::default(),
+            reference_frames: Vec::new(),
         }
     }
 }
@@ -158,8 +168,13 @@ impl GridConfig {
     }
 
     /// 全日本マーチングコンテストで一般的なフロアドリル会場（体育館アリーナ等）
-    /// の規格: 30m四方、メートル法。ハッシュマーク（アメフト場のヤードライン
-    /// 基準線）は屋内フロアには存在しないため空にする。
+    /// の規格: 30m四方の競技エリア、メートル法。ハッシュマーク（アメフト場の
+    /// ヤードライン基準線）は屋内フロアには存在しないため空にする。
+    ///
+    /// キャンバス自体（`width`/`height`、演者を配置できる範囲）は競技エリア
+    /// ちょうどではなく、周囲にリハーサル・待機スペースの余白を持たせて
+    /// 横45m×縦40mとする。実際の30m競技エリアと、その内側の目安として20m
+    /// のラインを`reference_frames`で中央基準の太枠として描画する。
     ///
     /// ステップ幅は世界的に広く使われる「8 to 5」（5ヤードを8歩で移動 = 1歩
     /// 22.5インチ）をメートル換算してそのまま維持する: 5yd = 4.572m。主要線
@@ -168,8 +183,8 @@ impl GridConfig {
     pub fn japan_floor() -> Self {
         const FIVE_YARDS_IN_METERS: f32 = 4.572;
         Self {
-            width: 30.0,
-            height: 30.0,
+            width: 45.0,
+            height: 40.0,
             unit: Unit::Meters,
             horizontal_steps: 8,
             horizontal_units: FIVE_YARDS_IN_METERS,
@@ -177,7 +192,32 @@ impl GridConfig {
             vertical_units: FIVE_YARDS_IN_METERS,
             major_line_interval: 5.0,
             hashes: Vec::new(),
+            reference_frames: vec![30.0, 20.0],
             ..Self::default()
+        }
+    }
+
+    /// The largest x coordinate that is both `<= width` and exactly on the
+    /// fine step grid. `width` itself is generally not a whole multiple of
+    /// the step size (e.g. `japan_floor`'s 45m canvas vs. its `4.572/8`m
+    /// step), so clamping a snapped point straight to `width` can land it
+    /// back on an off-step value -- clamp to this instead when a clamped
+    /// position also needs to satisfy `point == grid.snap(point)`.
+    pub fn max_x(&self) -> f32 {
+        Self::max_on_step(self.width, self.horizontal_units, self.horizontal_steps)
+    }
+
+    /// The vertical-axis counterpart of [`Self::max_x`].
+    pub fn max_y(&self) -> f32 {
+        Self::max_on_step(self.height, self.vertical_units, self.vertical_steps)
+    }
+
+    fn max_on_step(axis_len: f32, step_units: f32, steps: u16) -> f32 {
+        let step = step_units / f32::from(steps.max(1));
+        if step > 0.0 {
+            (axis_len / step).floor() * step
+        } else {
+            axis_len
         }
     }
 
@@ -279,6 +319,38 @@ impl GridConfig {
                 } else {
                     raw
                 }
+            })
+            .collect()
+    }
+
+    /// Bounds of each centered square in `reference_frames`, as
+    /// `(min_x, min_y, max_x, max_y)`, snapped onto the fine step grid (see
+    /// `major_positions` for why raw round-number positions don't line up
+    /// with it). Each frame is centered on the grid's own midpoint
+    /// regardless of `width`/`height`, which may deliberately extend beyond
+    /// the marked competition boundary to leave staging room.
+    pub fn reference_frame_bounds(&self) -> Vec<(f32, f32, f32, f32)> {
+        let dx = self.horizontal_units / f32::from(self.horizontal_steps.max(1));
+        let dy = self.vertical_units / f32::from(self.vertical_steps.max(1));
+        let snap_axis = |value: f32, step: f32| {
+            if step > 0.0 {
+                (value / step).round() * step
+            } else {
+                value
+            }
+        };
+        let center_x = self.width * 0.5;
+        let center_y = self.height * 0.5;
+        self.reference_frames
+            .iter()
+            .map(|&side| {
+                let half = side * 0.5;
+                (
+                    snap_axis(center_x - half, dx),
+                    snap_axis(center_y - half, dy),
+                    snap_axis(center_x + half, dx),
+                    snap_axis(center_y + half, dy),
+                )
             })
             .collect()
     }
@@ -2367,6 +2439,70 @@ mod tests {
         let ys = grid.vertical_major_positions();
         assert_eq!(ys.first().copied(), Some(0.0));
         assert!(ys.windows(2).all(|w| w[0] < w[1]));
+    }
+
+    #[test]
+    fn japan_floor_canvas_is_larger_than_its_reference_frames() {
+        let grid = GridConfig::japan_floor();
+        assert_eq!(grid.width, 45.0);
+        assert_eq!(grid.height, 40.0);
+        assert_eq!(grid.reference_frames, vec![30.0, 20.0]);
+        // The frames must actually fit inside the canvas with room to
+        // spare, or "staging margin around the marked boundary" is a lie.
+        for &side in &grid.reference_frames {
+            assert!(side < grid.width);
+            assert!(side < grid.height);
+        }
+    }
+
+    #[test]
+    fn reference_frame_bounds_are_centered_and_on_the_fine_grid() {
+        let grid = GridConfig::japan_floor();
+        let dx = grid.horizontal_units / f32::from(grid.horizontal_steps);
+        let dy = grid.vertical_units / f32::from(grid.vertical_steps);
+        let bounds = grid.reference_frame_bounds();
+        assert_eq!(bounds.len(), grid.reference_frames.len());
+        for (&side, (min_x, min_y, max_x, max_y)) in grid.reference_frames.iter().zip(&bounds) {
+            // Centered: the frame's own midpoint matches the canvas midpoint,
+            // within one step (the snap can nudge each edge independently).
+            assert!(((min_x + max_x) * 0.5 - grid.width * 0.5).abs() <= dx);
+            assert!(((min_y + max_y) * 0.5 - grid.height * 0.5).abs() <= dy);
+            // Close to the requested side length, within a step on each edge.
+            assert!((max_x - min_x - side).abs() <= dx);
+            assert!((max_y - min_y - side).abs() <= dy);
+            // On the fine step grid.
+            for value in [min_x, max_x] {
+                let steps = value / dx;
+                assert!((steps - steps.round()).abs() < 1e-3);
+            }
+            for value in [min_y, max_y] {
+                let steps = value / dy;
+                assert!((steps - steps.round()).abs() < 1e-3);
+            }
+        }
+    }
+
+    #[test]
+    fn reference_frame_bounds_is_empty_for_presets_without_frames() {
+        assert!(GridConfig::default().reference_frame_bounds().is_empty());
+        assert!(GridConfig::indoor().reference_frame_bounds().is_empty());
+        assert!(GridConfig::soccer().reference_frame_bounds().is_empty());
+    }
+
+    #[test]
+    fn max_x_and_max_y_are_on_the_fine_grid_and_at_most_the_canvas_size() {
+        let grid = GridConfig::japan_floor();
+        let dx = grid.horizontal_units / f32::from(grid.horizontal_steps);
+        let dy = grid.vertical_units / f32::from(grid.vertical_steps);
+        assert!(grid.max_x() <= grid.width);
+        assert!(grid.max_y() <= grid.height);
+        assert!(grid.width - grid.max_x() < dx);
+        assert!(grid.height - grid.max_y() < dy);
+        let corner = Point {
+            x: grid.max_x(),
+            y: grid.max_y(),
+        };
+        assert_eq!(grid.snap(corner), corner);
     }
 
     #[test]

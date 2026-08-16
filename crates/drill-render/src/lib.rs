@@ -800,6 +800,27 @@ pub fn build_field_2d(scene: &Scene<'_>, _scratch: &mut BuildScratch, out: &mut 
         width: 1.75,
         color: scene.theme.center,
     });
+
+    // Reference frames (e.g. the actual 30m contest-floor boundary and a
+    // 20m inner reference, both centered) drawn as bold on top of the
+    // regular major grid: `grid.width`/`height` may deliberately extend
+    // past the marked competition area to leave staging room, so the
+    // meaningful boundary isn't necessarily the field edge anymore.
+    for (min_x, min_y, max_x, max_y) in grid.reference_frame_bounds() {
+        for (a, b) in [
+            (Point { x: min_x, y: min_y }, Point { x: max_x, y: min_y }),
+            (Point { x: min_x, y: max_y }, Point { x: max_x, y: max_y }),
+            (Point { x: min_x, y: min_y }, Point { x: min_x, y: max_y }),
+            (Point { x: max_x, y: min_y }, Point { x: max_x, y: max_y }),
+        ] {
+            out.commands.push(DrawCmd::Line {
+                a: map(a),
+                b: map(b),
+                width: 1.5,
+                color: scene.theme.sideline,
+            });
+        }
+    }
     out.close_layer(Layer::GridMajor, start);
 
     start = out.commands.len();
@@ -972,6 +993,17 @@ pub fn build_field_camera(
         1.75,
         scene.theme.center,
     );
+    // Reference frames -- see the matching comment in `build_field_2d`.
+    for (min_x, min_y, max_x, max_y) in grid.reference_frame_bounds() {
+        for (a, b) in [
+            (Point { x: min_x, y: min_y }, Point { x: max_x, y: min_y }),
+            (Point { x: min_x, y: max_y }, Point { x: max_x, y: max_y }),
+            (Point { x: min_x, y: min_y }, Point { x: min_x, y: max_y }),
+            (Point { x: max_x, y: min_y }, Point { x: max_x, y: max_y }),
+        ] {
+            line(out, a, b, 1.5, scene.theme.sideline);
+        }
+    }
     out.close_layer(Layer::GridMajor, start);
     for layer in [
         Layer::GridMinor,

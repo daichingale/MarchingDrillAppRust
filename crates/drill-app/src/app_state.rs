@@ -2348,8 +2348,8 @@ impl DrillApp {
             .map(|point| {
                 let point = self.document.grid.snap(point);
                 Point {
-                    x: point.x.clamp(0.0, self.document.grid.width),
-                    y: point.y.clamp(0.0, self.document.grid.height),
+                    x: point.x.clamp(0.0, self.document.grid.max_x()),
+                    y: point.y.clamp(0.0, self.document.grid.max_y()),
                 }
             })
             .collect::<Vec<_>>();
@@ -2415,8 +2415,8 @@ impl DrillApp {
             .selected_points()
             .into_iter()
             .map(|point| Point {
-                x: (point.x + dx * horizontal_divisions as f32).clamp(0.0, grid.width),
-                y: (point.y + dy * vertical_divisions as f32).clamp(0.0, grid.height),
+                x: (point.x + dx * horizontal_divisions as f32).clamp(0.0, grid.max_x()),
+                y: (point.y + dy * vertical_divisions as f32).clamp(0.0, grid.max_y()),
             })
             .collect();
         let revision = self.history.revision();
@@ -2833,8 +2833,8 @@ impl DrillApp {
                 let x = (point.x - center.x) * scale;
                 let y = (point.y - center.y) * scale;
                 Point {
-                    x: (center.x + x * cos - y * sin).clamp(0.0, self.document.grid.width),
-                    y: (center.y + x * sin + y * cos).clamp(0.0, self.document.grid.height),
+                    x: (center.x + x * cos - y * sin).clamp(0.0, self.document.grid.max_x()),
+                    y: (center.y + x * sin + y * cos).clamp(0.0, self.document.grid.max_y()),
                 }
             })
             .collect();
