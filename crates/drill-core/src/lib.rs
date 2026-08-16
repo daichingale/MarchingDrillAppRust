@@ -233,6 +233,55 @@ impl GridConfig {
             })
             .collect()
     }
+
+    /// Bold major-gridline positions along the horizontal axis, snapped onto
+    /// the fine step grid so the two always coincide.
+    pub fn horizontal_major_positions(&self) -> Vec<f32> {
+        Self::major_positions(
+            self.width,
+            self.major_line_interval,
+            self.horizontal_units,
+            self.horizontal_steps,
+        )
+    }
+
+    /// Bold major-gridline positions along the vertical axis, snapped onto
+    /// the fine step grid so the two always coincide.
+    pub fn vertical_major_positions(&self) -> Vec<f32> {
+        Self::major_positions(
+            self.height,
+            self.major_line_interval,
+            self.vertical_units,
+            self.vertical_steps,
+        )
+    }
+
+    /// `major_line_interval` is chosen for readability (a round number of
+    /// yards/meters) and is independent of the fine step grid's own spacing
+    /// (e.g. `japan_floor`'s round 5m major interval vs. its `4.572/8`m
+    /// marching-step size) -- the two periods are generally not whole
+    /// multiples of each other, so drawing major lines at raw multiples of
+    /// `interval` leaves them a fraction of a step off from the nearest fine
+    /// gridline almost everywhere except the origin. Snapping each major
+    /// line to its nearest step-grid line keeps every bold line sitting
+    /// exactly on a fine line, at the cost of a sub-step (at most half a
+    /// step) shift from the "ideal" round-number position, which is
+    /// imperceptible next to a visibly misaligned line.
+    fn major_positions(axis_len: f32, interval: f32, step_units: f32, steps: u16) -> Vec<f32> {
+        let interval = interval.max(0.001);
+        let step = step_units / f32::from(steps.max(1));
+        let count = (axis_len / interval).floor() as u32;
+        (0..=count)
+            .map(|i| {
+                let raw = (i as f32 * interval).min(axis_len);
+                if step > 0.0 {
+                    (raw / step).round() * step
+                } else {
+                    raw
+                }
+            })
+            .collect()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -2266,6 +2315,58 @@ mod tests {
             grid.snap(Point { x: 1.1, y: 1.1 }),
             Point { x: 1.25, y: 1.25 }
         );
+    }
+
+    #[test]
+    fn major_line_positions_always_land_on_the_fine_step_grid() {
+        // japan_floor's round 5m major interval and its 4.572/8m step size
+        // are not whole multiples of each other -- the exact scenario that
+        // used to leave bold lines visibly off the fine grid everywhere but
+        // the origin.
+        let grid = GridConfig::japan_floor();
+        let dx = grid.horizontal_units / f32::from(grid.horizontal_steps);
+        let dy = grid.vertical_units / f32::from(grid.vertical_steps);
+        assert!((5.0_f32 / dx).fract() > 1e-3, "test needs an incommensurate interval/step pair");
+
+        for x in grid.horizontal_major_positions() {
+            let steps = x / dx;
+            assert!(
+                (steps - steps.round()).abs() < 1e-3,
+                "major x={x} is not on the fine step grid"
+            );
+        }
+        for y in grid.vertical_major_positions() {
+            let steps = y / dy;
+            assert!(
+                (steps - steps.round()).abs() < 1e-3,
+                "major y={y} is not on the fine step grid"
+            );
+        }
+    }
+
+    #[test]
+    fn major_line_positions_stay_close_to_the_round_number_interval() {
+        let grid = GridConfig::japan_floor();
+        let interval = grid.major_line_interval;
+        let dx = grid.horizontal_units / f32::from(grid.horizontal_steps);
+        for (i, x) in grid.horizontal_major_positions().iter().enumerate() {
+            let ideal = i as f32 * interval;
+            assert!(
+                (x - ideal).abs() <= dx * 0.5 + 1e-3,
+                "major line {i} drifted too far from its round-number position: ideal={ideal} actual={x}"
+            );
+        }
+    }
+
+    #[test]
+    fn major_line_positions_include_endpoints_and_are_ordered() {
+        let grid = GridConfig::default();
+        let xs = grid.horizontal_major_positions();
+        assert_eq!(xs.first().copied(), Some(0.0));
+        assert!(xs.windows(2).all(|w| w[0] < w[1]));
+        let ys = grid.vertical_major_positions();
+        assert_eq!(ys.first().copied(), Some(0.0));
+        assert!(ys.windows(2).all(|w| w[0] < w[1]));
     }
 
     #[test]

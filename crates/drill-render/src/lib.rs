@@ -699,10 +699,14 @@ pub fn build_field_2d(scene: &Scene<'_>, _scratch: &mut BuildScratch, out: &mut 
     out.close_layer(Layer::GridMinor, start);
 
     start = out.commands.len();
-    let major_interval = grid.major_line_interval.max(0.001);
-    let major_count_x = (grid.width / major_interval).floor() as u32;
-    for i in 0..=major_count_x {
-        let x = (i as f32 * major_interval).min(grid.width);
+    // Positions are snapped onto the fine step grid (see
+    // `GridConfig::horizontal_major_positions`/`vertical_major_positions`)
+    // rather than drawn at raw multiples of `major_line_interval`: the two
+    // periods aren't generally whole multiples of each other (e.g.
+    // `japan_floor`'s round 5m major interval vs. its `4.572/8`m step size),
+    // which otherwise leaves bold lines visibly off from the fine grid
+    // everywhere except the origin.
+    for x in grid.horizontal_major_positions() {
         out.commands.push(DrawCmd::Line {
             a: map(Point { x, y: 0.0 }),
             b: map(Point { x, y: grid.height }),
@@ -717,9 +721,7 @@ pub fn build_field_2d(scene: &Scene<'_>, _scratch: &mut BuildScratch, out: &mut 
     // which is empty for presets with no hash marks (e.g. `GridConfig::indoor`,
     // `GridConfig::japan_floor`), leaving that axis with no interior lines at
     // all beyond the two sideline edges.
-    let major_count_y = (grid.height / major_interval).floor() as u32;
-    for i in 0..=major_count_y {
-        let y = (i as f32 * major_interval).min(grid.height);
+    for y in grid.vertical_major_positions() {
         out.commands.push(DrawCmd::Line {
             a: map(Point { x: 0.0, y }),
             b: map(Point { x: grid.width, y }),
@@ -761,7 +763,13 @@ pub fn build_field_2d(scene: &Scene<'_>, _scratch: &mut BuildScratch, out: &mut 
     // multiple (it does for the default/soccer/japan_floor presets; for
     // `indoor` it does not, so this adds a distinct line rather than only
     // re-coloring an existing one).
-    let center_x = grid.width * 0.5;
+    // Snapped onto the fine grid for the same reason the major lines are
+    // above -- an unsnapped midpoint is generally off the step grid too.
+    let center_x = grid.snap(Point {
+        x: grid.width * 0.5,
+        y: 0.0,
+    })
+    .x;
     out.commands.push(DrawCmd::Line {
         a: map(Point {
             x: center_x,
@@ -774,7 +782,12 @@ pub fn build_field_2d(scene: &Scene<'_>, _scratch: &mut BuildScratch, out: &mut 
         width: 1.75,
         color: scene.theme.center,
     });
-    let center_y = grid.height * 0.5;
+    let center_y = grid
+        .snap(Point {
+            x: 0.0,
+            y: grid.height * 0.5,
+        })
+        .y;
     out.commands.push(DrawCmd::Line {
         a: map(Point {
             x: 0.0,
@@ -888,10 +901,10 @@ pub fn build_field_camera(
             out.commands.push(DrawCmd::Line { a, b, width, color });
         }
     };
-    let major_interval = grid.major_line_interval.max(0.001);
-    let x_lines = (grid.width / major_interval).floor() as u32;
-    for index in 0..=x_lines {
-        let x = (index as f32 * major_interval).min(grid.width);
+    // Snapped onto the fine step grid -- see `GridConfig::horizontal_major_
+    // positions`/`vertical_major_positions` doc comment for why raw
+    // multiples of `major_line_interval` don't line up with it.
+    for x in grid.horizontal_major_positions() {
         line(
             out,
             Point { x, y: 0.0 },
@@ -903,9 +916,7 @@ pub fn build_field_camera(
     // Mirror the vertical major lines onto the horizontal axis -- see the
     // matching comment in `build_field_2d` for why this axis previously had
     // no interior lines at all for presets without hash marks.
-    let y_lines = (grid.height / major_interval).floor() as u32;
-    for index in 0..=y_lines {
-        let y = (index as f32 * major_interval).min(grid.height);
+    for y in grid.vertical_major_positions() {
         line(
             out,
             Point { x: 0.0, y },
@@ -923,28 +934,40 @@ pub fn build_field_camera(
             scene.theme.sideline,
         );
     }
+    let center_x = grid
+        .snap(Point {
+            x: grid.width * 0.5,
+            y: 0.0,
+        })
+        .x;
     line(
         out,
         Point {
-            x: grid.width * 0.5,
+            x: center_x,
             y: 0.0,
         },
         Point {
-            x: grid.width * 0.5,
+            x: center_x,
             y: grid.height,
         },
         1.75,
         scene.theme.center,
     );
+    let center_y = grid
+        .snap(Point {
+            x: 0.0,
+            y: grid.height * 0.5,
+        })
+        .y;
     line(
         out,
         Point {
             x: 0.0,
-            y: grid.height * 0.5,
+            y: center_y,
         },
         Point {
             x: grid.width,
-            y: grid.height * 0.5,
+            y: center_y,
         },
         1.75,
         scene.theme.center,
