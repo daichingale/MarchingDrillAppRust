@@ -1355,8 +1355,34 @@ impl DrillApp {
         let mut next = self.document.clone();
         let grid = next.grid.clone();
 
+        // Snap each performer's own trajectory across the inserted sets as
+        // one sequence (error diffusion), not each (rank, t) point in
+        // isolation: a performer's path over time is exactly the kind of
+        // smooth curve `snap_sequence` is for, and quantizing it
+        // independently at each set would make their motion look jerky
+        // between frames instead of a smooth follow.
+        let snapped_trajectories: Vec<Vec<Point>> = group
+            .iter()
+            .enumerate()
+            .map(|(rank, _)| {
+                let raw: Vec<Point> = (0..steps)
+                    .map(|t| {
+                        let t_norm = (t + 1) as f32 / steps as f32;
+                        let progress = t_norm - rank as f32 * delay_per_rank;
+                        sample_progress(progress)
+                    })
+                    .collect();
+                grid.snap_sequence(&raw)
+            })
+            .collect();
+
         let mut next_raw_id = next.sets.iter().map(|set| set.id.get()).max().unwrap_or(0);
         let mut inserted = Vec::with_capacity(steps);
+        // `t` is used for more than indexing here (it also feeds the
+        // inserted set's `t + 1` display name and the sequential set-ID
+        // allocation with its own early-return path), so an
+        // iterator/enumerate rewrite wouldn't be clearer than the loop.
+        #[allow(clippy::needless_range_loop)]
         for t in 0..steps {
             let Some(next_id) = next_raw_id.checked_add(1) else {
                 self.status = i18n::registered(self.locale, "workspace-inspector.150").into();
@@ -1367,13 +1393,10 @@ impl DrillApp {
                 self.status = i18n::registered(self.locale, "workspace-inspector.174").into();
                 return;
             };
-            let t_norm = (t + 1) as f32 / steps as f32;
             let mut positions = source.positions.clone();
             for (rank, &index) in group.iter().enumerate() {
-                let progress = t_norm - rank as f32 * delay_per_rank;
-                let point = sample_progress(progress);
                 if let Some(slot) = positions.get_mut(index) {
-                    *slot = grid.snap(point);
+                    *slot = snapped_trajectories[rank][t];
                 }
             }
             inserted.push(Set {
@@ -2416,15 +2439,23 @@ impl DrillApp {
         let mut sampled = Vec::with_capacity(self.selected.len());
         spec.sample(self.selected.len(), &mut sampled);
         let current = self.selected_points();
+        // Assignment is computed against the unsnapped samples so minimal-
+        // movement pairing isn't perturbed by quantization; the snapped
+        // sequence below is only used for the final committed positions.
         let assignment = pathing::optimal_assignment(&current, &sampled);
         let mut next = self.document.clone();
         let grid = next.grid.clone();
+        // Snapping the samples as a sequence (in the shape's own parametric
+        // order, via error diffusion) keeps the placed curve smooth; see
+        // `GridConfig::snap_sequence` doc comment for why per-point
+        // independent rounding looks jagged here.
+        let snapped = grid.snap_sequence(&sampled);
         let Some(set) = next.sets.get_mut(self.current_set) else {
             return;
         };
         for (rank, &index) in self.selected.iter().enumerate() {
-            if let Some(&target) = assignment.get(rank).and_then(|&i| sampled.get(i)) {
-                set.positions[index] = grid.snap(target);
+            if let Some(&target) = assignment.get(rank).and_then(|&i| snapped.get(i)) {
+                set.positions[index] = target;
             }
         }
         set.shape = Some(spec);

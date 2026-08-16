@@ -192,6 +192,47 @@ impl GridConfig {
             y: (point.y / dy).round() * dy,
         }
     }
+
+    /// Snaps an ordered sequence of points (e.g. performers sampled along a
+    /// shape/curve, in the shape's own parametric order) to the grid using
+    /// per-axis error diffusion instead of independently rounding each
+    /// point.
+    ///
+    /// Rounding is monotonic, so a plain per-point `snap` can never reverse
+    /// direction -- but it still rounds each point's leftover fraction
+    /// independently, so the *spacing* between consecutive snapped points
+    /// comes out noisy (anywhere from zero to a full extra grid step),
+    /// which reads as a bumpy/uneven curve even though it never doubles
+    /// back. Carrying each point's rounding remainder into the next
+    /// point's target (the same idea Bresenham's line algorithm and image
+    /// dithering use) keeps the quantized sequence's step sizes close to
+    /// uniform, so the snapped curve visually tracks the smooth input
+    /// instead of looking jagged, while every output point still lands
+    /// exactly on a grid multiple.
+    pub fn snap_sequence(&self, points: &[Point]) -> Vec<Point> {
+        if !self.snap_enabled {
+            return points.to_vec();
+        }
+        let dx = self.horizontal_units / self.horizontal_steps.max(1) as f32;
+        let dy = self.vertical_units / self.vertical_steps.max(1) as f32;
+        let mut carry = Point { x: 0.0, y: 0.0 };
+        points
+            .iter()
+            .map(|point| {
+                let target_x = point.x + carry.x;
+                let target_y = point.y + carry.y;
+                let snapped = Point {
+                    x: (target_x / dx).round() * dx,
+                    y: (target_y / dy).round() * dy,
+                };
+                carry = Point {
+                    x: target_x - snapped.x,
+                    y: target_y - snapped.y,
+                };
+                snapped
+            })
+            .collect()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -2225,6 +2266,108 @@ mod tests {
             grid.snap(Point { x: 1.1, y: 1.1 }),
             Point { x: 1.25, y: 1.25 }
         );
+    }
+
+    #[test]
+    fn snap_sequence_matches_disabled_grid_unchanged() {
+        let grid = GridConfig {
+            snap_enabled: false,
+            ..GridConfig::default()
+        };
+        let points = vec![
+            Point { x: 1.23, y: 4.56 },
+            Point { x: 7.89, y: 0.12 },
+        ];
+        assert_eq!(grid.snap_sequence(&points), points);
+    }
+
+    #[test]
+    fn snap_sequence_keeps_every_point_on_the_grid() {
+        let grid = GridConfig {
+            horizontal_steps: 8,
+            horizontal_units: 5.0,
+            vertical_steps: 8,
+            vertical_units: 5.0,
+            ..GridConfig::default()
+        };
+        let dx = grid.horizontal_units / grid.horizontal_steps as f32;
+        let dy = grid.vertical_units / grid.vertical_steps as f32;
+        // A shallow arc: x advances briskly, y drifts by less than half a
+        // grid step per sample -- exactly the case that makes independent
+        // per-point rounding look noisy.
+        let points: Vec<Point> = (0..40)
+            .map(|i| Point {
+                x: i as f32 * 0.3,
+                y: 10.0 + (i as f32 * 0.05).sin() * 2.0,
+            })
+            .collect();
+        let snapped = grid.snap_sequence(&points);
+        assert_eq!(snapped.len(), points.len());
+        for point in &snapped {
+            let steps_x = point.x / dx;
+            let steps_y = point.y / dy;
+            assert!(
+                (steps_x - steps_x.round()).abs() < 1e-3,
+                "x={} is not on the grid",
+                point.x
+            );
+            assert!(
+                (steps_y - steps_y.round()).abs() < 1e-3,
+                "y={} is not on the grid",
+                point.y
+            );
+        }
+    }
+
+    #[test]
+    fn snap_sequence_never_drifts_more_than_one_step_from_the_true_curve() {
+        // Unlike a single independent `snap` (which is always within half a
+        // step of its input by definition of round-to-nearest), the carried
+        // remainder in `snap_sequence` means one sample's deviation can add
+        // to the *previous* sample's carried error: `raw - snapped` works
+        // out to `carry_new - carry_prev`, each individually within half a
+        // step, so their difference is bounded by a full step in the worst
+        // case. That's the expected, known trade-off of error diffusion
+        // (same as image dithering): a single sample can land up to one
+        // step from its true position, in exchange for the *sequence*
+        // tracking the curve far more evenly than independent rounding
+        // does. This test proves that trade-off stays bounded -- error
+        // never compounds past one step, however long the curve runs.
+        let grid = GridConfig {
+            horizontal_steps: 8,
+            horizontal_units: 5.0,
+            vertical_steps: 8,
+            vertical_units: 5.0,
+            ..GridConfig::default()
+        };
+        let dx = grid.horizontal_units / grid.horizontal_steps as f32;
+        let dy = grid.vertical_units / grid.vertical_steps as f32;
+        // A real arc, not a straight line: x and y both curve.
+        let radius = 12.0_f32;
+        let points: Vec<Point> = (0..200)
+            .map(|i| {
+                let angle = i as f32 * 0.05;
+                Point {
+                    x: radius * angle.cos(),
+                    y: radius * angle.sin(),
+                }
+            })
+            .collect();
+        let snapped = grid.snap_sequence(&points);
+        for (raw, snapped) in points.iter().zip(&snapped) {
+            assert!(
+                (raw.x - snapped.x).abs() <= dx + 1e-3,
+                "x drifted too far from the source curve: raw={} snapped={}",
+                raw.x,
+                snapped.x
+            );
+            assert!(
+                (raw.y - snapped.y).abs() <= dy + 1e-3,
+                "y drifted too far from the source curve: raw={} snapped={}",
+                raw.y,
+                snapped.y
+            );
+        }
     }
 
     #[test]
