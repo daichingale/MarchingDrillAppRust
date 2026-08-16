@@ -320,7 +320,13 @@ impl eframe::App for DrillApp {
                     self.audio_state.pause();
                 }
             }
-            ui.ctx().request_repaint_after(Duration::from_millis(16));
+            // See app_state.rs's `toggle_playback` for why this is a bare
+            // `request_repaint()` rather than a fixed 16ms: playback already
+            // advances by `dt`, so pacing the repaint to vsync instead of a
+            // hardcoded 60fps interval is a straight win on high-refresh
+            // displays and cannot busy-spin because this arm only runs while
+            // `self.playing` was true at the top of this block.
+            ui.ctx().request_repaint();
         }
         self.advance_view_motion(ui.ctx(), dt);
         // The renderer reads the *visual* playhead, which is the logical one
@@ -399,6 +405,30 @@ impl eframe::App for DrillApp {
         {
             self.execute_command(command, ui.ctx());
         }
+
+        // Always sampled (see `PerfHud::record`'s doc comment), and placed
+        // ahead of the simple-mode early return below so the overlay and its
+        // shortcut work in both UI modes. `display_list` reflects whichever
+        // view last rebuilt it; that is a stale-but-honest reading in simple
+        // mode rather than a reason to special-case this call per view.
+        let renderer = match &self.gpu {
+            Some(gpu) if gpu.active() => perf_hud::Renderer::Gpu,
+            Some(gpu) if !gpu.enabled() => perf_hud::Renderer::GpuDisabled,
+            _ => perf_hud::Renderer::Cpu,
+        };
+        let display_stats = self.display_list.stats();
+        self.perf_hud.frame(
+            ui.ctx(),
+            dt,
+            perf_hud::Scene {
+                performers: self.document.performers.len(),
+                dots: display_stats.dots_emitted,
+                draw_commands: self.display_list.commands().len(),
+                dropped_nonfinite: display_stats.dropped_nonfinite,
+                renderer,
+            },
+            self.locale,
+        );
 
         if self.simple_mode.enabled {
             self.simple_ui(ui);
