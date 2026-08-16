@@ -961,7 +961,11 @@ impl DrillApp {
                                 .collect();
                             self.replace_selection(next);
                             self.field_viewport.center = editing::centroid(&self.selected_points());
-                            self.field_viewport.zoom = self.field_viewport.zoom.max(1.8);
+                            // Through the setter so the eased zoom target is
+                            // moved too -- writing the field alone would have
+                            // the animation immediately undo the jump.
+                            self.field_viewport.set_zoom(self.field_viewport.zoom.max(1.8));
+                            self.field_viewport.stop_glide();
                             self.status = super::i18n::registered(self.locale, "clinic-ui.004")
                                 .into();
                         }
@@ -991,7 +995,11 @@ impl DrillApp {
                                 .collect();
                             self.replace_selection(next);
                             self.field_viewport.center = editing::centroid(&self.selected_points());
-                            self.field_viewport.zoom = self.field_viewport.zoom.max(1.8);
+                            // Through the setter so the eased zoom target is
+                            // moved too -- writing the field alone would have
+                            // the animation immediately undo the jump.
+                            self.field_viewport.set_zoom(self.field_viewport.zoom.max(1.8));
+                            self.field_viewport.stop_glide();
                             self.status = super::i18n::registered(self.locale, "clinic-ui.006")
                                 .into();
                         }
