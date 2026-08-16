@@ -1,0 +1,69 @@
+name: Nightly quality gates
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stress:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Test complete workspace
+        run: cargo test --workspace --locked
+      - name: Run extended deterministic mutation corpus
+        shell: pwsh
+        env:
+          DRILLFORGE_MUTATION_CASES: "8192"
+        run: cargo test -p drill-conformance --test mutation_corpus --locked -- --test-threads=1
+      - name: Enforce deterministic parser complexity budgets
+        run: cargo test -p drill-conformance --test complexity_dos --locked -- --test-threads=1
+      - name: Replay fuzz seed corpus without cargo-fuzz
+        run: cargo test -p drill-conformance --test fuzz_layout --locked -- --test-threads=1
+      - name: Enforce CPU/GPU renderer parity matrix
+        run: cargo test -p drill-gpu --test renderer_parity --locked -- --test-threads=1
+      - name: Enforce maximum-document analytics worker latency and heap
+        run: cargo bench -p drill-jobs --bench analytics_performance --locked
+      - name: Enforce mobile practice viewer generation budget
+        run: cargo bench -p drill-mobile-viewer --bench generation_performance --locked
+      - name: Enforce performance and allocation budgets
+        run: |
+          cargo bench -p drill-jobs --bench max_project_save_latency --locked
+          cargo bench -p drill-core --bench core_performance --locked
+          cargo bench -p drill-render --bench display_list --locked
+          cargo bench -p drill-audio --bench audio_performance --locked
+          cargo bench -p drill-gpu --bench frame_prepare --locked
+      - name: Build and statically verify Windows packages
+        shell: pwsh
+        run: |
+          ./scripts/package-windows.ps1
+          ./scripts/package-msix.ps1
+          ./scripts/test-msix.ps1
+
+  fuzz:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Bounded parser fuzz smoke tests
+        working-directory: fuzz
+        run: |
+          for target in document_json drillproj_container csv xlsx midi mxl underlay plugin_protocol; do
+            cargo fuzz run "$target" "corpus/$target" -- -dict=dictionaries/drillforge.dict -max_total_time=90 -timeout=10 -max_len=2097152
+          done

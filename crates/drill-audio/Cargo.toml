@@ -1,0 +1,21 @@
+[package]
+name = "drill-audio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies.symphonia]
+version = "0.6.0"
+default-features = false
+features = ["opt-simd", "all-meta", "adpcm", "flac", "mkv", "ogg", "pcm", "vorbis", "wav", "mp3"]
+
+[dependencies]
+cpal = "0.18.1"
+drill-core = { path = "../drill-core" }
+rtrb = "0.3.4"
+serde.workspace = true
+serde_json.workspace = true
+
+[[bench]]
+name = "audio_performance"
+harness = false

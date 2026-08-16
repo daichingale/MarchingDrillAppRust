@@ -1,0 +1,27 @@
+[workspace]
+members = ["crates/drill-core", "crates/drill-app", "crates/drill-jobs", "crates/drill-render", "crates/drill-gpu", "crates/drill-project", "crates/drill-audio", "crates/drill-export", "crates/drill-updater", "crates/drill-interop", "crates/drill-plugin", "crates/drill-conformance", "crates/drill-mobile-viewer"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+overflow-checks = true
+
+# `cargo bench` uses a separate default profile that does NOT inherit
+# `[profile.release]` unless explicitly told to. Without this, benches ran
+# with lto=false, codegen-units=16 and overflow-checks=false: a materially
+# different (and generally faster) build than what actually ships, so
+# documented "release profile" bench numbers were not measuring the shipped
+# binary's configuration. Mirror release exactly so bench numbers are honest.
+[profile.bench]
+inherits = "release"

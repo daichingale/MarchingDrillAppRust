@@ -1,0 +1,74 @@
+[package]
+name = "drillforge-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+drill-core = { path = "../crates/drill-core" }
+drill-project = { path = "../crates/drill-project" }
+drill-interop = { path = "../crates/drill-interop" }
+drill-plugin = { path = "../crates/drill-plugin" }
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "document_json"
+path = "fuzz_targets/document_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "drillproj_container"
+path = "fuzz_targets/drillproj_container.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "csv"
+path = "fuzz_targets/csv.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "xlsx"
+path = "fuzz_targets/xlsx.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "midi"
+path = "fuzz_targets/midi.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mxl"
+path = "fuzz_targets/mxl.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "underlay"
+path = "fuzz_targets/underlay.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "plugin_protocol"
+path = "fuzz_targets/plugin_protocol.rs"
+test = false
+doc = false
+bench = false

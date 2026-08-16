@@ -1,0 +1,31 @@
+# Store text as LF in the repository; check out with native endings.
+* text=auto
+
+# Golden and fixture files are compared byte for byte. They must be LF on every
+# platform, or every snapshot test fails on a Windows checkout.
+*.expected           text eol=lf
+*.snap               text eol=lf
+*.snap.new           text eol=lf
+**/fixtures/**       text eol=lf
+*.drill.json         text eol=lf
+*.svg                text eol=lf
+*.csv                text eol=lf
+*.tsv                text eol=lf
+*.digest             text eol=lf
+
+# Keep Rust and manifests LF so goldens embedded in tests stay stable.
+*.rs                 text eol=lf
+*.toml               text eol=lf
+*.sh                 text eol=lf
+
+# Binary assets: never touch these.
+*.ttf                binary
+*.otf                binary
+*.png                binary
+*.jpg                binary
+*.wav                binary
+*.mp3                binary
+*.flac               binary
+*.mp4                binary
+*.pdf                binary
+*.drillproj          binary

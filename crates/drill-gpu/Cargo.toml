@@ -1,0 +1,15 @@
+[package]
+name = "drill-gpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+drill-core = { path = "../drill-core" }
+drill-render = { path = "../drill-render" }
+bytemuck = { version = "1.25.0", features = ["derive"] }
+wgpu = "29.0.0"
+
+[[bench]]
+name = "frame_prepare"
+harness = false

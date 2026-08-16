@@ -1,0 +1,21 @@
+[package]
+name = "drill-conformance"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+drill-core = { path = "../drill-core" }
+drill-render = { path = "../drill-render" }
+drill-project = { path = "../drill-project" }
+drill-interop = { path = "../drill-interop" }
+drill-export = { path = "../drill-export" }
+drill-plugin = { path = "../drill-plugin" }
+serde_json.workspace = true
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+
+[[test]]
+name = "complexity_dos"
+path = "tests/complexity_dos.rs"

@@ -1,0 +1,16 @@
+[package]
+name = "drill-mobile-viewer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+drill-core = { path = "../drill-core" }
+drill-render = { path = "../drill-render" }
+
+[dev-dependencies]
+blake3 = "1.8.6"
+
+[[bench]]
+name = "generation_performance"
+harness = false

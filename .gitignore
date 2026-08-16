@@ -1,0 +1,20 @@
+/target
+/dist
+/artifacts
+/fuzz/artifacts
+/fuzz/target
+
+# Local Claude Code state: per-machine settings and worktrees spawned for
+# parallel agent tasks. Never shared, never fixtures.
+/.claude/
+
+# Files the app writes while editing. These are never fixtures.
+*.autosave.drill.json
+*.backup.drill.json
+crash-*.drill.json
+
+# Scratch drill documents anywhere in the tree.
+*.drill.json
+# ...except committed test fixtures, which the schema-migration regression
+# tests need. Without this negation the v1 baseline cannot be committed.
+!**/fixtures/**/*.drill.json
