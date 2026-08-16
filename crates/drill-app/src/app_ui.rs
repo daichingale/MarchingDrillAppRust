@@ -1813,6 +1813,17 @@ impl eframe::App for DrillApp {
                             x: sum_x / count as f32,
                             y: sum_y / count as f32,
                         };
+                        // A deliberate jump beats a glide that is still
+                        // carrying the view somewhere else, and this is
+                        // exactly the non-interactive case that keeps the
+                        // hard clamp (not the rubber band) -- a keyboard jump
+                        // to a selection should land square on the field, not
+                        // overshoot it.
+                        self.field_viewport.stop_glide();
+                        self.field_viewport.clamp_center(
+                            &self.document.grid,
+                            response.rect.shrink(18.0).size(),
+                        );
                     }
                 }
                 let nudge = ui.input_mut(|input| {
@@ -1851,13 +1862,19 @@ impl eframe::App for DrillApp {
                 // than a selection gesture, while leaving document/history
                 // untouched.
                 let viewport_size = rect.size();
+                // Only the rubber-band allowance is enforced here, not the
+                // hard edge: an interactive pan is allowed to pull slightly
+                // past the sideline, and `FieldViewport::tick` springs it
+                // back. A hard clamp at the top of the frame would flatten
+                // that give before it was ever visible.
                 self.field_viewport
-                    .clamp_center(&self.document.grid, viewport_size);
+                    .contain_center(&self.document.grid, viewport_size);
                 let space_held = ui.input(|input| input.key_down(egui::Key::Space));
                 let begin_pan = response.drag_started_by(egui::PointerButton::Middle)
                     || (space_held && response.drag_started_by(egui::PointerButton::Primary));
                 if begin_pan {
-                    self.field_viewport.pan_last_pointer = response.interact_pointer_pos();
+                    self.field_viewport
+                        .begin_pan(response.interact_pointer_pos());
                 }
                 let was_panning = self.field_viewport.pan_last_pointer.is_some();
                 if let (Some(previous), Some(pointer)) = (
@@ -1866,18 +1883,19 @@ impl eframe::App for DrillApp {
                 ) {
                     let middle_down = ui.input(|input| input.pointer.middle_down());
                     if middle_down || space_held {
-                        self.field_viewport.pan_pixels(
+                        self.field_viewport.drag_pan(
                             pointer - previous,
+                            dt,
                             &self.document.grid,
                             viewport_size,
                         );
                         self.field_viewport.pan_last_pointer = Some(pointer);
                     } else {
-                        self.field_viewport.pan_last_pointer = None;
+                        self.field_viewport.end_pan();
                     }
                 }
                 if response.drag_stopped() {
-                    self.field_viewport.pan_last_pointer = None;
+                    self.field_viewport.end_pan();
                 }
                 if response.hovered() {
                     let (scroll, modifiers, pointer) = ui.input(|input| {
@@ -1891,7 +1909,9 @@ impl eframe::App for DrillApp {
                         && (modifiers.command || modifiers.ctrl)
                         && let Some(pointer) = pointer
                     {
-                        self.field_viewport.zoom_at(
+                        // Accumulate into a target; `tick` eases the live zoom
+                        // toward it with the cursor anchor pinned.
+                        self.field_viewport.zoom_toward(
                             (scroll * 0.0025).exp(),
                             pointer,
                             rect,
@@ -1899,6 +1919,27 @@ impl eframe::App for DrillApp {
                         );
                     }
                 }
+                // Pressing on the canvas grabs a glide in progress, the way it
+                // does on every momentum surface. This intentionally does not
+                // touch a rubber-band return in flight -- that spring is the
+                // edge pushing back, not the view coasting, and cancelling it
+                // would leave the view stranded outside the field.
+                if response.hovered() && ui.input(|input| input.pointer.any_pressed()) {
+                    self.field_viewport.stop_glide();
+                }
+                // Derived once per frame from the live drag state rather than
+                // from paired begin/end calls, so a drag abandoned by any of
+                // the several early-outs below can never leave the lift stuck
+                // on.
+                self.field_viewport
+                    .set_dot_drag(self.drag_before.is_some());
+                if self.field_viewport.tick(dt, &self.document.grid, rect) {
+                    ui.ctx().request_repaint();
+                }
+                // Momentum means the view can be moving while nothing is being
+                // dragged. `panning` stays strictly about the *gesture*, so a
+                // glide never suppresses knife cuts, free-draw, marquee
+                // selection or dot dragging.
                 let panning = was_panning || self.field_viewport.pan_last_pointer.is_some();
                 egui::Area::new("field-navigation-controls".into())
                     .order(egui::Order::Foreground)
@@ -1946,6 +1987,9 @@ impl eframe::App for DrillApp {
                                             x: x / count as f32,
                                             y: y / count as f32,
                                         };
+                                        self.field_viewport.stop_glide();
+                                        self.field_viewport
+                                            .clamp_center(&self.document.grid, viewport_size);
                                     }
                                 }
                             });
@@ -2305,12 +2349,21 @@ impl eframe::App for DrillApp {
                     }
                 }
                 if let Some(preview) = &self.drag_preview {
+                    // Held dots read as picked *up*: a soft shadow drops below
+                    // them and the dot itself grows by a hair. Both are driven
+                    // by one eased scalar on the viewport, so this costs two
+                    // floats regardless of how many hundred dots are in flight
+                    // and allocates nothing in the paint loop.
+                    let lift = self.field_viewport.dot_lift();
+                    let radius = 7.0 + 1.3 * lift;
+                    let shadow = Vec2::new(0.0, 2.6 * lift);
+                    let shade = Color32::from_black_alpha((70.0 * lift) as u8);
                     for &point in preview {
-                        painter.circle_filled(
-                            to_screen(point),
-                            7.0,
-                            Color32::from_rgb(100, 235, 255),
-                        );
+                        let pos = to_screen(point);
+                        if lift > 0.01 {
+                            painter.circle_filled(pos + shadow, radius + 1.6, shade);
+                        }
+                        painter.circle_filled(pos, radius, Color32::from_rgb(100, 235, 255));
                     }
                 }
                 if let Some(preview) = &self.clipboard_paste_preview {
@@ -2390,6 +2443,13 @@ impl eframe::App for DrillApp {
                             });
                         });
                 }
+                // Landing cue: the selection ring arrives a couple of pixels
+                // wide and shrinks to its resting size. Cut from the first
+                // draft: a colour flash and a springy scale overshoot on the
+                // dot itself. Both were legible once and irritating by the
+                // tenth repetition, which is the wrong trade for a canvas
+                // someone stares at for hours.
+                let settle_ring = 2.2 * self.field_viewport.dot_settle_phase();
                 for (index, &point) in self.frame_positions.iter().enumerate() {
                     let pos = to_screen(point);
                     let selected = self.selected.contains(&index);
@@ -2413,7 +2473,11 @@ impl eframe::App for DrillApp {
                         );
                     }
                     if selected {
-                        painter.circle_stroke(pos, 11.0, Stroke::new(2.0, Color32::WHITE));
+                        painter.circle_stroke(
+                            pos,
+                            11.0 + settle_ring,
+                            Stroke::new(2.0, Color32::WHITE),
+                        );
                         if self.selected.len() >= 2 {
                             self.paint_selection_rank_badge(&painter, pos, index);
                         }
@@ -2586,6 +2650,9 @@ impl eframe::App for DrillApp {
                         && let Some(before) = self.drag_before.take()
                     {
                         let after = self.drag_preview.take().unwrap_or_else(|| before.clone());
+                        // The dots have left the pointer and snapped to the
+                        // grid; run the one-shot landing settle.
+                        self.field_viewport.dots_landed();
                         if before != after && self.ensure_editable_set_start() {
                             let set_id = self.document.sets[self.current_set].id;
                             let performer_ids = self
