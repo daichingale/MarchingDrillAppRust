@@ -2362,6 +2362,74 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "workspace-inspector.174") => "Couldn't allocate a new set ID",
         (Locale::Ja, "workspace-inspector.175") => "経路が無効です",
         (Locale::En, "workspace-inspector.175") => "Invalid path",
+        (Locale::Ja, "workspace-inspector.176") => "スマート遷移を提案",
+        (Locale::En, "workspace-inspector.176") => "Suggest smart transition",
+        (Locale::Ja, "workspace-inspector.177") => {
+            "次のセットへの担当割り当てを、移動中の衝突を避けるように計算し直します。バックグラウンドで実行され、結果は提案として表示されます。"
+        }
+        (Locale::En, "workspace-inspector.177") => {
+            "Recomputes who walks to which slot in the next set, avoiding mid-flight collisions. Runs in the background and arrives as a suggestion."
+        }
+        (Locale::Ja, "workspace-inspector.178") => {
+            "次のセットが必要です。計算中は再実行できません。"
+        }
+        (Locale::En, "workspace-inspector.178") => {
+            "Needs a following set, and cannot re-run while a suggestion is being computed."
+        }
+        (Locale::Ja, "workspace-inspector.179") => "スマート遷移を計算しています",
+        (Locale::En, "workspace-inspector.179") => "Computing the smart transition",
+        (Locale::Ja, "workspace-inspector.180") => "衝突",
+        (Locale::En, "workspace-inspector.180") => "Collisions",
+        (Locale::Ja, "workspace-inspector.181") => "総移動距離",
+        (Locale::En, "workspace-inspector.181") => "Total travel",
+        (Locale::Ja, "workspace-inspector.182") => "入れ替えた人数",
+        (Locale::En, "workspace-inspector.182") => "Swapped performers",
+        (Locale::Ja, "workspace-inspector.183") => {
+            "プレビューのみです。適用するまで設計は変更されません。"
+        }
+        (Locale::En, "workspace-inspector.183") => {
+            "Preview only. The design stays unchanged until you apply it."
+        }
+        (Locale::Ja, "workspace-inspector.184") => "この割り当てを適用",
+        (Locale::En, "workspace-inspector.184") => "Apply this assignment",
+        (Locale::Ja, "workspace-inspector.185") => {
+            "改善できる入れ替えが見つからなかったため、適用する変更はありません。"
+        }
+        (Locale::En, "workspace-inspector.185") => {
+            "No improving swap was found, so there is nothing to apply."
+        }
+        (Locale::Ja, "workspace-inspector.186") => "破棄",
+        (Locale::En, "workspace-inspector.186") => "Discard",
+        (Locale::Ja, "workspace-inspector.187") => "提案を破棄しました",
+        (Locale::En, "workspace-inspector.187") => "Discarded the suggestion",
+        (Locale::Ja, "workspace-inspector.188") => "割り当てを適用できませんでした",
+        (Locale::En, "workspace-inspector.188") => "Could not apply the assignment",
+        (Locale::Ja, "workspace-inspector.189") => "スマート遷移を適用しました",
+        (Locale::En, "workspace-inspector.189") => "Applied the smart transition",
+        (Locale::Ja, "workspace-inspector.190") => "ロスターを再配分",
+        (Locale::En, "workspace-inspector.190") => "Rebalance roster",
+        (Locale::Ja, "workspace-inspector.191") => {
+            "このセットの図形を今の人数で作り直し、移動量が最小になるよう全員を配置し直します。"
+        }
+        (Locale::En, "workspace-inspector.191") => {
+            "Re-derives this set's shape for the current cast size and re-seats everyone with the least travel."
+        }
+        (Locale::Ja, "workspace-inspector.192") => {
+            "このセットは図形から生成されていないため再配分できません"
+        }
+        (Locale::En, "workspace-inspector.192") => {
+            "This set was not generated from a shape, so it cannot be rebalanced"
+        }
+        (Locale::Ja, "workspace-inspector.193") => "ロスターの再配分に失敗しました",
+        (Locale::En, "workspace-inspector.193") => "Rebalancing the roster failed",
+        (Locale::Ja, "workspace-inspector.194") => "ロスターを再配分しました",
+        (Locale::En, "workspace-inspector.194") => "Rebalanced the roster",
+        (Locale::Ja, "workspace-inspector.195") => "スマート遷移を計算中…",
+        (Locale::En, "workspace-inspector.195") => "Computing smart transition...",
+        (Locale::Ja, "workspace-inspector.196") => "スマート遷移の適用に失敗しました",
+        (Locale::En, "workspace-inspector.196") => "Applying the smart transition failed",
+        (Locale::Ja, "workspace-inspector.197") => "再配分できるセットではありません",
+        (Locale::En, "workspace-inspector.197") => "This set cannot be rebalanced",
         (Locale::Ja, "perf-hud.001") => "パフォーマンス",
         (Locale::En, "perf-hud.001") => "Performance",
         (Locale::Ja, "perf-hud.002") => "演者",

@@ -200,6 +200,9 @@ mod tests {
             "rhythm_sync::analyze_show(",
             "aesthetics::analyze_set(",
             "show_heatmap::analyze_show_occupancy(",
+            // Collision-aware assignment runs up to 192 swept scans; it
+            // belongs on the AssignmentOptimize job thread, never inline.
+            "pathing::optimal_assignment_collision_aware(",
         ] {
             assert!(!ui.contains(forbidden), "inline UI analysis: {forbidden}");
             assert!(

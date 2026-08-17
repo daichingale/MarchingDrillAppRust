@@ -56,6 +56,8 @@ mod section_manager;
 mod set_navigator;
 #[path = "simple_mode.rs"]
 mod simple_mode;
+#[path = "smart_transition_state.rs"]
+mod smart_transition_state;
 #[path = "stadium_inspector.rs"]
 mod stadium_inspector;
 #[path = "subset_snapshot_state.rs"]
@@ -653,6 +655,10 @@ pub(crate) struct DrillApp {
     /// Revision-gated background analytics; no heavy analysis executes in an
     /// egui frame callback.
     analytics_state: analytics_state::AnalyticsState,
+    /// Collision-aware assignment suggestions for the current transition.
+    /// User-triggered (never revision-driven) and non-destructive: it holds a
+    /// proposed permutation until the designer applies or discards it.
+    smart_transition: smart_transition_state::SmartTransitionState,
     /// Whether the "Show DNA" field-usage heatmap overlay is drawn. The
     /// underlying `FieldOccupancy` is computed by `analytics_state` only
     /// while this is on, so leaving it off costs nothing per frame.
@@ -801,6 +807,7 @@ impl Default for DrillApp {
             follow_leader_steps: 6,
             underlay_state: underlay_state::UnderlayState::default(),
             analytics_state: analytics_state::AnalyticsState::default(),
+            smart_transition: smart_transition_state::SmartTransitionState::default(),
             heatmap_enabled: false,
             trail_selection: drill_render::TrailSelection::None,
             set_comparison: None,
