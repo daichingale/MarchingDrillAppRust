@@ -651,6 +651,12 @@ pub(crate) struct DrillApp {
     /// deliberately kept out of the document/undo history like
     /// `formation_text`.
     follow_leader_steps: u32,
+    /// Which generator `follow_leader_steps` is currently editing. The drag
+    /// value needs a value that survives between frames while the pointer is
+    /// down, so it can't be re-read from the generator every frame; this
+    /// records whose value it holds so the inspector reseeds it when the
+    /// designer moves to a different generated range.
+    follow_leader_editing: Option<drill_core::GeneratorId>,
     underlay_state: underlay_state::UnderlayState,
     /// Revision-gated background analytics; no heavy analysis executes in an
     /// egui frame callback.
@@ -805,6 +811,7 @@ impl Default for DrillApp {
             knife_result: None,
             formation_text: "DRILL".into(),
             follow_leader_steps: 6,
+            follow_leader_editing: None,
             underlay_state: underlay_state::UnderlayState::default(),
             analytics_state: analytics_state::AnalyticsState::default(),
             smart_transition: smart_transition_state::SmartTransitionState::default(),
@@ -817,6 +824,81 @@ impl Default for DrillApp {
             clipboard_paste_targets_selection: false,
         }
     }
+}
+
+/// Everything a Follow the Leader regeneration needs, resolved up front.
+struct FollowRegenPlan {
+    generator: drill_core::FollowTheLeaderGenerator,
+    /// Index of the set the run hangs off; seeds any set growth adds.
+    source_index: usize,
+    /// Participant performer indices, in rank order.
+    group: Vec<usize>,
+    /// Indices of the sets the generator currently owns.
+    owned: Vec<usize>,
+    /// `group.len()` snapped trajectories, each `steps` points long.
+    trajectories: Vec<Vec<Point>>,
+    /// Pre-reserved IDs for the sets a larger step count has to add.
+    fresh_ids: Vec<drill_core::SetId>,
+    steps: usize,
+    path: shapes::ShapeSpec,
+}
+
+/// One snapped trajectory per rank for a Follow the Leader run.
+///
+/// Shared by the first run and every regeneration, so a re-edit can never
+/// drift from what pressing "generate" would have produced for the same
+/// inputs.
+///
+/// The path is densely sampled at a fixed high resolution so any fractional
+/// progress in [0, 1] can be read back by interpolating the two nearest
+/// samples, accurately regardless of `steps` or group size.
+///
+/// Each rank lags the one ahead of it by a fixed 1/len share of the path: the
+/// leader (rank 0) reaches the end exactly at the final set, and each
+/// follower's window opens later so the group reads as a staggered snake
+/// rather than a straight-line move. A follower whose window hasn't opened
+/// sits at the path's start; a rank that finishes early holds at its end.
+///
+/// Each performer's trajectory is snapped as one sequence (error diffusion)
+/// rather than per (rank, t) point: a performer's path over time is exactly
+/// the smooth curve `snap_sequence` exists for, and quantizing each set
+/// independently would make the motion jerky between frames.
+fn follow_the_leader_trajectories(
+    grid: &drill_core::GridConfig,
+    spec: &shapes::ShapeSpec,
+    ranks: usize,
+    steps: usize,
+) -> Option<Vec<Vec<Point>>> {
+    const RESOLUTION: usize = 512;
+    if ranks == 0 || steps == 0 {
+        return None;
+    }
+    let mut dense = Vec::with_capacity(RESOLUTION);
+    spec.sample(RESOLUTION, &mut dense);
+    if dense.len() < 2 {
+        return None;
+    }
+    let sample_progress = |progress: f32| -> Point {
+        let progress = progress.clamp(0.0, 1.0);
+        let scaled = progress * (dense.len() - 1) as f32;
+        let i0 = scaled.floor() as usize;
+        let i1 = (i0 + 1).min(dense.len() - 1);
+        dense[i0].lerp(dense[i1], scaled - i0 as f32)
+    };
+    let delay_per_rank = 1.0 / ranks as f32;
+    Some(
+        (0..ranks)
+            .map(|rank| {
+                let raw: Vec<Point> = (0..steps)
+                    .map(|t| {
+                        let t_norm = (t + 1) as f32 / steps as f32;
+                        sample_progress(t_norm - rank as f32 * delay_per_rank)
+                    })
+                    .collect();
+                grid.snap_sequence(&raw)
+            })
+            .collect(),
+    )
 }
 
 impl DrillApp {
@@ -1439,115 +1521,100 @@ impl DrillApp {
     /// every inserted set; rank r follows `1/len` of a lap behind rank r-1.
     /// Performers outside the group hold their existing position, copied
     /// unchanged from the set being split, in every inserted set.
+    fn follow_the_leader_set_name(&self, ordinal: usize) -> String {
+        format!(
+            "{} {}",
+            i18n::registered(self.locale, "workspace-inspector.148"),
+            ordinal
+        )
+    }
+
+    /// Allocate `count` fresh set IDs above everything the document already
+    /// uses. Returns `None` rather than a short list if the space runs out,
+    /// so callers never half-build a range.
+    fn reserve_set_ids(&self, count: usize) -> Option<Vec<drill_core::SetId>> {
+        let mut raw = self
+            .document
+            .sets
+            .iter()
+            .map(|set| set.id.get())
+            .max()
+            .unwrap_or(0);
+        let mut ids = Vec::with_capacity(count);
+        for _ in 0..count {
+            raw = raw.checked_add(1)?;
+            ids.push(drill_core::SetId::new(raw)?);
+        }
+        Some(ids)
+    }
+
     fn apply_follow_the_leader(&mut self, spec: shapes::ShapeSpec, steps: usize) {
         let group: Vec<usize> = self.selected.iter().copied().collect();
         if group.len() < 2 {
             self.status = i18n::registered(self.locale, "workspace-inspector.173").into();
             return;
         }
-        if steps == 0 || spec.validate().is_err() {
+        let group_ids: Vec<drill_core::PerformerId> = group
+            .iter()
+            .filter_map(|&index| self.document.performers.get(index).map(|p| p.id))
+            .collect();
+        if steps == 0 || spec.validate().is_err() || group_ids.len() != group.len() {
             self.status = i18n::registered(self.locale, "workspace-inspector.153").into();
             return;
         }
         let Some(source) = self.document.sets.get(self.current_set).cloned() else {
             return;
         };
-
-        // Dense arc-length-uniform samples of the path so any fractional
-        // progress in [0, 1] can be looked up by interpolating between the
-        // two nearest samples; a fixed high resolution keeps this accurate
-        // regardless of `steps` or the group size.
-        const RESOLUTION: usize = 512;
-        let mut dense = Vec::with_capacity(RESOLUTION);
-        spec.sample(RESOLUTION, &mut dense);
-        if dense.len() < 2 {
+        let (Some(trajectories), Some(set_ids), Some(generator_id)) = (
+            follow_the_leader_trajectories(&self.document.grid, &spec, group.len(), steps),
+            self.reserve_set_ids(steps),
+            self.document.next_generator_id(),
+        ) else {
             self.status = i18n::registered(self.locale, "workspace-inspector.175").into();
             return;
-        }
-        let sample_progress = |progress: f32| -> Point {
-            let progress = progress.clamp(0.0, 1.0);
-            let scaled = progress * (dense.len() - 1) as f32;
-            let i0 = scaled.floor() as usize;
-            let i1 = (i0 + 1).min(dense.len() - 1);
-            dense[i0].lerp(dense[i1], scaled - i0 as f32)
         };
 
-        // Each rank lags the one ahead of it by a fixed 1/len share of the
-        // path: the leader (rank 0) reaches the end exactly at the final
-        // inserted set, and each follower's own window opens later so the
-        // group reads as a staggered snake rather than a straight-line move.
-        // Followers whose window hasn't opened yet (progress would be
-        // negative) sit at the path's start point; a rank whose window
-        // finishes before `steps` runs out holds at the path's end point.
-        let delay_per_rank = 1.0 / group.len() as f32;
         let insert_at = self.current_set + 1;
         let mut next = self.document.clone();
-        let grid = next.grid.clone();
-
-        // Snap each performer's own trajectory across the inserted sets as
-        // one sequence (error diffusion), not each (rank, t) point in
-        // isolation: a performer's path over time is exactly the kind of
-        // smooth curve `snap_sequence` is for, and quantizing it
-        // independently at each set would make their motion look jerky
-        // between frames instead of a smooth follow.
-        let snapped_trajectories: Vec<Vec<Point>> = group
+        let inserted: Vec<Set> = set_ids
             .iter()
             .enumerate()
-            .map(|(rank, _)| {
-                let raw: Vec<Point> = (0..steps)
-                    .map(|t| {
-                        let t_norm = (t + 1) as f32 / steps as f32;
-                        let progress = t_norm - rank as f32 * delay_per_rank;
-                        sample_progress(progress)
-                    })
-                    .collect();
-                grid.snap_sequence(&raw)
+            .map(|(t, &set_id)| {
+                let mut positions = source.positions.clone();
+                for (rank, &index) in group.iter().enumerate() {
+                    if let Some(slot) = positions.get_mut(index) {
+                        *slot = trajectories[rank][t];
+                    }
+                }
+                Set {
+                    id: set_id,
+                    name: self.follow_the_leader_set_name(t + 1),
+                    annotation: Default::default(),
+                    counts: 4,
+                    hold: 0,
+                    routes: Default::default(),
+                    shape: None,
+                    generated_by: Some(generator_id),
+                    positions,
+                }
             })
             .collect();
-
-        let mut next_raw_id = next.sets.iter().map(|set| set.id.get()).max().unwrap_or(0);
-        let mut inserted = Vec::with_capacity(steps);
-        // `t` is used for more than indexing here (it also feeds the
-        // inserted set's `t + 1` display name and the sequential set-ID
-        // allocation with its own early-return path), so an
-        // iterator/enumerate rewrite wouldn't be clearer than the loop.
-        #[allow(clippy::needless_range_loop)]
-        for t in 0..steps {
-            let Some(next_id) = next_raw_id.checked_add(1) else {
-                self.status = i18n::registered(self.locale, "workspace-inspector.150").into();
-                return;
-            };
-            next_raw_id = next_id;
-            let Some(set_id) = drill_core::SetId::new(next_id) else {
-                self.status = i18n::registered(self.locale, "workspace-inspector.174").into();
-                return;
-            };
-            let mut positions = source.positions.clone();
-            for (rank, &index) in group.iter().enumerate() {
-                if let Some(slot) = positions.get_mut(index) {
-                    *slot = snapped_trajectories[rank][t];
-                }
-            }
-            inserted.push(Set {
-                id: set_id,
-                name: format!(
-                    "{} {}",
-                    i18n::registered(self.locale, "workspace-inspector.148"),
-                    t + 1
-                ),
-                annotation: Default::default(),
-                counts: 4,
-                hold: 0,
-                routes: Default::default(),
-                shape: None,
-                positions,
-            });
-        }
 
         let step_count = inserted.len();
         for (offset, set) in inserted.into_iter().enumerate() {
             next.sets.insert(insert_at + offset, set);
         }
+        // Retaining the path, step count and participants turns the run into
+        // a live generator: changing either input later rewrites this exact
+        // range instead of forcing an undo-and-redraw from scratch.
+        next.generators.push(drill_core::FollowTheLeaderGenerator {
+            id: generator_id,
+            path: spec,
+            steps: steps as u32,
+            group: group_ids,
+            source_set: source.id,
+            owns: set_ids,
+        });
 
         if self.execute_edit(
             Edit::ReplaceDocument {
@@ -1563,6 +1630,178 @@ impl DrillApp {
                 step_count
             );
         }
+    }
+
+    /// Resolve everything a regeneration needs, or nothing at all.
+    ///
+    /// Every way a re-run can fail (the generator vanished, a participant was
+    /// deleted, one of its sets was removed, the new path is degenerate, set
+    /// IDs ran out) collapses into a single `None` so the caller has exactly
+    /// one failure branch and the document is never touched halfway.
+    fn plan_follow_the_leader_regeneration(
+        &self,
+        generator_id: drill_core::GeneratorId,
+        new_steps: Option<u32>,
+        new_path: Option<shapes::ShapeSpec>,
+    ) -> Option<FollowRegenPlan> {
+        let generator = self.document.generator(generator_id)?.clone();
+        let steps = new_steps.unwrap_or(generator.steps) as usize;
+        let path = new_path.unwrap_or_else(|| generator.path.clone());
+        let group: Vec<usize> = generator
+            .group
+            .iter()
+            .filter_map(|id| self.document.performers.iter().position(|p| p.id == *id))
+            .collect();
+        let owned: Vec<usize> = generator
+            .owns
+            .iter()
+            .filter_map(|id| self.document.sets.iter().position(|set| set.id == *id))
+            .collect();
+        let source_index = self
+            .document
+            .sets
+            .iter()
+            .position(|set| set.id == generator.source_set)?;
+        if steps == 0
+            || group.len() < 2
+            || group.len() != generator.group.len()
+            || owned.is_empty()
+            || owned.len() != generator.owns.len()
+            || path.validate().is_err()
+        {
+            return None;
+        }
+        let trajectories =
+            follow_the_leader_trajectories(&self.document.grid, &path, group.len(), steps)?;
+        let fresh_ids = self.reserve_set_ids(steps.saturating_sub(owned.len()))?;
+        Some(FollowRegenPlan {
+            generator,
+            source_index,
+            group,
+            owned,
+            trajectories,
+            fresh_ids,
+            steps,
+            path,
+        })
+    }
+
+    /// Re-run an existing generator in place.
+    ///
+    /// Sets that survive the new step count are *edited*, not replaced: they
+    /// keep their ID, name, counts, routes and every non-participant
+    /// position, so re-editing a run never renumbers the show or discards
+    /// work the designer did around the moving group. Shrinking drops the
+    /// tail; growing seeds the new sets from the source set, exactly as the
+    /// original run did. One `ReplaceDocument`, so one undo step.
+    fn regenerate_follow_the_leader(
+        &mut self,
+        generator_id: drill_core::GeneratorId,
+        new_steps: Option<u32>,
+        new_path: Option<shapes::ShapeSpec>,
+    ) {
+        let Some(plan) =
+            self.plan_follow_the_leader_regeneration(generator_id, new_steps, new_path)
+        else {
+            self.status = i18n::registered(self.locale, "workspace-inspector.211").into();
+            return;
+        };
+
+        let mut next = self.document.clone();
+        let seed = next.sets[plan.source_index].positions.clone();
+        let carried = plan.owned.len();
+        let rebuilt: Vec<Set> = (0..plan.steps)
+            .map(|t| {
+                let mut set = match plan.owned.get(t) {
+                    Some(&index) => next.sets[index].clone(),
+                    None => Set {
+                        id: plan.fresh_ids[t - carried],
+                        name: self.follow_the_leader_set_name(t + 1),
+                        annotation: Default::default(),
+                        counts: 4,
+                        hold: 0,
+                        routes: Default::default(),
+                        shape: None,
+                        generated_by: None,
+                        positions: seed.clone(),
+                    },
+                };
+                set.generated_by = Some(plan.generator.id);
+                for (rank, &index) in plan.group.iter().enumerate() {
+                    if let Some(slot) = set.positions.get_mut(index) {
+                        *slot = plan.trajectories[rank][t];
+                    }
+                }
+                set
+            })
+            .collect();
+
+        let mut owned = plan.owned.clone();
+        owned.sort_unstable();
+        let insert_at = owned[0];
+        for &index in owned.iter().rev() {
+            next.sets.remove(index);
+        }
+        let owns: Vec<drill_core::SetId> = rebuilt.iter().map(|set| set.id).collect();
+        for (offset, set) in rebuilt.into_iter().enumerate() {
+            next.sets.insert(insert_at + offset, set);
+        }
+        if let Some(entry) = next
+            .generators
+            .iter_mut()
+            .find(|entry| entry.id == plan.generator.id)
+        {
+            entry.steps = plan.steps as u32;
+            entry.path = plan.path;
+            entry.owns = owns;
+        }
+
+        if self.execute_edit(
+            Edit::ReplaceDocument {
+                document: Box::new(next),
+            },
+            i18n::registered(self.locale, "workspace-inspector.206"),
+        ) {
+            self.current_set = self
+                .current_set
+                .min(self.document.sets.len().saturating_sub(1));
+            self.count_position = 0.0;
+            self.status = i18n::registered(self.locale, "workspace-inspector.207").into();
+        }
+    }
+
+    /// Bake a generated range down to ordinary sets. Positions are untouched;
+    /// only the generator bookkeeping goes away.
+    fn bake_follow_the_leader(&mut self, generator_id: drill_core::GeneratorId) {
+        let mut next = self.document.clone();
+        if !next.detach_generator(generator_id) {
+            return;
+        }
+        if self.execute_edit(
+            Edit::ReplaceDocument {
+                document: Box::new(next),
+            },
+            i18n::registered(self.locale, "workspace-inspector.208"),
+        ) {
+            self.status = i18n::registered(self.locale, "workspace-inspector.209").into();
+        }
+    }
+
+    /// The generator the inspector should offer controls for: the one that
+    /// produced the current set, or — when the designer is parked back on the
+    /// set a run was launched from — the one anchored there.
+    fn active_follow_generator(&self) -> Option<(drill_core::GeneratorId, u32)> {
+        let set = self.document.sets.get(self.current_set)?;
+        let id = set.generated_by.or_else(|| {
+            self.document
+                .generators
+                .iter()
+                .find(|entry| entry.source_set == set.id)
+                .map(|entry| entry.id)
+        })?;
+        self.document
+            .generator(id)
+            .map(|entry| (entry.id, entry.steps))
     }
 
     fn execute_command(&mut self, command: UiCommand, context: &egui::Context) {
@@ -2557,6 +2796,30 @@ impl DrillApp {
             })
             .collect::<Vec<_>>();
         if before == after {
+            return;
+        }
+        // A hand edit inside a generated range wins over the generator: the
+        // next regeneration would silently overwrite it, so the whole range
+        // detaches instead. Detaching the entire range rather than the single
+        // set keeps the invariant simple — a generator either owns all of its
+        // sets or none of them — and folding the detach into the same
+        // `ReplaceDocument` as the move keeps it a single undo step. This is
+        // the one place manual edits reach a generated set; regeneration and
+        // baking take their own paths and are unaffected.
+        if let Some(generator_id) = self.document.sets[self.current_set].generated_by {
+            let mut next = self.document.clone();
+            for (&index, &point) in self.selected.iter().zip(after.iter()) {
+                if let Some(slot) = next.sets[self.current_set].positions.get_mut(index) {
+                    *slot = point;
+                }
+            }
+            next.detach_generator(generator_id);
+            self.execute_edit(
+                Edit::ReplaceDocument {
+                    document: Box::new(next),
+                },
+                i18n::registered(self.locale, "workspace-inspector.198"),
+            );
             return;
         }
         let performer_ids = self

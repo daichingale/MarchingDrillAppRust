@@ -478,6 +478,7 @@ pub fn merge_selected(
                 hold: set.hold,
                 routes: set.routes.clone(),
                 shape: set.shape.clone(),
+                generated_by: None,
                 positions: vec![Point::default(); merged.performers.len()],
             });
             next_set_id = next_set_id.saturating_add(1);
@@ -919,6 +920,7 @@ pub fn import_tabular_as_document(
                 hold: 0,
                 routes: drill_core::RouteTable::default(),
                 shape: None,
+                generated_by: None,
                 positions,
             }
         })
@@ -942,6 +944,7 @@ pub fn import_tabular_as_document(
         sections,
         subsets: Vec::new(),
         performers,
+        generators: Vec::new(),
         sets,
         production_markers: Vec::new(),
     };
