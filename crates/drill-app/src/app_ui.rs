@@ -1,4 +1,5 @@
 use super::*;
+use std::f32::consts::TAU;
 
 impl eframe::App for DrillApp {
     /// This app never wraps its content in `egui::CentralPanel`, so the
@@ -1971,6 +1972,21 @@ impl eframe::App for DrillApp {
                 // glide never suppresses knife cuts, free-draw, marquee
                 // selection or dot dragging.
                 let panning = was_panning || self.field_viewport.pan_last_pointer.is_some();
+                // A held secondary button belongs to the radial marking menu,
+                // which is direction-based and therefore looks exactly like a
+                // drag to egui (drags are button-agnostic). Fold it into the
+                // same suppression panning already uses so a marking gesture
+                // can never also move dots, rubber-band a marquee, cut, or
+                // draw. A secondary press that arrives while a primary drag is
+                // already in flight is ignored here, so the in-flight drag
+                // still reaches its own `drag_stopped` cleanup.
+                let marking_gesture = self.marking_menu.is_some()
+                    || (ui.input(|input| {
+                        input.pointer.button_down(egui::PointerButton::Secondary)
+                    })
+                        && self.drag_before.is_none()
+                        && self.marquee_origin.is_none());
+                let pointer_gesture_taken = panning || marking_gesture;
                 egui::Area::new("field-navigation-controls".into())
                     .order(egui::Order::Foreground)
                     .fixed_pos(rect.left_top() + Vec2::new(12.0, 10.0))
@@ -2521,10 +2537,10 @@ impl eframe::App for DrillApp {
                     let interaction_locked = self.formation_preview_spec.is_some()
                         || self.clipboard_paste_preview.is_some()
                         || self.knife_active;
-                    if !panning && self.knife_active && response.drag_started() {
+                    if !pointer_gesture_taken && self.knife_active && response.drag_started() {
                         self.knife_origin = Some(pointer);
                     }
-                    if !panning
+                    if !pointer_gesture_taken
                         && self.knife_active
                         && response.dragged()
                         && let Some(origin) = self.knife_origin
@@ -2534,7 +2550,7 @@ impl eframe::App for DrillApp {
                             Stroke::new(2.0, Color32::from_rgb(255, 120, 90)),
                         );
                     }
-                    if !panning && self.knife_active && response.drag_stopped() {
+                    if !pointer_gesture_taken && self.knife_active && response.drag_stopped() {
                         if let Some(origin) = self.knife_origin.take() {
                             let start = from_screen(origin);
                             let end = from_screen(pointer);
@@ -2543,7 +2559,7 @@ impl eframe::App for DrillApp {
                             self.cancel_knife();
                         }
                     }
-                    if !panning
+                    if !pointer_gesture_taken
                         && self.free_draw_active
                         && (response.drag_started() || response.dragged())
                     {
@@ -2564,7 +2580,7 @@ impl eframe::App for DrillApp {
                             self.free_draw_raw.push(point);
                         }
                     }
-                    if !panning && self.free_draw_active && response.drag_stopped() {
+                    if !pointer_gesture_taken && self.free_draw_active && response.drag_stopped() {
                         self.finish_free_draw_preview();
                     }
                     let nearest = || {
@@ -2581,7 +2597,7 @@ impl eframe::App for DrillApp {
                             .map(|(i, _)| i)
                     };
                     let nearest_index = nearest();
-                    if !panning
+                    if !pointer_gesture_taken
                         && !self.free_draw_active
                         && !interaction_locked
                         && response.clicked()
@@ -2612,7 +2628,7 @@ impl eframe::App for DrillApp {
                     if !self.free_draw_active
                         && !interaction_locked
                         && response.drag_started()
-                        && !panning
+                        && !pointer_gesture_taken
                         && self.is_editable_set_start()
                         && let Some(index) = nearest_index
                     {
@@ -2631,7 +2647,7 @@ impl eframe::App for DrillApp {
                     if !self.free_draw_active
                         && !interaction_locked
                         && response.drag_started()
-                        && !panning
+                        && !pointer_gesture_taken
                         && nearest_index.is_none()
                     {
                         self.marquee_origin = Some(pointer);
@@ -2639,7 +2655,7 @@ impl eframe::App for DrillApp {
                     if !self.free_draw_active
                         && !interaction_locked
                         && response.dragged()
-                        && !panning
+                        && !pointer_gesture_taken
                         && let Some(origin) = self.marquee_origin
                     {
                         let marquee = Rect::from_two_pos(origin, pointer).intersect(rect);
@@ -2658,7 +2674,7 @@ impl eframe::App for DrillApp {
                     if !self.free_draw_active
                         && !interaction_locked
                         && response.dragged()
-                        && !panning
+                        && !pointer_gesture_taken
                         && self.is_editable_set_start()
                         && let (Some(before), Some(origin)) = (&self.drag_before, self.drag_origin)
                     {
@@ -2676,7 +2692,7 @@ impl eframe::App for DrillApp {
                     if !self.free_draw_active
                         && !interaction_locked
                         && response.drag_stopped()
-                        && !panning
+                        && !pointer_gesture_taken
                         && let Some(before) = self.drag_before.take()
                     {
                         let after = self.drag_preview.take().unwrap_or_else(|| before.clone());
@@ -2706,7 +2722,7 @@ impl eframe::App for DrillApp {
                     if !self.free_draw_active
                         && !interaction_locked
                         && response.drag_stopped()
-                        && !panning
+                        && !pointer_gesture_taken
                         && let Some(origin) = self.marquee_origin.take()
                     {
                         let marquee = Rect::from_two_pos(origin, pointer);
@@ -2728,102 +2744,11 @@ impl eframe::App for DrillApp {
                     }
                 }
                 // Keep frequent selection operations at the field as well as
-                // in the toolbar and inspector. This is intentionally a
-                // short contextual menu: it accelerates repetition without
-                // becoming a second, hidden control surface.
-                if !self.selected.is_empty()
-                    && self.formation_preview_spec.is_none()
-                    && !self.free_draw_active
-                    && !self.knife_active
-                {
-                    response.context_menu(|ui| {
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} {}",
-                                self.selected.len(),
-                                super::i18n::registered(self.locale, "app-ui.097")
-                            ))
-                            .strong(),
-                        );
-                        ui.separator();
-                        let points = self.selected_points();
-                        if ui
-                            .button(super::i18n::registered(self.locale, "app-ui.098"))
-                            .clicked()
-                        {
-                            self.commit_layout(editing::align_horizontal(&points));
-                            ui.close();
-                        }
-                        if ui
-                            .button(super::i18n::registered(self.locale, "app-ui.099"))
-                            .clicked()
-                        {
-                            self.commit_layout(editing::align_vertical(&points));
-                            ui.close();
-                        }
-                        if self.selected.len() >= 2 {
-                            if ui
-                                .button(super::i18n::registered(self.locale, "app-ui.100"))
-                                .clicked()
-                            {
-                                self.commit_layout(editing::distribute_horizontal(&points));
-                                ui.close();
-                            }
-                            if ui
-                                .button(super::i18n::registered(self.locale, "app-ui.101"))
-                                .clicked()
-                            {
-                                self.commit_layout(editing::distribute_vertical(&points));
-                                ui.close();
-                            }
-                        }
-                        if ui
-                            .button(super::i18n::registered(self.locale, "app-ui.102"))
-                            .clicked()
-                        {
-                            if let Some((min, max)) = self.selection_bounds() {
-                                let y = (min.y + max.y) * 0.5;
-                                self.preview_shape(shapes::ShapeSpec::Line {
-                                    start: Point { x: min.x, y },
-                                    end: Point { x: max.x, y },
-                                });
-                            }
-                            ui.close();
-                        }
-                        ui.separator();
-                        if ui
-                            .button(super::i18n::registered(self.locale, "clipboard.020"))
-                            .clicked()
-                        {
-                            self.copy_selected_formation();
-                            ui.close();
-                        }
-                        if ui
-                            .button(super::i18n::registered(self.locale, "clipboard.021"))
-                            .clicked()
-                        {
-                            self.begin_clipboard_paste_preview();
-                            ui.close();
-                        }
-                        ui.separator();
-                        if ui
-                            .button(super::i18n::registered(self.locale, "app-ui.129"))
-                            .on_hover_text(super::i18n::registered(self.locale, "app-ui.130"))
-                            .clicked()
-                        {
-                            self.lock_selected_performers();
-                            ui.close();
-                        }
-                        if ui
-                            .button(super::i18n::registered(self.locale, "app-ui.131"))
-                            .on_hover_text(super::i18n::registered(self.locale, "app-ui.132"))
-                            .clicked()
-                        {
-                            self.hide_selected_performers();
-                            ui.close();
-                        }
-                    });
-                }
+                // in the toolbar and inspector. A radial marking menu, not a
+                // list: the same nine commands, but chosen by the *direction*
+                // of the right-drag, so a practiced user flicks and releases
+                // without ever waiting for the wheel to be drawn.
+                self.field_marking_menu(ui, &response);
             }
         });
         self.show_section_manager(ui.ctx());
@@ -2867,6 +2792,351 @@ impl eframe::App for DrillApp {
 }
 
 impl DrillApp {
+    /// Drives the field canvas radial marking menu: the same nine selection
+    /// commands the field has always offered, chosen by the direction of a
+    /// right-drag instead of by picking a row out of a list.
+    ///
+    /// Everything is measured from the press point, and nothing about the
+    /// resolution depends on the wheel having been drawn. That is what lets
+    /// an experienced user flick and release inside the reveal delay and
+    /// still land the command they meant, while a newcomer holds still, reads
+    /// the labels, and then moves.
+    fn field_marking_menu(&mut self, ui: &mut egui::Ui, response: &egui::Response) {
+        use marking_menu::{MarkingMenuState, Slice};
+
+        // Exactly the gating the list menu used: no selection, a formation
+        // preview in flight, or a modal field tool all suppress it.
+        if self.selected.is_empty()
+            || self.formation_preview_spec.is_some()
+            || self.free_draw_active
+            || self.knife_active
+        {
+            self.marking_menu = None;
+            return;
+        }
+        let (now, secondary_pressed, secondary_released, primary_pressed, escaped, pointer) = ui
+            .input(|input| {
+                (
+                    input.time,
+                    input.pointer.button_pressed(egui::PointerButton::Secondary),
+                    input.pointer.button_released(egui::PointerButton::Secondary),
+                    input.pointer.button_pressed(egui::PointerButton::Primary),
+                    input.key_pressed(egui::Key::Escape),
+                    input.pointer.interact_pos(),
+                )
+            });
+        // Arm on press, never on release: the press point is the origin of
+        // every angle the gesture will produce.
+        if self.marking_menu.is_none()
+            && secondary_pressed
+            && self.drag_before.is_none()
+            && self.marquee_origin.is_none()
+            && let Some(pointer) = pointer
+            && response.rect.contains(pointer)
+        {
+            self.marking_menu = Some(MarkingMenuState::new(pointer, now));
+        }
+        let Some(mut menu) = self.marking_menu else {
+            return;
+        };
+        if escaped {
+            self.marking_menu = None;
+            return;
+        }
+        if let Some(pointer) = pointer {
+            menu.pointer = pointer;
+        }
+        // The reveal and the sub-menu dwell are both time based, so frames
+        // have to keep arriving even while the pointer sits perfectly still.
+        ui.ctx().request_repaint();
+
+        let mut fired = None;
+        let mut close = false;
+        if menu.sticky {
+            // The nested wheel is parked open after a flick that ended on the
+            // sub-menu slice; the next click resolves inside it.
+            if primary_pressed || secondary_pressed {
+                fired = menu.sub_action();
+                close = true;
+            }
+        } else {
+            if menu.sub_center.is_none() {
+                if menu.direction() == Some(marking_menu::Direction::Nw) {
+                    // Either dwelling on the slice or pushing straight through
+                    // its rim opens the nested wheel; the second path keeps
+                    // the expert flick continuous.
+                    let since = *menu.sub_dwell_since.get_or_insert(now);
+                    let reach = (menu.pointer - menu.center).length();
+                    if now - since >= marking_menu::SUB_DELAY
+                        || reach >= marking_menu::OUTER_RADIUS
+                    {
+                        menu.open_sub();
+                    }
+                } else {
+                    menu.sub_dwell_since = None;
+                }
+            }
+            if secondary_released {
+                if menu.sub_center.is_some() {
+                    fired = menu.sub_action();
+                    close = true;
+                } else {
+                    match menu.direction().map(marking_menu::slice_for) {
+                        Some(Slice::Action(action)) => {
+                            fired = Some(action);
+                            close = true;
+                        }
+                        Some(Slice::SubMenu) => {
+                            // A flick that ends on the nested slice must not
+                            // be a dead end: park the nested wheel open.
+                            menu.open_sub();
+                            menu.sticky = true;
+                        }
+                        None => close = true,
+                    }
+                }
+            }
+        }
+        if menu.revealed(now) {
+            self.paint_marking_menu(ui.ctx(), &menu);
+        }
+        self.marking_menu = if close { None } else { Some(menu) };
+        if let Some(action) = fired.filter(|&action| self.marking_action_enabled(action)) {
+            self.apply_marking_action(action);
+        }
+    }
+
+    /// The distribute pair needs something to distribute between, matching
+    /// the list menu's `selected.len() >= 2` gate. A disabled slice draws
+    /// dimmed and resolves to nothing.
+    fn marking_action_enabled(&self, action: marking_menu::MarkingAction) -> bool {
+        match action {
+            marking_menu::MarkingAction::DistributeHorizontal
+            | marking_menu::MarkingAction::DistributeVertical => self.selected.len() >= 2,
+            _ => true,
+        }
+    }
+
+    /// Routes a resolved slice onto the very same calls the list menu made.
+    fn apply_marking_action(&mut self, action: marking_menu::MarkingAction) {
+        use marking_menu::MarkingAction;
+
+        let points = self.selected_points();
+        match action {
+            MarkingAction::AlignHorizontal => {
+                self.commit_layout(editing::align_horizontal(&points));
+            }
+            MarkingAction::AlignVertical => {
+                self.commit_layout(editing::align_vertical(&points));
+            }
+            MarkingAction::DistributeHorizontal => {
+                self.commit_layout(editing::distribute_horizontal(&points));
+            }
+            MarkingAction::DistributeVertical => {
+                self.commit_layout(editing::distribute_vertical(&points));
+            }
+            MarkingAction::Straighten => {
+                if let Some((min, max)) = self.selection_bounds() {
+                    let y = (min.y + max.y) * 0.5;
+                    self.preview_shape(shapes::ShapeSpec::Line {
+                        start: Point { x: min.x, y },
+                        end: Point { x: max.x, y },
+                    });
+                }
+            }
+            MarkingAction::CopyFormation => self.copy_selected_formation(),
+            MarkingAction::PasteFormation => self.begin_clipboard_paste_preview(),
+            MarkingAction::Lock => self.lock_selected_performers(),
+            MarkingAction::Hide => self.hide_selected_performers(),
+        }
+    }
+
+    fn marking_action_label(&self, action: marking_menu::MarkingAction) -> &'static str {
+        use marking_menu::MarkingAction;
+
+        match action {
+            MarkingAction::AlignHorizontal => super::i18n::registered(self.locale, "app-ui.098"),
+            MarkingAction::AlignVertical => super::i18n::registered(self.locale, "app-ui.099"),
+            MarkingAction::DistributeHorizontal => {
+                super::i18n::registered(self.locale, "app-ui.100")
+            }
+            MarkingAction::DistributeVertical => super::i18n::registered(self.locale, "app-ui.101"),
+            MarkingAction::Straighten => super::i18n::registered(self.locale, "app-ui.102"),
+            MarkingAction::CopyFormation => super::i18n::registered(self.locale, "clipboard.020"),
+            MarkingAction::PasteFormation => super::i18n::registered(self.locale, "clipboard.021"),
+            MarkingAction::Lock => super::i18n::registered(self.locale, "app-ui.129"),
+            MarkingAction::Hide => super::i18n::registered(self.locale, "app-ui.131"),
+        }
+    }
+
+    /// Paints the wheel on the foreground layer so it always sits above the
+    /// field's own overlays. Pure painter work: the wheel is feedback for a
+    /// gesture already in progress, never an interactive widget of its own.
+    fn paint_marking_menu(&self, ctx: &egui::Context, menu: &marking_menu::MarkingMenuState) {
+        use marking_menu::{Direction, Slice};
+
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("field-marking-menu"),
+        ));
+        let dark = ctx.global_style().visuals.dark_mode;
+        let (plate, ink, dim, hot) = if dark {
+            (
+                Color32::from_rgba_unmultiplied(16, 20, 28, 216),
+                Color32::from_rgb(226, 232, 240),
+                Color32::from_rgb(116, 124, 138),
+                Color32::from_rgb(255, 255, 255),
+            )
+        } else {
+            (
+                Color32::from_rgba_unmultiplied(248, 250, 253, 228),
+                Color32::from_rgb(28, 34, 46),
+                Color32::from_rgb(152, 158, 168),
+                Color32::from_rgb(10, 46, 104),
+            )
+        };
+        let accent = Color32::from_rgb(70, 160, 255);
+        let center = menu.center;
+        let outer = marking_menu::OUTER_RADIUS;
+        // While the nested wheel is up it owns the pointer, so the primary
+        // wheel stops highlighting and reads as the parent it now is.
+        let active = if menu.sub_center.is_some() {
+            None
+        } else {
+            menu.direction()
+        };
+
+        painter.circle_filled(center, outer, plate);
+        if let Some(direction) = active {
+            painter.add(egui::Shape::convex_polygon(
+                marking_menu::wedge_points(center, outer, direction, TAU / 8.0),
+                accent.gamma_multiply(0.42),
+                Stroke::NONE,
+            ));
+        }
+        painter.circle_stroke(center, outer, Stroke::new(1.0, dim.gamma_multiply(0.7)));
+        for direction in Direction::ALL {
+            // Spokes at the slice *boundaries*, not the slice centers, so the
+            // drawn geometry matches where the angle actually switches over.
+            let edge = direction.angle() + TAU / 16.0;
+            let step = Vec2::new(edge.cos(), -edge.sin());
+            painter.line_segment(
+                [
+                    center + step * marking_menu::DEAD_ZONE,
+                    center + step * outer,
+                ],
+                Stroke::new(1.0, dim.gamma_multiply(0.45)),
+            );
+        }
+        // The ink trail: the gesture the user is actually making.
+        painter.line_segment([center, menu.pointer], Stroke::new(2.0, accent));
+        painter.circle_filled(center, marking_menu::DEAD_ZONE, plate);
+        painter.circle_stroke(
+            center,
+            marking_menu::DEAD_ZONE,
+            Stroke::new(1.0, if active.is_none() { accent } else { dim }),
+        );
+        painter.text(
+            center,
+            egui::Align2::CENTER_CENTER,
+            self.selected.len().to_string(),
+            egui::FontId::proportional(13.0),
+            ink,
+        );
+        for direction in Direction::ALL {
+            let (label, enabled) = match marking_menu::slice_for(direction) {
+                Slice::Action(action) => (
+                    self.marking_action_label(action),
+                    self.marking_action_enabled(action),
+                ),
+                Slice::SubMenu => (super::i18n::registered(self.locale, "app-ui.165"), true),
+            };
+            let color = if !enabled {
+                dim
+            } else if active == Some(direction) {
+                hot
+            } else {
+                ink
+            };
+            Self::paint_marking_label(
+                &painter,
+                center + direction.unit() * (outer + 10.0),
+                direction.label_align(),
+                label,
+                color,
+                plate,
+            );
+        }
+        Self::paint_marking_label(
+            &painter,
+            center + Vec2::new(0.0, outer + 42.0),
+            egui::Align2::CENTER_TOP,
+            &format!(
+                "{} {}",
+                self.selected.len(),
+                super::i18n::registered(self.locale, "app-ui.097")
+            ),
+            dim,
+            plate,
+        );
+
+        if let Some(sub) = menu.sub_center {
+            let chosen = menu.sub_action();
+            painter.circle_filled(sub, marking_menu::SUB_RADIUS, plate);
+            for (direction, action) in marking_menu::SUB_ITEMS {
+                if chosen == Some(action) {
+                    painter.add(egui::Shape::convex_polygon(
+                        marking_menu::wedge_points(
+                            sub,
+                            marking_menu::SUB_RADIUS,
+                            direction,
+                            TAU / 4.0,
+                        ),
+                        accent.gamma_multiply(0.42),
+                        Stroke::NONE,
+                    ));
+                }
+            }
+            painter.circle_stroke(
+                sub,
+                marking_menu::SUB_RADIUS,
+                Stroke::new(1.0, dim.gamma_multiply(0.7)),
+            );
+            painter.circle_filled(sub, marking_menu::SUB_DEAD_ZONE, plate);
+            for (direction, action) in marking_menu::SUB_ITEMS {
+                Self::paint_marking_label(
+                    &painter,
+                    sub + direction.unit() * (marking_menu::SUB_RADIUS + 8.0),
+                    direction.label_align(),
+                    self.marking_action_label(action),
+                    if chosen == Some(action) { hot } else { ink },
+                    plate,
+                );
+            }
+        }
+    }
+
+    /// A label plate: the wheel's own translucency is not enough contrast for
+    /// text sitting over an arbitrary field drawing.
+    fn paint_marking_label(
+        painter: &egui::Painter,
+        anchor: Pos2,
+        align: egui::Align2,
+        text: &str,
+        color: Color32,
+        plate: Color32,
+    ) {
+        let galley = painter.layout_no_wrap(
+            text.to_owned(),
+            egui::FontId::proportional(13.0),
+            color,
+        );
+        let padding = Vec2::new(6.0, 3.0);
+        let rect = align.anchor_size(anchor, galley.size()).expand2(padding);
+        painter.rect_filled(rect, 5.0, plate);
+        painter.galley(rect.min + padding, galley, color);
+    }
+
     /// Draws the small numbered badge marking a selected performer's rank in
     /// the current click order (1 = first clicked). Callers gate on
     /// `self.selected.len() >= 2` first — a badge on a single selected dot

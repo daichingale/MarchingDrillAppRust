@@ -2154,6 +2154,8 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "app-ui.164") => {
             "Rotate the selected performers around their centroid."
         }
+        (Locale::Ja, "app-ui.165") => "セッション表示…",
+        (Locale::En, "app-ui.165") => "Session display…",
         (Locale::Ja, "clinic-ui.001") => "警告から演者をフォーカス",
         (Locale::En, "clinic-ui.001") => "Focus performers from warnings",
         (Locale::Ja, "clinic-ui.002") => "衝突",
