@@ -32,6 +32,8 @@ mod import_state;
 mod inspector_media;
 #[path = "legal_notices.rs"]
 mod legal_notices;
+#[path = "marking_menu.rs"]
+mod marking_menu;
 #[path = "mobile_viewer_state.rs"]
 mod mobile_viewer_state;
 #[path = "onboarding.rs"]
@@ -641,6 +643,10 @@ pub(crate) struct DrillApp {
     knife_active: bool,
     /// Screen-space origin of the in-progress Knife drag.
     knife_origin: Option<Pos2>,
+    /// Live radial marking-menu gesture on the field canvas. Session-only
+    /// interaction state in the same spirit as `knife_active`: never part of
+    /// the document, never touches undo history.
+    marking_menu: Option<marking_menu::MarkingMenuState>,
     /// The most recent completed cut. Kept so the toolbar can offer
     /// "invert" without redrawing the line; cleared by a new cut, an
     /// explicit dismiss, or Escape.
@@ -809,6 +815,7 @@ impl Default for DrillApp {
             knife_active: false,
             knife_origin: None,
             knife_result: None,
+            marking_menu: None,
             formation_text: "DRILL".into(),
             follow_leader_steps: 6,
             follow_leader_editing: None,

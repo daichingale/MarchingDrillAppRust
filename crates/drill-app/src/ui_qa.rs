@@ -1385,4 +1385,131 @@ mod tests {
         assert!(app.history.undo(&mut app.document));
         assert_eq!(app.document, before);
     }
+
+    /// The marking menu is direction-resolved, so this is the whole contract
+    /// that makes "flick and release before the wheel appears" land the same
+    /// command as a slow, deliberate pick.
+    #[test]
+    fn marking_menu_resolves_screen_vectors_to_compass_slices() {
+        use super::super::marking_menu::{self, Direction};
+
+        // Screen y grows downward, so a negative dy is north.
+        for (dx, dy, expected) in [
+            (60.0, 0.0, Direction::E),
+            (60.0, -60.0, Direction::Ne),
+            (0.0, -60.0, Direction::N),
+            (-60.0, -60.0, Direction::Nw),
+            (-60.0, 0.0, Direction::W),
+            (-60.0, 60.0, Direction::Sw),
+            (0.0, 60.0, Direction::S),
+            (60.0, 60.0, Direction::Se),
+        ] {
+            assert_eq!(
+                marking_menu::resolve(dx, dy, marking_menu::DEAD_ZONE),
+                Some(expected),
+                "vector ({dx}, {dy})"
+            );
+        }
+        // Just past a boundary snaps to the neighbouring slice, and distance
+        // is irrelevant once the dead zone is cleared.
+        assert_eq!(
+            marking_menu::resolve(600.0, -260.0, marking_menu::DEAD_ZONE),
+            Some(Direction::Ne)
+        );
+        assert_eq!(
+            marking_menu::resolve(600.0, -240.0, marking_menu::DEAD_ZONE),
+            Some(Direction::E)
+        );
+    }
+
+    #[test]
+    fn marking_menu_cancels_inside_the_dead_zone() {
+        use super::super::marking_menu;
+
+        assert_eq!(
+            marking_menu::resolve(0.0, 0.0, marking_menu::DEAD_ZONE),
+            None
+        );
+        assert_eq!(
+            marking_menu::resolve(marking_menu::DEAD_ZONE - 1.0, 0.0, marking_menu::DEAD_ZONE),
+            None
+        );
+        assert!(
+            marking_menu::resolve(marking_menu::DEAD_ZONE + 1.0, 0.0, marking_menu::DEAD_ZONE)
+                .is_some()
+        );
+        assert_eq!(
+            marking_menu::resolve(f32::NAN, 0.0, marking_menu::DEAD_ZONE),
+            None
+        );
+        assert_eq!(
+            marking_menu::resolve_sub(0.0, 0.0, marking_menu::SUB_DEAD_ZONE),
+            None
+        );
+    }
+
+    /// Eight slices plus a nested pair must cover the nine field commands
+    /// exactly once each: no command lost, none reachable two ways.
+    #[test]
+    fn marking_menu_slices_cover_every_command_once() {
+        use super::super::marking_menu::{self, Direction, MarkingAction, Slice};
+
+        let mut reached = Vec::new();
+        let mut sub_menus = 0;
+        for direction in Direction::ALL {
+            match marking_menu::slice_for(direction) {
+                Slice::Action(action) => reached.push(action),
+                Slice::SubMenu => sub_menus += 1,
+            }
+        }
+        assert_eq!(sub_menus, 1);
+        for (_, action) in marking_menu::SUB_ITEMS {
+            reached.push(action);
+        }
+        for action in [
+            MarkingAction::AlignHorizontal,
+            MarkingAction::AlignVertical,
+            MarkingAction::DistributeHorizontal,
+            MarkingAction::DistributeVertical,
+            MarkingAction::Straighten,
+            MarkingAction::CopyFormation,
+            MarkingAction::PasteFormation,
+            MarkingAction::Lock,
+            MarkingAction::Hide,
+        ] {
+            assert_eq!(
+                reached.iter().filter(|&&reached| reached == action).count(),
+                1,
+                "{action:?}"
+            );
+        }
+        assert_eq!(reached.len(), 9);
+    }
+
+    /// The nested wheel holds two items 90 degrees apart, so its hit regions
+    /// are the two half-planes either side of their bisector.
+    #[test]
+    fn marking_menu_sub_wheel_splits_on_the_bisector() {
+        use super::super::marking_menu::{self, MarkingAction};
+
+        let dead = marking_menu::SUB_DEAD_ZONE;
+        assert_eq!(
+            marking_menu::resolve_sub(-40.0, 0.0, dead),
+            Some(MarkingAction::Lock)
+        );
+        assert_eq!(
+            marking_menu::resolve_sub(0.0, -40.0, dead),
+            Some(MarkingAction::Hide)
+        );
+        // Continuing straight out along the north-west opening axis stays on
+        // the Lock side rather than flickering between the two.
+        assert_eq!(
+            marking_menu::resolve_sub(-40.0, -39.0, dead),
+            Some(MarkingAction::Lock)
+        );
+        assert_eq!(
+            marking_menu::resolve_sub(40.0, 40.0, dead),
+            Some(MarkingAction::Hide)
+        );
+    }
 }
