@@ -664,12 +664,14 @@ mod tests {
 
     #[test]
     fn publishing_maps_selected_indices_to_stable_performer_ids() {
-        let mut state = PresenceState::default();
-        state.identity = Some(Identity {
-            user_id: UserId::from_raw(1),
-            display_name: "Me".into(),
-            color: [9, 9, 9],
-        });
+        let mut state = PresenceState {
+            identity: Some(Identity {
+                user_id: UserId::from_raw(1),
+                display_name: "Me".into(),
+                color: [9, 9, 9],
+            }),
+            ..Default::default()
+        };
         let document = document_with(4);
         let selected = BTreeSet::from([0, 2]);
 
@@ -687,12 +689,14 @@ mod tests {
 
     #[test]
     fn out_of_range_selection_indices_are_dropped_not_panicked() {
-        let mut state = PresenceState::default();
-        state.identity = Some(Identity {
-            user_id: UserId::from_raw(1),
-            display_name: "Me".into(),
-            color: [9, 9, 9],
-        });
+        let mut state = PresenceState {
+            identity: Some(Identity {
+                user_id: UserId::from_raw(1),
+                display_name: "Me".into(),
+                color: [9, 9, 9],
+            }),
+            ..Default::default()
+        };
         let document = document_with(2);
         state.publish_local(&document, 0, &BTreeSet::from([0, 99]));
         assert!(state.published.is_none(), "no client means no publish");
@@ -700,22 +704,26 @@ mod tests {
 
     #[test]
     fn an_unusable_room_code_does_not_connect() {
-        let mut state = PresenceState::default();
-        state.room_input = "   ".into();
+        let mut state = PresenceState {
+            room_input: "   ".into(),
+            ..Default::default()
+        };
         assert_eq!(state.connect(), None);
         assert!(!state.is_connected());
     }
 
     #[test]
     fn a_blank_display_name_reverts_rather_than_persisting() {
-        let mut state = PresenceState::default();
-        state.identity = Some(Identity {
-            user_id: UserId::from_raw(1),
-            display_name: "Original".into(),
-            color: [9, 9, 9],
-        });
-        state.name_input = "   ".into();
-        state.name_dirty = true;
+        let mut state = PresenceState {
+            identity: Some(Identity {
+                user_id: UserId::from_raw(1),
+                display_name: "Original".into(),
+                color: [9, 9, 9],
+            }),
+            name_input: "   ".into(),
+            name_dirty: true,
+            ..Default::default()
+        };
         state.commit_display_name();
         assert_eq!(state.name_input, "Original");
         assert_eq!(

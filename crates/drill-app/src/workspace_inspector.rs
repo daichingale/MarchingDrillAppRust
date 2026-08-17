@@ -1458,16 +1458,16 @@ impl DrillApp {
             )
             .on_hover_text(super::i18n::registered(
                 self.locale,
-                "workspace-inspector.198",
+                "workspace-inspector.177",
             ))
             .on_disabled_hover_text(super::i18n::registered(
                 self.locale,
-                "workspace-inspector.199",
+                "workspace-inspector.178",
             ))
             .clicked()
         {
             self.smart_transition.request(&self.document, key);
-            self.status = super::i18n::registered(self.locale, "workspace-inspector.200").into();
+            self.status = super::i18n::registered(self.locale, "workspace-inspector.179").into();
         }
         if running {
             ui.small(super::i18n::registered(
@@ -1505,21 +1505,21 @@ impl DrillApp {
                 color,
                 format!(
                     "{}: {} → {}   ・   {}: {:+.1}%",
-                    super::i18n::registered(self.locale, "workspace-inspector.201"),
+                    super::i18n::registered(self.locale, "workspace-inspector.180"),
                     before,
                     after,
-                    super::i18n::registered(self.locale, "workspace-inspector.202"),
+                    super::i18n::registered(self.locale, "workspace-inspector.181"),
                     delta * 100.0
                 ),
             );
             ui.small(format!(
                 "{}: {}",
-                super::i18n::registered(self.locale, "workspace-inspector.203"),
+                super::i18n::registered(self.locale, "workspace-inspector.182"),
                 swaps
             ));
             ui.small(super::i18n::registered(
                 self.locale,
-                "workspace-inspector.204",
+                "workspace-inspector.183",
             ));
             ui.horizontal(|ui| {
                 apply = ui
@@ -1527,18 +1527,18 @@ impl DrillApp {
                         swaps > 0,
                         egui::Button::new(super::i18n::registered(
                             self.locale,
-                            "workspace-inspector.205",
+                            "workspace-inspector.184",
                         )),
                     )
                     .on_disabled_hover_text(super::i18n::registered(
                         self.locale,
-                        "workspace-inspector.206",
+                        "workspace-inspector.185",
                     ))
                     .clicked();
                 discard = ui
                     .button(super::i18n::registered(
                         self.locale,
-                        "workspace-inspector.207",
+                        "workspace-inspector.186",
                     ))
                     .clicked();
             });
@@ -1547,7 +1547,7 @@ impl DrillApp {
             self.apply_smart_transition(key);
         } else if discard {
             self.smart_transition.discard();
-            self.status = super::i18n::registered(self.locale, "workspace-inspector.208").into();
+            self.status = super::i18n::registered(self.locale, "workspace-inspector.187").into();
         }
     }
 
@@ -1566,7 +1566,7 @@ impl DrillApp {
             return;
         };
         if suggestion.outcome.assignment.len() != previous.len() {
-            self.status = super::i18n::registered(self.locale, "workspace-inspector.209").into();
+            self.status = super::i18n::registered(self.locale, "workspace-inspector.188").into();
             return;
         }
         let Some(set) = next.sets.get_mut(target_index) else {
@@ -1583,7 +1583,7 @@ impl DrillApp {
             },
             super::i18n::registered(self.locale, "workspace-inspector.196"),
         ) {
-            self.status = super::i18n::registered(self.locale, "workspace-inspector.210").into();
+            self.status = super::i18n::registered(self.locale, "workspace-inspector.189").into();
         }
     }
 
@@ -1602,7 +1602,7 @@ impl DrillApp {
                 rebalanceable,
                 egui::Button::new(super::i18n::registered(
                     self.locale,
-                    "workspace-inspector.211",
+                    "workspace-inspector.190",
                 )),
             )
             .on_hover_text(super::i18n::registered(
