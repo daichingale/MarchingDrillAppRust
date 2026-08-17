@@ -1981,9 +1981,8 @@ impl eframe::App for DrillApp {
                 // already in flight is ignored here, so the in-flight drag
                 // still reaches its own `drag_stopped` cleanup.
                 let marking_gesture = self.marking_menu.is_some()
-                    || (ui.input(|input| {
-                        input.pointer.button_down(egui::PointerButton::Secondary)
-                    })
+                    || (ui
+                        .input(|input| input.pointer.button_down(egui::PointerButton::Secondary))
                         && self.drag_before.is_none()
                         && self.marquee_origin.is_none());
                 let pointer_gesture_taken = panning || marking_gesture;
@@ -2819,7 +2818,9 @@ impl DrillApp {
                 (
                     input.time,
                     input.pointer.button_pressed(egui::PointerButton::Secondary),
-                    input.pointer.button_released(egui::PointerButton::Secondary),
+                    input
+                        .pointer
+                        .button_released(egui::PointerButton::Secondary),
                     input.pointer.button_pressed(egui::PointerButton::Primary),
                     input.key_pressed(egui::Key::Escape),
                     input.pointer.interact_pos(),
@@ -2867,8 +2868,7 @@ impl DrillApp {
                     // the expert flick continuous.
                     let since = *menu.sub_dwell_since.get_or_insert(now);
                     let reach = (menu.pointer - menu.center).length();
-                    if now - since >= marking_menu::SUB_DELAY
-                        || reach >= marking_menu::OUTER_RADIUS
+                    if now - since >= marking_menu::SUB_DELAY || reach >= marking_menu::OUTER_RADIUS
                     {
                         menu.open_sub();
                     }
@@ -3126,11 +3126,8 @@ impl DrillApp {
         color: Color32,
         plate: Color32,
     ) {
-        let galley = painter.layout_no_wrap(
-            text.to_owned(),
-            egui::FontId::proportional(13.0),
-            color,
-        );
+        let galley =
+            painter.layout_no_wrap(text.to_owned(), egui::FontId::proportional(13.0), color);
         let padding = Vec2::new(6.0, 3.0);
         let rect = align.anchor_size(anchor, galley.size()).expand2(padding);
         painter.rect_filled(rect, 5.0, plate);

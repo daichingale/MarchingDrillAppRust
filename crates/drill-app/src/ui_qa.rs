@@ -1267,7 +1267,10 @@ mod tests {
     fn marking_menu_cancels_inside_the_dead_zone() {
         use super::super::marking_menu;
 
-        assert_eq!(marking_menu::resolve(0.0, 0.0, marking_menu::DEAD_ZONE), None);
+        assert_eq!(
+            marking_menu::resolve(0.0, 0.0, marking_menu::DEAD_ZONE),
+            None
+        );
         assert_eq!(
             marking_menu::resolve(marking_menu::DEAD_ZONE - 1.0, 0.0, marking_menu::DEAD_ZONE),
             None
@@ -1276,7 +1279,10 @@ mod tests {
             marking_menu::resolve(marking_menu::DEAD_ZONE + 1.0, 0.0, marking_menu::DEAD_ZONE)
                 .is_some()
         );
-        assert_eq!(marking_menu::resolve(f32::NAN, 0.0, marking_menu::DEAD_ZONE), None);
+        assert_eq!(
+            marking_menu::resolve(f32::NAN, 0.0, marking_menu::DEAD_ZONE),
+            None
+        );
         assert_eq!(
             marking_menu::resolve_sub(0.0, 0.0, marking_menu::SUB_DEAD_ZONE),
             None

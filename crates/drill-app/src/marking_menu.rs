@@ -174,7 +174,12 @@ pub(crate) fn resolve_sub(dx: f32, dy: f32, dead_zone: f32) -> Option<MarkingAct
 
 /// Vertices of one pie wedge for `Shape::convex_polygon`. Spans up to a half
 /// turn stay convex, which is all epaint fills correctly.
-pub(crate) fn wedge_points(center: Pos2, radius: f32, direction: Direction, span: f32) -> Vec<Pos2> {
+pub(crate) fn wedge_points(
+    center: Pos2,
+    radius: f32,
+    direction: Direction,
+    span: f32,
+) -> Vec<Pos2> {
     const STEPS: usize = 12;
     let base = direction.angle() - span * 0.5;
     let mut points = Vec::with_capacity(STEPS + 2);
