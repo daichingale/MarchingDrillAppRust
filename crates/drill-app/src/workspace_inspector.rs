@@ -82,7 +82,23 @@ impl DrillApp {
                 .sets
                 .iter()
                 .enumerate()
-                .map(|(index, set)| (index, format!("{}  ·  {} counts", set.name, set.counts)))
+                .map(|(index, set)| {
+                    // Generated sets stay ordinary sets everywhere else, so
+                    // the list is the one place that has to say a generator
+                    // will rewrite this row if its inputs change.
+                    let generated = if set.generated_by.is_some() {
+                        format!(
+                            "  ·  ◆{}",
+                            super::i18n::registered(self.locale, "workspace-inspector.189")
+                        )
+                    } else {
+                        String::new()
+                    };
+                    (
+                        index,
+                        format!("{}  ·  {} counts{}", set.name, set.counts, generated),
+                    )
+                })
                 .collect();
             for (index, text) in set_summaries {
                 if ui
@@ -749,17 +765,81 @@ impl DrillApp {
                                     super::i18n::registered(self.locale, "workspace-inspector.171"),
                                 );
                             }
-                            ui.horizontal(|ui| {
-                                ui.label(super::i18n::registered(self.locale, "workspace-inspector.154"));
-                                ui.add(
-                                    egui::DragValue::new(&mut self.follow_leader_steps)
-                                        .range(1..=32)
-                                        .suffix(" set"),
-                                )
-                                .on_hover_text(super::i18n::registered(self.locale, "workspace-inspector.155"));
-                            });
-                            let path_ready = has_group && self.formation_preview_spec.is_some();
-                            ui.horizontal_wrapped(|ui| {
+                            // A run that already owns sets around the current
+                            // position is live: the same two inputs stay
+                            // editable and rewrite the existing range, rather
+                            // than offering to bake a second one on top of it.
+                            if let Some((generator_id, generator_steps)) = self.active_follow_generator() {
+                                ui.colored_label(
+                                    Color32::from_rgb(140, 220, 160),
+                                    super::i18n::registered(self.locale, "workspace-inspector.178"),
+                                );
+                                if self.follow_leader_editing != Some(generator_id) {
+                                    self.follow_leader_editing = Some(generator_id);
+                                    self.follow_leader_steps = generator_steps;
+                                }
+                                let mut steps = self.follow_leader_steps;
+                                let response = ui
+                                    .horizontal(|ui| {
+                                        ui.label(super::i18n::registered(self.locale, "workspace-inspector.179"));
+                                        ui.add(
+                                            egui::DragValue::new(&mut steps)
+                                                .range(1..=32)
+                                                .suffix(" set"),
+                                        )
+                                    })
+                                    .inner;
+                                self.follow_leader_steps = steps;
+                                // Regenerate once the value settles, not on
+                                // every intermediate drag frame: each rebuild
+                                // is its own undo entry, and a rebuild per
+                                // pixel would bury the history in noise.
+                                let settled =
+                                    response.drag_stopped() || (response.changed() && !response.dragged());
+                                if settled && steps != generator_steps {
+                                    self.regenerate_follow_the_leader(generator_id, Some(steps), None);
+                                }
+                                ui.horizontal_wrapped(|ui| {
+                                    if ui
+                                        .button(super::i18n::registered(self.locale, "workspace-inspector.180"))
+                                        .on_hover_text(super::i18n::registered(self.locale, "workspace-inspector.181"))
+                                        .clicked()
+                                    {
+                                        self.begin_free_draw();
+                                    }
+                                    if ui
+                                        .add_enabled(
+                                            self.formation_preview_spec.is_some(),
+                                            egui::Button::new(super::i18n::registered(self.locale, "workspace-inspector.182")),
+                                        )
+                                        .clicked()
+                                        && let Some(spec) = self.formation_preview_spec.take()
+                                    {
+                                        self.formation_preview_points.clear();
+                                        self.free_draw_active = false;
+                                        self.free_draw_raw.clear();
+                                        self.regenerate_follow_the_leader(generator_id, None, Some(spec));
+                                    }
+                                    if ui
+                                        .button(super::i18n::registered(self.locale, "workspace-inspector.183"))
+                                        .on_hover_text(super::i18n::registered(self.locale, "workspace-inspector.184"))
+                                        .clicked()
+                                    {
+                                        self.bake_follow_the_leader(generator_id);
+                                    }
+                                });
+                            } else {
+                                self.follow_leader_editing = None;
+                                ui.horizontal(|ui| {
+                                    ui.label(super::i18n::registered(self.locale, "workspace-inspector.154"));
+                                    ui.add(
+                                        egui::DragValue::new(&mut self.follow_leader_steps)
+                                            .range(1..=32)
+                                            .suffix(" set"),
+                                    )
+                                    .on_hover_text(super::i18n::registered(self.locale, "workspace-inspector.155"));
+                                });
+                                let path_ready = has_group && self.formation_preview_spec.is_some();
                                 if ui
                                     .add_enabled(
                                         path_ready,
@@ -775,16 +855,16 @@ impl DrillApp {
                                     let steps = self.follow_leader_steps as usize;
                                     self.apply_follow_the_leader(spec, steps);
                                 }
-                                if ui
-                                    .add_enabled(
-                                        self.formation_preview_spec.is_some() || self.free_draw_active,
-                                        egui::Button::new(super::i18n::registered(self.locale, "workspace-inspector.172")),
-                                    )
-                                    .clicked()
-                                {
-                                    self.cancel_shape_preview();
-                                }
-                            });
+                            }
+                            if ui
+                                .add_enabled(
+                                    self.formation_preview_spec.is_some() || self.free_draw_active,
+                                    egui::Button::new(super::i18n::registered(self.locale, "workspace-inspector.172")),
+                                )
+                                .clicked()
+                            {
+                                self.cancel_shape_preview();
+                            }
                         },
                     );
                     ui.label(egui::RichText::new(super::i18n::registered(self.locale, "workspace-inspector.087")).strong());

@@ -480,6 +480,165 @@ mod tests {
         assert_eq!(app.document, before);
     }
 
+    /// A three-performer run over a straight path, left live (not baked).
+    fn app_with_follow_the_leader(steps: usize) -> DrillApp {
+        let mut app = DrillApp {
+            selected: [0, 1, 2].into_iter().collect(),
+            ..DrillApp::default()
+        };
+        let start = app.document.sets[app.current_set].positions[0];
+        let end = Point {
+            x: (start.x + 20.0).min(app.document.grid.width),
+            y: start.y,
+        };
+        app.apply_follow_the_leader(
+            drill_core::shapes::ShapeSpec::FreePath {
+                vertices: vec![start, end],
+            },
+            steps,
+        );
+        assert_eq!(app.document.generators.len(), 1);
+        app
+    }
+
+    /// The point of keeping the generator live is that the step count stays
+    /// editable, so a re-run must behave like an edit of the existing range
+    /// and not like a fresh insertion: only the owned sets change, the sets
+    /// around them keep their identity, non-participants keep whatever the
+    /// designer put there, and the whole rewrite is one undo away.
+    #[test]
+    fn regenerating_follow_the_leader_rewrites_only_the_owned_range() {
+        let mut app = app_with_follow_the_leader(5);
+        let generator_id = app.document.generators[0].id;
+        assert_eq!(app.document.generators[0].owns.len(), 5);
+        for set in &app.document.sets[1..=5] {
+            assert_eq!(set.generated_by, Some(generator_id));
+        }
+        let trailing = app.document.sets.last().cloned().expect("trailing set");
+        let sets_before = app.document.sets.len();
+
+        // Performer 3 is outside the moving group. Written straight into the
+        // document so this exercises regeneration alone, not the manual-edit
+        // detach path that a real drag would take.
+        let bystander = 3usize;
+        let marker = Point { x: 5.0, y: 5.0 };
+        app.document.sets[2].positions[bystander] = marker;
+
+        app.regenerate_follow_the_leader(generator_id, Some(8), None);
+        assert_eq!(app.document.sets.len(), sets_before + 3);
+        assert_eq!(app.document.generators.len(), 1);
+        assert_eq!(app.document.generators[0].steps, 8);
+        assert_eq!(app.document.generators[0].owns.len(), 8);
+        for set in &app.document.sets[1..=8] {
+            assert_eq!(set.generated_by, Some(generator_id));
+        }
+        assert_eq!(app.document.sets[2].positions[bystander], marker);
+        assert_eq!(app.document.sets.last().expect("trailing set"), &trailing);
+
+        assert!(app.history.undo(&mut app.document));
+        assert_eq!(app.document.sets.len(), sets_before);
+        assert_eq!(app.document.generators[0].steps, 5);
+        assert_eq!(app.document.sets[2].positions[bystander], marker);
+
+        // Shrinking drops the tail of the range rather than leaving orphans.
+        app.regenerate_follow_the_leader(generator_id, Some(2), None);
+        assert_eq!(app.document.sets.len(), sets_before - 3);
+        assert_eq!(app.document.generators[0].owns.len(), 2);
+        assert_eq!(
+            app.document
+                .sets
+                .iter()
+                .filter(|set| set.generated_by.is_some())
+                .count(),
+            2
+        );
+    }
+
+    /// A hand edit inside a generated range would be silently overwritten by
+    /// the next regeneration, so the edit wins and the generator lets go of
+    /// the whole range at once.
+    #[test]
+    fn manual_edit_in_a_generated_set_detaches_the_whole_range() {
+        let mut app = app_with_follow_the_leader(4);
+        let generator_id = app.document.generators[0].id;
+        app.navigate_to_set(2);
+        app.selected = [0].into_iter().collect();
+        let mut points = app.selected_points();
+        let original = points[0];
+        points[0] = Point {
+            x: points[0].x + 4.0,
+            y: points[0].y + 4.0,
+        };
+        let requested = points[0];
+        app.commit_layout(points);
+
+        assert!(app.document.generators.is_empty());
+        assert!(app.document.generator(generator_id).is_none());
+        assert!(app.document.sets.iter().all(|s| s.generated_by.is_none()));
+        // The move still lands where the designer asked, modulo grid snapping.
+        let landed = app.document.sets[2].positions[0];
+        assert_ne!(landed, original);
+        assert!((landed.x - requested.x).abs() < 0.5);
+        assert!((landed.y - requested.y).abs() < 0.5);
+
+        // Detach and move are one undoable action, not two.
+        assert!(app.history.undo(&mut app.document));
+        assert_eq!(app.document.generators.len(), 1);
+        assert_eq!(app.document.sets[2].generated_by, Some(generator_id));
+    }
+
+    #[test]
+    fn baking_a_generator_drops_the_tag_without_moving_anyone() {
+        let mut app = app_with_follow_the_leader(4);
+        let generator_id = app.document.generators[0].id;
+        let before: Vec<Vec<Point>> = app
+            .document
+            .sets
+            .iter()
+            .map(|set| set.positions.clone())
+            .collect();
+
+        app.bake_follow_the_leader(generator_id);
+
+        assert!(app.document.generators.is_empty());
+        assert!(app.document.sets.iter().all(|s| s.generated_by.is_none()));
+        let after: Vec<Vec<Point>> = app
+            .document
+            .sets
+            .iter()
+            .map(|set| set.positions.clone())
+            .collect();
+        assert_eq!(before, after);
+    }
+
+    /// Generators are additive optional state, so both directions have to
+    /// hold: a document with them survives a save/load, and a document from
+    /// before they existed still opens.
+    #[test]
+    fn generators_round_trip_and_older_documents_still_load() {
+        let app = app_with_follow_the_leader(3);
+        let json = app.document.to_json().expect("serialize");
+        let loaded = drill_core::Document::from_json(&json).expect("round trip");
+        assert_eq!(loaded, app.document);
+        assert_eq!(loaded.generators.len(), 1);
+        assert!(loaded.sets[1].generated_by.is_some());
+
+        let mut legacy: serde_json::Value = serde_json::from_str(&json).expect("parse");
+        legacy
+            .as_object_mut()
+            .expect("document object")
+            .remove("generators");
+        for set in legacy["sets"].as_array_mut().expect("sets array") {
+            set.as_object_mut().expect("set object").remove("generated_by");
+        }
+        let legacy = drill_core::Document::from_json(
+            &serde_json::to_string(&legacy).expect("re-serialize"),
+        )
+        .expect("older document loads");
+        assert!(legacy.generators.is_empty());
+        assert!(legacy.sets.iter().all(|set| set.generated_by.is_none()));
+    }
+
     #[test]
     fn escape_command_cancels_preview_before_clearing_selection() {
         let context = egui::Context::default();

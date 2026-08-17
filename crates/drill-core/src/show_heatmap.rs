@@ -280,6 +280,7 @@ mod tests {
                 hold: 0,
                 routes: Default::default(),
                 shape: None,
+                generated_by: None,
                 positions: positions.clone(),
             })
             .collect();
