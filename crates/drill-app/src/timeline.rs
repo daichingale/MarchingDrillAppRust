@@ -296,6 +296,9 @@ pub(crate) fn draw_count_track(
     playback_end: u32,
     viewport: &mut TimelineViewport,
     locale: drill_core::Locale,
+    // `(set index, color)` per connected collaborator. Empty when presence is
+    // off, which is the overwhelmingly common case.
+    peer_sets: &[(usize, [u8; 3])],
 ) -> TimelineChange {
     let mut change = TimelineChange::default();
     let total_counts = document.timeline_counts();
@@ -475,6 +478,19 @@ pub(crate) fn draw_count_track(
             egui::FontId::proportional(12.0),
             Color32::WHITE,
         );
+        // Collaborator pips, so "who is looking at what" stays visible even
+        // when a peer is parked on a formation the local user is not viewing.
+        // Drawn bottom-left of the segment, clear of the set title row.
+        let mut pip = 0.0_f32;
+        for (_, color) in peer_sets.iter().filter(|(set, _)| *set == index) {
+            let center = Pos2::new(left + 7.0 + pip, rect.bottom() - 7.0);
+            if center.x + 4.0 > right {
+                break; // The segment is too narrow at this zoom.
+            }
+            painter.circle_filled(center, 3.5, Color32::from_rgb(color[0], color[1], color[2]));
+            painter.circle_stroke(center, 3.5, Stroke::new(1.0, Color32::from_black_alpha(200)));
+            pip += 9.0;
+        }
         start_count = end_count;
     }
 
@@ -1076,6 +1092,7 @@ mod tests {
                     8,
                     &mut viewport,
                     drill_core::Locale::En,
+                    &[],
                 );
             });
             let update = output

@@ -20,6 +20,10 @@ impl eframe::App for DrillApp {
         // the confirmation sheet always has a chance to be painted.
         self.guard_close_request(ui.ctx());
         self.update_state.poll();
+        // Presence is view-only: this reads the document and selection to
+        // publish "where I am", and drains peers to draw. It cannot edit.
+        self.presence
+            .poll(&self.document, self.current_set, &self.selected);
         if let Some(event) = self.underlay_state.poll(ui.ctx()) {
             self.status = match event {
                 underlay_state::UnderlayEvent::Ready { name, model } => {
@@ -1665,6 +1669,7 @@ impl eframe::App for DrillApp {
             self.playback_end,
             &mut self.timeline_view,
             self.locale,
+            self.presence.set_marks(),
         );
         if let Some((start, end)) = timeline_change.range {
             self.playback_start = start;
@@ -2304,6 +2309,12 @@ impl eframe::App for DrillApp {
                         y: pos.y - rect.top(),
                     })
                 };
+                // Published in field coordinates, not screen pixels, so peers
+                // at different zoom levels still see the pointer on the same
+                // yard line. `None` while the pointer is off the field, which
+                // is how peers learn to stop drawing it.
+                self.presence
+                    .set_local_cursor(response.hover_pos().map(&from_screen));
                 if !self.formation_preview_points.is_empty() || self.free_draw_active {
                     for pair in self.formation_preview_points.windows(2) {
                         painter.line_segment(
@@ -2527,7 +2538,15 @@ impl eframe::App for DrillApp {
                             self.paint_selection_rank_badge(&painter, pos, index);
                         }
                     }
+                    // Peer rings sit outside the local white selection ring so
+                    // the two never merge into one thick smear.
+                    if let Some(performer) = self.document.performers.get(index) {
+                        self.presence
+                            .paint_field_marks(&painter, pos, index, performer.id);
+                    }
                 }
+                self.presence
+                    .paint_cursors(&painter, self.current_set, to_screen);
                 if let Some(pointer) = response.interact_pointer_pos() {
                     // A preview was sampled for the current selection. Lock
                     // selection and direct-manipulation until Apply or
@@ -2787,6 +2806,9 @@ impl eframe::App for DrillApp {
         self.show_close_guard(ui.ctx());
         self.show_document_open_guard(ui.ctx());
         self.show_recent_projects(ui.ctx());
+        if let Some(message) = self.presence.show(ui.ctx(), self.locale) {
+            self.status = message;
+        }
     }
 }
 

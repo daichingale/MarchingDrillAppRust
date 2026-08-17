@@ -2490,6 +2490,52 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "perf-hud.009") => "Dropped",
         (Locale::Ja, "perf-hud.010") => "パフォーマンスHUDを切替",
         (Locale::En, "perf-hud.010") => "Toggle Performance HUD",
+        (Locale::Ja, "presence.001") => "コラボレーター",
+        (Locale::En, "presence.001") => "Collaborators",
+        (Locale::Ja, "presence.002") => "ルームコード",
+        (Locale::En, "presence.002") => "Room code",
+        (Locale::Ja, "presence.003") => "リレーサーバー",
+        (Locale::En, "presence.003") => "Relay server",
+        (Locale::Ja, "presence.004") => "表示名",
+        (Locale::En, "presence.004") => "Display name",
+        (Locale::Ja, "presence.005") => "参加",
+        (Locale::En, "presence.005") => "Join",
+        (Locale::Ja, "presence.006") => "退出",
+        (Locale::En, "presence.006") => "Leave",
+        (Locale::Ja, "presence.007") => "接続済み",
+        (Locale::En, "presence.007") => "Connected",
+        (Locale::Ja, "presence.008") => "接続中…",
+        (Locale::En, "presence.008") => "Connecting...",
+        (Locale::Ja, "presence.009") => "未接続",
+        (Locale::En, "presence.009") => "Not connected",
+        (Locale::Ja, "presence.010") => "このルームにはまだ他の参加者がいません。",
+        (Locale::En, "presence.010") => "No one else is in this room yet.",
+        (Locale::Ja, "presence.011") => "ルームコードを入力して参加してください。",
+        (Locale::En, "presence.011") => "Enter a room code, then Join.",
+        (Locale::Ja, "presence.012") => "セット",
+        (Locale::En, "presence.012") => "Set",
+        (Locale::Ja, "presence.013") => {
+            "表示のみの共有です。誰がどこを見ているかを表示するだけで、ドリルは変更されません。"
+        }
+        (Locale::En, "presence.013") => {
+            "View-only sharing: this shows who is looking at what. It never changes the drill."
+        }
+        (Locale::Ja, "presence.014") => {
+            "暗号化とサインインはありません。信頼できるネットワークでのみ使用してください。"
+        }
+        (Locale::En, "presence.014") => {
+            "No encryption or sign-in. Use only on a trusted network."
+        }
+        (Locale::Ja, "presence.015") => "ルームに参加しました",
+        (Locale::En, "presence.015") => "Joined the collaboration room",
+        (Locale::Ja, "presence.016") => "ルームから退出しました",
+        (Locale::En, "presence.016") => "Left the collaboration room",
+        (Locale::Ja, "presence.017") => "ルームコードが正しくありません",
+        (Locale::En, "presence.017") => "That room code cannot be used",
+        (Locale::Ja, "presence.018") => "自分",
+        (Locale::En, "presence.018") => "You",
+        (Locale::Ja, "presence.019") => "コラボレーターを表示切替",
+        (Locale::En, "presence.019") => "Toggle Collaborators",
         _ => "[missing message]",
     }
 }

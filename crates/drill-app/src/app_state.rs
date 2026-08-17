@@ -68,6 +68,8 @@ mod subset_snapshot_state;
 mod text_export_state;
 #[path = "timeline.rs"]
 mod timeline;
+#[path = "presence_state.rs"]
+mod presence_state;
 #[cfg(test)]
 #[path = "ui_qa.rs"]
 mod ui_qa;
@@ -614,6 +616,9 @@ pub(crate) struct DrillApp {
     show_legal_notices: bool,
     update_state: update_state::UpdateState,
     import_state: import_state::ImportState,
+    /// Live collaborator presence. View-only by construction: this can draw
+    /// who is looking at what, and can never mutate the document.
+    presence: presence_state::PresenceState,
     gpu: Option<gpu_bridge::Bridge>,
     /// Toggleable frame-pacing overlay. Session-only diagnostics: never part
     /// of the document, never touches undo history.
@@ -791,6 +796,7 @@ impl Default for DrillApp {
             show_legal_notices: false,
             update_state: update_state::UpdateState::default(),
             import_state: import_state::ImportState::default(),
+            presence: presence_state::PresenceState::default(),
             gpu: None,
             perf_hud: perf_hud::PerfHud::default(),
             plugin_state: plugin_state::PluginUiState::default(),
@@ -1942,6 +1948,7 @@ impl DrillApp {
             UiCommand::WorkspacePresent => self.apply_workspace_preset(WorkspacePreset::Present),
             UiCommand::ToggleGuidance => self.show_guidance = !self.show_guidance,
             UiCommand::TogglePerfHud => self.perf_hud.toggle(),
+            UiCommand::ToggleCollaborators => self.presence.open = !self.presence.open,
             UiCommand::GettingStarted => self.onboarding.show_help = true,
             UiCommand::LegalNotices => self.show_legal_notices = true,
         }
