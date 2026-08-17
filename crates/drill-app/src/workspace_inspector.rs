@@ -867,18 +867,14 @@ impl DrillApp {
             // frames. `analyze_transition` allocates a fresh `ScanScratch`
             // per call, which is correct for occasional callers but would
             // reallocate every frame here.
+            //
+            // The thresholds come from `smart_transition_state::clinic_params`
+            // so the count shown here and the "before" count in a smart
+            // transition suggestion are measured identically.
             let report = clinic::scan_transition(
                 &self.document,
                 self.current_set,
-                clinic::ClinicParams {
-                    style: clinic::StepStyle::Custom { units_per_step: 1.0 },
-                    collision_radius: 0.75,
-                    danger_radius: 0.75,
-                    crowded_radius: 0.75,
-                    aggressive_above: 1.0,
-                    impossible_above: f32::MAX,
-                    ..clinic::ClinicParams::default()
-                },
+                super::smart_transition_state::clinic_params(),
                 &mut self.clinic_scratch,
             );
             let collisions = report.collisions.len();
@@ -1016,6 +1012,9 @@ impl DrillApp {
                 "最大歩幅 {:.2}/count ・ 総移動 {:.0}{}",
                 stats.max_step, stats.total_distance, unit_label
             ));
+            ui.add_space(4.0);
+            self.show_smart_transition(ui);
+            self.show_roster_rebalance(ui);
             ui.add_space(4.0);
             if ui
                 .button(super::i18n::registered(self.locale, "workspace-inspector.050"))
@@ -1352,6 +1351,212 @@ impl DrillApp {
         },
     );
         ui.separator();
+    }
+
+    /// "Smart transition" control: asks the background collision-aware
+    /// assignment solver who should walk to which slot in the next set.
+    ///
+    /// The result is a *suggestion*. Nothing reaches the document -- and so
+    /// nothing reaches undo history, autosave, or the rendered field -- until
+    /// the designer presses apply, because a solver that silently re-seats an
+    /// ensemble is a solver nobody can trust or check.
+    fn show_smart_transition(&mut self, ui: &mut egui::Ui) {
+        let key = super::smart_transition_state::SmartTransitionKey {
+            revision: self.history.revision(),
+            set_index: self.current_set,
+        };
+        self.smart_transition.poll(key);
+        let has_next = self.document.sets.len() > self.current_set + 1;
+        let running = self.smart_transition.is_running();
+        if ui
+            .add_enabled(
+                has_next && !running,
+                egui::Button::new(super::i18n::registered(
+                    self.locale,
+                    "workspace-inspector.176",
+                )),
+            )
+            .on_hover_text(super::i18n::registered(
+                self.locale,
+                "workspace-inspector.177",
+            ))
+            .on_disabled_hover_text(super::i18n::registered(
+                self.locale,
+                "workspace-inspector.178",
+            ))
+            .clicked()
+        {
+            self.smart_transition.request(&self.document, key);
+            self.status = super::i18n::registered(self.locale, "workspace-inspector.179").into();
+        }
+        if running {
+            ui.small(super::i18n::registered(
+                self.locale,
+                "workspace-inspector.195",
+            ));
+            // A running job repaints on the next frame's poll anyway; egui is
+            // driven continuously here, so no explicit repaint request.
+            return;
+        }
+        // Copy the summary out before touching `self` mutably below.
+        let Some((before, after, delta, swaps)) =
+            self.smart_transition.suggestion(key).map(|suggestion| {
+                (
+                    suggestion.outcome.collisions_before,
+                    suggestion.outcome.collisions_after,
+                    suggestion.outcome.distance_delta_ratio(),
+                    suggestion.outcome.swaps,
+                )
+            })
+        else {
+            return;
+        };
+        let mut apply = false;
+        let mut discard = false;
+        ui.group(|ui| {
+            let color = if after == 0 {
+                Color32::from_rgb(99, 210, 151)
+            } else if after < before {
+                Color32::from_rgb(255, 184, 77)
+            } else {
+                Color32::from_rgb(255, 92, 92)
+            };
+            ui.colored_label(
+                color,
+                format!(
+                    "{}: {} → {}   ・   {}: {:+.1}%",
+                    super::i18n::registered(self.locale, "workspace-inspector.180"),
+                    before,
+                    after,
+                    super::i18n::registered(self.locale, "workspace-inspector.181"),
+                    delta * 100.0
+                ),
+            );
+            ui.small(format!(
+                "{}: {}",
+                super::i18n::registered(self.locale, "workspace-inspector.182"),
+                swaps
+            ));
+            ui.small(super::i18n::registered(
+                self.locale,
+                "workspace-inspector.183",
+            ));
+            ui.horizontal(|ui| {
+                apply = ui
+                    .add_enabled(
+                        swaps > 0,
+                        egui::Button::new(super::i18n::registered(
+                            self.locale,
+                            "workspace-inspector.184",
+                        )),
+                    )
+                    .on_disabled_hover_text(super::i18n::registered(
+                        self.locale,
+                        "workspace-inspector.185",
+                    ))
+                    .clicked();
+                discard = ui
+                    .button(super::i18n::registered(
+                        self.locale,
+                        "workspace-inspector.186",
+                    ))
+                    .clicked();
+            });
+        });
+        if apply {
+            self.apply_smart_transition(key);
+        } else if discard {
+            self.smart_transition.discard();
+            self.status = super::i18n::registered(self.locale, "workspace-inspector.187").into();
+        }
+    }
+
+    /// Permute the *next* set's positions by the suggested assignment.
+    ///
+    /// The formation itself is untouched -- only which performer occupies
+    /// which slot changes -- so this stays a single undoable
+    /// `Edit::ReplaceDocument`, exactly like every other bulk re-seat.
+    fn apply_smart_transition(&mut self, key: super::smart_transition_state::SmartTransitionKey) {
+        let Some(suggestion) = self.smart_transition.take(key) else {
+            return;
+        };
+        let target_index = key.set_index + 1;
+        let mut next = self.document.clone();
+        let Some(previous) = next.sets.get(target_index).map(|set| set.positions.clone()) else {
+            return;
+        };
+        if suggestion.outcome.assignment.len() != previous.len() {
+            self.status = super::i18n::registered(self.locale, "workspace-inspector.188").into();
+            return;
+        }
+        let Some(set) = next.sets.get_mut(target_index) else {
+            return;
+        };
+        for (index, &slot) in suggestion.outcome.assignment.iter().enumerate() {
+            if let Some(&point) = previous.get(slot) {
+                set.positions[index] = point;
+            }
+        }
+        if self.execute_edit(
+            Edit::ReplaceDocument {
+                document: Box::new(next),
+            },
+            super::i18n::registered(self.locale, "workspace-inspector.196"),
+        ) {
+            self.status = super::i18n::registered(self.locale, "workspace-inspector.189").into();
+        }
+    }
+
+    /// "Rebalance roster": re-derive a shape-generated set for the cast that
+    /// is actually on the field now, and re-seat everyone into it with the
+    /// least total travel.
+    fn show_roster_rebalance(&mut self, ui: &mut egui::Ui) {
+        let rebalanceable = self
+            .document
+            .sets
+            .get(self.current_set)
+            .is_some_and(|set| set.shape.is_some())
+            && !self.document.performers.is_empty();
+        if ui
+            .add_enabled(
+                rebalanceable,
+                egui::Button::new(super::i18n::registered(
+                    self.locale,
+                    "workspace-inspector.190",
+                )),
+            )
+            .on_hover_text(super::i18n::registered(
+                self.locale,
+                "workspace-inspector.191",
+            ))
+            .on_disabled_hover_text(super::i18n::registered(
+                self.locale,
+                "workspace-inspector.192",
+            ))
+            .clicked()
+        {
+            self.rebalance_current_roster();
+        }
+    }
+
+    fn rebalance_current_roster(&mut self) {
+        let Some(positions) = pathing::rebalance_roster(&self.document, self.current_set) else {
+            self.status = super::i18n::registered(self.locale, "workspace-inspector.197").into();
+            return;
+        };
+        let mut next = self.document.clone();
+        let Some(set) = next.sets.get_mut(self.current_set) else {
+            return;
+        };
+        set.positions = positions;
+        if self.execute_edit(
+            Edit::ReplaceDocument {
+                document: Box::new(next),
+            },
+            super::i18n::registered(self.locale, "workspace-inspector.193"),
+        ) {
+            self.status = super::i18n::registered(self.locale, "workspace-inspector.194").into();
+        }
     }
 
     /// "Analytics" panel: rhythm-sync, aesthetic/symmetry scoring, and the
