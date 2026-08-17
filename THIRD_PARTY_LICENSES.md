@@ -3,7 +3,7 @@
 Generated from committed `Cargo.lock` and Cargo package metadata. Do not edit manually.
 Regenerate with `pwsh ./scripts/generate-third-party-licenses.ps1`.
 
-Cargo.lock SHA-256: `42482a559b92815bea73a4f91640aa5671c7821bd78bd9098dc5591cd730fd9e`
+Cargo.lock SHA-256: `b32caf74757cf1a9b2cb64123318160f186cf861945f372044ad27b6ba948404`
 
 | Package | Version | SPDX license expression | Source |
 |---|---:|---|---|
@@ -49,6 +49,7 @@ Cargo.lock SHA-256: `42482a559b92815bea73a4f91640aa5671c7821bd78bd9098dc5591cd73
 | bitflags | 1.3.2 | MIT/Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | bitflags | 2.13.1 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | blake3 | 1.8.6 | CC0-1.0 OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception | registry+https://github.com/rust-lang/crates.io-index |
+| block-buffer | 0.12.1 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | block2 | 0.5.1 | MIT | registry+https://github.com/rust-lang/crates.io-index |
 | block2 | 0.6.2 | MIT | registry+https://github.com/rust-lang/crates.io-index |
 | blocking | 1.6.2 | Apache-2.0 OR MIT | registry+https://github.com/rust-lang/crates.io-index |
@@ -65,11 +66,13 @@ Cargo.lock SHA-256: `42482a559b92815bea73a4f91640aa5671c7821bd78bd9098dc5591cd73
 | cfg_aliases | 0.2.2 | MIT | registry+https://github.com/rust-lang/crates.io-index |
 | cfg-if | 1.0.4 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | cgl | 0.3.2 | MIT / Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
+| chacha20 | 0.10.1 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | clipboard-win | 5.4.1 | BSL-1.0 | registry+https://github.com/rust-lang/crates.io-index |
 | codespan-reporting | 0.13.1 | Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | color | 0.3.3 | Apache-2.0 OR MIT | registry+https://github.com/rust-lang/crates.io-index |
 | combine | 4.6.7 | MIT | registry+https://github.com/rust-lang/crates.io-index |
 | concurrent-queue | 2.5.0 | Apache-2.0 OR MIT | registry+https://github.com/rust-lang/crates.io-index |
+| const-oid | 0.10.2 | Apache-2.0 OR MIT | registry+https://github.com/rust-lang/crates.io-index |
 | constant_time_eq | 0.4.2 | CC0-1.0 OR MIT-0 OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | core-foundation | 0.10.1 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | core-foundation | 0.9.4 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
@@ -82,8 +85,11 @@ Cargo.lock SHA-256: `42482a559b92815bea73a4f91640aa5671c7821bd78bd9098dc5591cd73
 | crc32fast | 1.5.0 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | crossbeam-utils | 0.8.22 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | crunchy | 0.2.4 | MIT | registry+https://github.com/rust-lang/crates.io-index |
+| crypto-common | 0.2.2 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | cursor-icon | 1.2.0 | MIT OR Apache-2.0 OR Zlib | registry+https://github.com/rust-lang/crates.io-index |
 | dasp_sample | 0.11.0 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
+| data-encoding | 2.11.1 | MIT | registry+https://github.com/rust-lang/crates.io-index |
+| digest | 0.11.3 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | dispatch | 0.2.0 | MIT | registry+https://github.com/rust-lang/crates.io-index |
 | dispatch2 | 0.3.1 | Zlib OR Apache-2.0 OR MIT | registry+https://github.com/rust-lang/crates.io-index |
 | displaydoc | 0.2.6 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
@@ -101,6 +107,7 @@ Cargo.lock SHA-256: `42482a559b92815bea73a4f91640aa5671c7821bd78bd9098dc5591cd73
 | drill-jobs | 0.1.0 | MIT OR Apache-2.0 | workspace |
 | drill-mobile-viewer | 0.1.0 | MIT OR Apache-2.0 | workspace |
 | drill-plugin | 0.1.0 | MIT OR Apache-2.0 | workspace |
+| drill-presence | 0.1.0 | MIT OR Apache-2.0 | workspace |
 | drill-project | 0.1.0 | MIT OR Apache-2.0 | workspace |
 | drill-render | 0.1.0 | MIT OR Apache-2.0 | workspace |
 | drill-updater | 0.1.0 | MIT OR Apache-2.0 | workspace |
@@ -165,6 +172,9 @@ Cargo.lock SHA-256: `42482a559b92815bea73a4f91640aa5671c7821bd78bd9098dc5591cd73
 | hermit-abi | 0.5.2 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | hex | 0.4.3 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | hexf-parse | 0.2.1 | CC0-1.0 | registry+https://github.com/rust-lang/crates.io-index |
+| http | 1.5.0 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
+| httparse | 1.10.1 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
+| hybrid-array | 0.4.14 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | icu_collections | 2.2.0 | Unicode-3.0 | registry+https://github.com/rust-lang/crates.io-index |
 | icu_locale_core | 2.2.0 | Unicode-3.0 | registry+https://github.com/rust-lang/crates.io-index |
 | icu_normalizer | 2.2.0 | Unicode-3.0 | registry+https://github.com/rust-lang/crates.io-index |
@@ -284,6 +294,8 @@ Cargo.lock SHA-256: `42482a559b92815bea73a4f91640aa5671c7821bd78bd9098dc5591cd73
 | quote | 1.0.47 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | r-efi | 5.3.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later | registry+https://github.com/rust-lang/crates.io-index |
 | r-efi | 6.0.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later | registry+https://github.com/rust-lang/crates.io-index |
+| rand | 0.10.2 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
+| rand_core | 0.10.1 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | range-alloc | 0.1.5 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | raw-window-handle | 0.6.2 | MIT OR Apache-2.0 OR Zlib | registry+https://github.com/rust-lang/crates.io-index |
 | raw-window-metal | 1.1.0 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
@@ -312,6 +324,7 @@ Cargo.lock SHA-256: `42482a559b92815bea73a4f91640aa5671c7821bd78bd9098dc5591cd73
 | serde_derive | 1.0.229 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | serde_json | 1.0.151 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | serde_repr | 0.1.21 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
+| sha1 | 0.11.0 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | shlex | 2.0.1 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | signal-hook-registry | 1.4.8 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | simd_cesu8 | 1.2.0 | Apache-2.0 OR MIT | registry+https://github.com/rust-lang/crates.io-index |
@@ -360,8 +373,10 @@ Cargo.lock SHA-256: `42482a559b92815bea73a4f91640aa5671c7821bd78bd9098dc5591cd73
 | tracing-attributes | 0.1.31 | MIT | registry+https://github.com/rust-lang/crates.io-index |
 | tracing-core | 0.1.36 | MIT | registry+https://github.com/rust-lang/crates.io-index |
 | transpose | 0.2.3 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
+| tungstenite | 0.30.0 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | type-map | 0.5.1 | MIT/Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | typed-path | 0.12.3 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
+| typenum | 1.20.1 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | uds_windows | 1.2.1 | MIT | registry+https://github.com/rust-lang/crates.io-index |
 | unicode-general-category | 1.1.0 | Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | unicode-ident | 1.0.24 | (MIT OR Apache-2.0) AND Unicode-3.0 | registry+https://github.com/rust-lang/crates.io-index |

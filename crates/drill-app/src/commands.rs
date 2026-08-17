@@ -69,6 +69,7 @@ pub(crate) enum Command {
     WorkspacePresent,
     ToggleGuidance,
     TogglePerfHud,
+    ToggleCollaborators,
     GettingStarted,
     LegalNotices,
 }
@@ -485,6 +486,13 @@ pub(crate) const SPECS: &[Spec] = &[
         shortcut: Some(Shortcut::CommandShift(egui::Key::P)),
     },
     Spec {
+        // No shortcut: joining a room is a deliberate, infrequent act, and the
+        // remaining Cmd+Shift space is better spent on per-frame gestures.
+        command: Command::ToggleCollaborators,
+        menu: Menu::View,
+        shortcut: None,
+    },
+    Spec {
         command: Command::GettingStarted,
         menu: Menu::Help,
         shortcut: Some(Shortcut::Plain(egui::Key::F1)),
@@ -577,6 +585,7 @@ impl Command {
             (Locale::Ja, ToggleGuidance) => "操作ガイドを切替",
             (Locale::En, ToggleGuidance) => "Toggle Guidance",
             (_, TogglePerfHud) => super::i18n::registered(locale, "perf-hud.010"),
+            (_, ToggleCollaborators) => super::i18n::registered(locale, "presence.019"),
             (Locale::Ja, GettingStarted) => "はじめかた・全ショートカット…",
             (Locale::En, GettingStarted) => "Getting Started & Shortcuts…",
             (Locale::Ja, LegalNotices) => "ライセンス・第三者通知…",
