@@ -18,7 +18,7 @@
 //! stores and a modulo, and nothing is formatted, sorted, or painted unless the
 //! overlay is actually on screen.
 
-use super::commands::{Command, Shortcut, SPECS};
+use super::commands::{Command, SPECS, Shortcut};
 use drill_core::Locale;
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Stroke, StrokeKind, Vec2};
 
@@ -212,11 +212,7 @@ impl PerfHud {
 
     /// The retained window, oldest sample first.
     fn history(&self) -> impl Iterator<Item = f32> + '_ {
-        let start = if self.filled == SAMPLES {
-            self.next
-        } else {
-            0
-        };
+        let start = if self.filled == SAMPLES { self.next } else { 0 };
         (0..self.filled).map(move |offset| self.samples[(start + offset) % SAMPLES])
     }
 
@@ -314,10 +310,7 @@ impl PerfHud {
         y += 14.0 + 6.0;
 
         painter.line_segment(
-            [
-                Pos2::new(content.left(), y),
-                Pos2::new(content.right(), y),
-            ],
+            [Pos2::new(content.left(), y), Pos2::new(content.right(), y)],
             Stroke::new(1.0, PANEL_EDGE),
         );
         y += 6.0;
@@ -403,10 +396,7 @@ impl PerfHud {
             let top = graph.bottom() - normalized * graph.height();
             let left = graph.left() + index as f32 * step;
             painter.rect_filled(
-                Rect::from_min_max(
-                    Pos2::new(left, top),
-                    Pos2::new(left + bar, graph.bottom()),
-                ),
+                Rect::from_min_max(Pos2::new(left, top), Pos2::new(left + bar, graph.bottom())),
                 0.0,
                 stats.pace_color(sample),
             );
@@ -590,7 +580,10 @@ mod tests {
         ] {
             for locale in [Locale::Ja, Locale::En] {
                 let value = super::super::i18n::registered(locale, id);
-                assert_ne!(value, "[missing message]", "untranslated {id} in {locale:?}");
+                assert_ne!(
+                    value, "[missing message]",
+                    "untranslated {id} in {locale:?}"
+                );
                 assert!(!value.is_empty());
             }
         }

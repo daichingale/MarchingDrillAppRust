@@ -84,7 +84,12 @@ fn paint_symbol(
             let half = radius * 0.8;
             let rect = Rect::from_center_size(center, egui::Vec2::splat(half * 2.0));
             painter.rect_filled(rect, 0.0, fill);
-            painter.rect_stroke(rect, 0.0, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
+            painter.rect_stroke(
+                rect,
+                0.0,
+                Stroke::new(1.0, stroke),
+                egui::StrokeKind::Inside,
+            );
         }
         Symbol::Cross => {
             let arm = radius;
@@ -106,7 +111,10 @@ fn paint_symbol(
         }
         Symbol::Triangle | Symbol::Diamond | Symbol::Star => {
             let points = drill_render::symbol_points(
-                Vec2 { x: center.x, y: center.y },
+                Vec2 {
+                    x: center.x,
+                    y: center.y,
+                },
                 radius,
                 symbol,
             )

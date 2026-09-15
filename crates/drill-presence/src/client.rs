@@ -9,7 +9,7 @@ use crate::{Presence, PresenceMessage, room_path};
 use std::io::ErrorKind;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError, TryRecvError};
+use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -239,7 +239,8 @@ impl Worker {
             if last_send.elapsed() >= HEARTBEAT {
                 self.dirty = true;
             }
-            if self.dirty && last_send.elapsed() >= SEND_INTERVAL
+            if self.dirty
+                && last_send.elapsed() >= SEND_INTERVAL
                 && let Some(presence) = self.latest.clone()
             {
                 let Ok(json) = PresenceMessage::Update(presence).to_json() else {
@@ -446,15 +447,18 @@ mod tests {
             "ghost",
             Presence::new(UserId::from_raw(7), "Ghost".into(), [1, 2, 3]),
         );
-        client.publish(Presence::new(UserId::from_raw(7), "Ghost".into(), [1, 2, 3]));
+        client.publish(Presence::new(
+            UserId::from_raw(7),
+            "Ghost".into(),
+            [1, 2, 3],
+        ));
         assert!(client.poll().is_none());
         assert_ne!(client.status(), ConnectionStatus::Connected);
     }
 
     #[test]
     fn retryable_io_kinds_are_classified() {
-        let would_block =
-            tungstenite::Error::Io(std::io::Error::from(ErrorKind::WouldBlock));
+        let would_block = tungstenite::Error::Io(std::io::Error::from(ErrorKind::WouldBlock));
         let timed_out = tungstenite::Error::Io(std::io::Error::from(ErrorKind::TimedOut));
         let refused = tungstenite::Error::Io(std::io::Error::from(ErrorKind::ConnectionRefused));
         assert!(is_retryable(&would_block));

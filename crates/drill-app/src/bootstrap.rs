@@ -1,5 +1,5 @@
-use super::app_theme::AppTheme;
 use super::DrillApp;
+use super::app_theme::AppTheme;
 use eframe::egui::{self, Vec2};
 use eframe::egui_wgpu::{SurfaceConfig, WgpuConfiguration};
 use std::sync::Arc;
@@ -110,7 +110,8 @@ mod tests {
             "one queued frame is the whole point of the setting"
         );
         assert_ne!(
-            surface, SurfaceConfig::HIGH_THROUGHPUT,
+            surface,
+            SurfaceConfig::HIGH_THROUGHPUT,
             "egui-wgpu's default must not be what we ship"
         );
         // Vsync stays on: the goal is to shorten the queue, not to tear.

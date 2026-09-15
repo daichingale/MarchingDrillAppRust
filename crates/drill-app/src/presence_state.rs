@@ -366,7 +366,11 @@ impl PresenceState {
             // down-right, so the two never sit on top of each other.
             let center = pos + Vec2::new(-11.0, -11.0);
             painter.circle_filled(center, 7.5, color);
-            painter.circle_stroke(center, 7.5, Stroke::new(1.0, Color32::from_black_alpha(200)));
+            painter.circle_stroke(
+                center,
+                7.5,
+                Stroke::new(1.0, Color32::from_black_alpha(200)),
+            );
             painter.text(
                 center,
                 egui::Align2::CENTER_CENTER,
@@ -388,8 +392,10 @@ impl PresenceState {
         to_screen: impl Fn(Point) -> Pos2,
     ) {
         for peer in &self.peers {
-            let (Some(cursor), true) = (peer.presence.cursor, peer.presence.current_set == current_set)
-            else {
+            let (Some(cursor), true) = (
+                peer.presence.cursor,
+                peer.presence.current_set == current_set,
+            ) else {
                 continue;
             };
             let tip = to_screen(cursor);
@@ -559,8 +565,7 @@ fn roster_row(
     locale: Locale,
 ) {
     ui.horizontal(|ui| {
-        let (response, painter) =
-            ui.allocate_painter(Vec2::splat(12.0), egui::Sense::hover());
+        let (response, painter) = ui.allocate_painter(Vec2::splat(12.0), egui::Sense::hover());
         painter.circle_filled(response.rect.center(), 5.0, color_of(color));
         ui.label(name);
         match set {
@@ -737,7 +742,9 @@ mod tests {
         let mut state = PresenceState::default();
         peer(&mut state, 1, 0, &[]);
         peer(&mut state, 2, 0, &[]);
-        state.peers.retain(|p| p.presence.user_id != UserId::from_raw(1));
+        state
+            .peers
+            .retain(|p| p.presence.user_id != UserId::from_raw(1));
         assert_eq!(state.peer_count(), 1);
         assert_eq!(state.peers[0].presence.user_id, UserId::from_raw(2));
     }

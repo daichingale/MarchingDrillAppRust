@@ -25,7 +25,9 @@ pub fn normalize_room_code(raw: &str) -> Option<String> {
     let code: String = raw
         .trim()
         .chars()
-        .filter(|character| character.is_ascii_alphanumeric() || *character == '-' || *character == '_')
+        .filter(|character| {
+            character.is_ascii_alphanumeric() || *character == '-' || *character == '_'
+        })
         .take(MAX_ROOM_CODE)
         .map(|character| character.to_ascii_lowercase())
         .collect();
@@ -128,8 +130,14 @@ mod tests {
 
     #[test]
     fn room_codes_normalize_case_and_padding() {
-        assert_eq!(normalize_room_code("  Fall-Show  ").as_deref(), Some("fall-show"));
-        assert_eq!(normalize_room_code("Rehearsal_1").as_deref(), Some("rehearsal_1"));
+        assert_eq!(
+            normalize_room_code("  Fall-Show  ").as_deref(),
+            Some("fall-show")
+        );
+        assert_eq!(
+            normalize_room_code("Rehearsal_1").as_deref(),
+            Some("rehearsal_1")
+        );
     }
 
     #[test]
@@ -149,12 +157,18 @@ mod tests {
     fn path_round_trips_through_normalization() {
         let code = normalize_room_code("Fall Show 2026").expect("code");
         assert_eq!(room_path(&code), "/room/fallshow2026");
-        assert_eq!(room_code_from_path(&room_path(&code)).as_deref(), Some(code.as_str()));
+        assert_eq!(
+            room_code_from_path(&room_path(&code)).as_deref(),
+            Some(code.as_str())
+        );
     }
 
     #[test]
     fn path_parsing_ignores_query_strings() {
-        assert_eq!(room_code_from_path("/room/brass?v=1").as_deref(), Some("brass"));
+        assert_eq!(
+            room_code_from_path("/room/brass?v=1").as_deref(),
+            Some("brass")
+        );
     }
 
     #[test]

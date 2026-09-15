@@ -524,8 +524,20 @@ impl FieldViewport {
         // hand is the physics.
         if self.pan_last_pointer.is_none() {
             let (min_x, max_x, min_y, max_y, ..) = self.travel(grid, size);
-            let moving_x = step_axis(&mut self.center.x, &mut self.pan_velocity.x, min_x, max_x, dt);
-            let moving_y = step_axis(&mut self.center.y, &mut self.pan_velocity.y, min_y, max_y, dt);
+            let moving_x = step_axis(
+                &mut self.center.x,
+                &mut self.pan_velocity.x,
+                min_x,
+                max_x,
+                dt,
+            );
+            let moving_y = step_axis(
+                &mut self.center.y,
+                &mut self.pan_velocity.y,
+                min_y,
+                max_y,
+                dt,
+            );
             active |= moving_x || moving_y;
         }
 
@@ -1271,12 +1283,7 @@ mod viewport_tests {
         view.zoom_target = 4.0;
         view.begin_pan(Some(Pos2::new(400.0, 250.0)));
         for step in 0..10 {
-            view.drag_pan(
-                Vec2::new(-14.0, 0.0),
-                1.0 / 120.0,
-                &grid,
-                rect.size(),
-            );
+            view.drag_pan(Vec2::new(-14.0, 0.0), 1.0 / 120.0, &grid, rect.size());
             let _ = step;
         }
         view.end_pan();
@@ -1361,7 +1368,11 @@ mod viewport_tests {
         for _ in 0..30 {
             view.tick(1.0 / 120.0, &grid, rect);
         }
-        assert!(view.dot_lift() > 0.95, "lift never rose: {}", view.dot_lift());
+        assert!(
+            view.dot_lift() > 0.95,
+            "lift never rose: {}",
+            view.dot_lift()
+        );
         view.dots_landed();
         assert!(view.dot_settle_phase() > 0.99);
         let mut frames = 0;

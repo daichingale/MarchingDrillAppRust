@@ -789,11 +789,12 @@ pub fn build_field_2d(scene: &Scene<'_>, _scratch: &mut BuildScratch, out: &mut 
     // re-coloring an existing one).
     // Snapped onto the fine grid for the same reason the major lines are
     // above -- an unsnapped midpoint is generally off the step grid too.
-    let center_x = grid.snap(Point {
-        x: grid.width * 0.5,
-        y: 0.0,
-    })
-    .x;
+    let center_x = grid
+        .snap(Point {
+            x: grid.width * 0.5,
+            y: 0.0,
+        })
+        .x;
     out.commands.push(DrawCmd::Line {
         a: map(Point {
             x: center_x,
@@ -1280,7 +1281,14 @@ fn svg_color(color: Rgba) -> String {
 /// - `Diamond`: a square rotated 45 degrees, points `radius` from center.
 /// - `Cross`: two diagonal strokes, half-length `radius`.
 /// - `Star`: five points, outer radius `radius`, inner radius `0.5 * radius`.
-fn write_symbol_svg(out: &mut String, center: Vec2, radius: f32, fill: Rgba, stroke: Rgba, symbol: Symbol) {
+fn write_symbol_svg(
+    out: &mut String,
+    center: Vec2,
+    radius: f32,
+    fill: Rgba,
+    stroke: Rgba,
+    symbol: Symbol,
+) {
     let fill_attr = svg_color(fill);
     let stroke_attr = svg_color(stroke);
     match symbol {

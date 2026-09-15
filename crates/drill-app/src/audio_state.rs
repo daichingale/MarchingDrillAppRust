@@ -49,7 +49,12 @@ pub(crate) struct AudioState {
     output: Option<AudioOutput>,
     buckets: Vec<Peak>,
     click_schedule: drill_audio::ClickSchedule,
-    last_click_config: Option<(drill_audio::ClickSettings, f64, drill_core::tempo::TempoMap, u32)>,
+    last_click_config: Option<(
+        drill_audio::ClickSettings,
+        f64,
+        drill_core::tempo::TempoMap,
+        u32,
+    )>,
     pub status: StatusMessage,
 }
 

@@ -488,7 +488,11 @@ pub(crate) fn draw_count_track(
                 break; // The segment is too narrow at this zoom.
             }
             painter.circle_filled(center, 3.5, Color32::from_rgb(color[0], color[1], color[2]));
-            painter.circle_stroke(center, 3.5, Stroke::new(1.0, Color32::from_black_alpha(200)));
+            painter.circle_stroke(
+                center,
+                3.5,
+                Stroke::new(1.0, Color32::from_black_alpha(200)),
+            );
             pip += 9.0;
         }
         start_count = end_count;
