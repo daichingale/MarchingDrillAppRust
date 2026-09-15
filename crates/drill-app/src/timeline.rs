@@ -110,6 +110,12 @@ impl TimelineViewport {
     }
 }
 
+/// True when a set card is clipped by the horizontal strip, so the strip
+/// should scroll until the current set is fully visible.
+pub(crate) fn card_needs_follow_scroll(clip: Rect, card: Rect) -> bool {
+    !clip.contains(card.min) || !clip.contains(card.max)
+}
+
 pub(crate) fn snapped_viewport_count(
     pointer_x: f32,
     left: f32,
@@ -1118,5 +1124,16 @@ mod tests {
                 assert!(bounds.height() >= 40.0);
             }
         }
+    }
+
+    #[test]
+    fn card_needs_follow_scroll_when_the_current_set_is_clipped() {
+        let clip = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(200.0, 40.0));
+        let visible = Rect::from_min_max(Pos2::new(10.0, 4.0), Pos2::new(90.0, 36.0));
+        let offscreen = Rect::from_min_max(Pos2::new(240.0, 4.0), Pos2::new(320.0, 36.0));
+        let partial = Rect::from_min_max(Pos2::new(180.0, 4.0), Pos2::new(260.0, 36.0));
+        assert!(!card_needs_follow_scroll(clip, visible));
+        assert!(card_needs_follow_scroll(clip, offscreen));
+        assert!(card_needs_follow_scroll(clip, partial));
     }
 }

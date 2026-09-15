@@ -119,6 +119,8 @@ pub(crate) struct PlaybackRangeSummary {
     pub(crate) length: u32,
 }
 
+pub(crate) const PLAYBACK_SPEED_PRESETS: [f32; 3] = [0.5, 1.0, 2.0];
+
 pub(crate) fn playback_range_summary(
     document: &Document,
     playback_start: u32,
@@ -956,11 +958,40 @@ impl DrillApp {
     const MAX_SELECTION_HISTORY: usize = 10;
 
     fn begin_set_count_draft(&mut self) {
-        let set = &self.document.sets[self.current_set];
+        self.begin_set_count_draft_at(self.current_set);
+    }
+
+    fn begin_set_count_draft_at(&mut self, index: usize) {
+        let Some(set) = self.document.sets.get(index) else {
+            return;
+        };
         self.set_count_draft = Some(SetCountDraft {
             set_id: set.id,
             moves: set.counts,
         });
+    }
+
+    fn commit_transition_counts(&mut self, index: usize, moves: u16) -> bool {
+        if moves == 0 {
+            self.status = i18n::registered(self.locale, "core-edit.035").into();
+            return false;
+        }
+        let Some(set) = self.document.sets.get(index) else {
+            return false;
+        };
+        if set.counts == moves {
+            self.set_count_draft = None;
+            return true;
+        }
+        self.set_count_draft = Some(SetCountDraft {
+            set_id: set.id,
+            moves,
+        });
+        self.apply_set_count_draft();
+        self.document
+            .sets
+            .get(index)
+            .is_some_and(|set| set.counts == moves)
     }
 
     fn discard_set_count_draft(&mut self) {
@@ -971,6 +1002,9 @@ impl DrillApp {
         let Some(draft) = self.set_count_draft else {
             return;
         };
+        if draft.moves == 0 {
+            return;
+        }
         let Some(index) = self
             .document
             .sets
@@ -2900,6 +2934,31 @@ impl DrillApp {
     fn return_to_editable_set_start(&mut self) {
         self.navigate_to_set(self.current_set);
         self.status = i18n::registered(self.locale, "app-state.155").into();
+    }
+
+    fn jump_to_show_start(&mut self) {
+        self.navigate_to_global_count(0);
+    }
+
+    /// Dragging the playhead pauses both clocks and shows interpolated
+    /// positions without writing the current set's committed picture.
+    fn scrub_to(&mut self, set_index: usize, local_count: f32) {
+        if set_index >= self.document.sets.len() {
+            return;
+        }
+        self.current_set = set_index;
+        self.count_position = local_count;
+        self.playing = false;
+        self.audio_state.pause();
+        if let Some(track) = &self.document.audio {
+            let global = self.document.global_count(set_index, local_count);
+            self.audio_state
+                .seek_seconds(drill_core::audio::count_to_audio_time(
+                    track,
+                    &self.document.tempo,
+                    global,
+                ));
+        }
     }
 
     /// Jump to a set's first exact count without changing the working

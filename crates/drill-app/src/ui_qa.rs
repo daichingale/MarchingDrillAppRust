@@ -319,6 +319,53 @@ mod tests {
     }
 
     #[test]
+    fn create_place_scrub_play_then_save_keeps_committed_sets() {
+        let context = egui::Context::default();
+        let mut app = DrillApp::default();
+        app.begin_new_show();
+        app.place_performer_at(Point { x: 8.0, y: 6.0 }, true);
+        app.execute_command(Command::DuplicateSet, &context);
+        assert_eq!(app.document.sets.len(), 2);
+        let committed = app.document.sets[0].positions.clone();
+        app.scrub_to(0, 4.0);
+        assert!(!app.playing);
+        assert!(!app.is_editable_set_start());
+        assert_eq!(app.document.sets[0].positions, committed);
+        app.playing = true;
+        app.execute_command(Command::PlayPause, &context);
+        assert!(!app.playing);
+        app.return_to_editable_set_start();
+        assert!(app.is_editable_set_start());
+        app.speed = super::super::PLAYBACK_SPEED_PRESETS[2];
+
+        let path = std::env::temp_dir().join(format!(
+            "drillforge-timeline-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        app.project_state
+            .save_legacy_json(path.clone(), app.document.clone());
+        match wait_for_project_event(&mut app) {
+            super::super::project_state::ProjectEvent::Saved(saved) => {
+                app.apply_saved_path(saved);
+            }
+            super::super::project_state::ProjectEvent::Loaded { .. } => {
+                panic!("expected Saved, got Loaded")
+            }
+            super::super::project_state::ProjectEvent::Failed(error) => {
+                panic!("save failed: {error}")
+            }
+        }
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(app.document.sets.len(), 2);
+        assert_eq!(app.document.sets[0].positions, committed);
+        assert!(!app.dirty);
+    }
+
+    #[test]
     fn inspector_list_and_field_share_the_same_selection() {
         let mut app = DrillApp::default();
         app.begin_new_show();
@@ -1640,6 +1687,98 @@ mod tests {
         app.apply_set_count_draft();
         assert!(app.set_count_draft.is_none());
         assert_eq!(app.document, document);
+    }
+
+    #[test]
+    fn timeline_transition_count_rejects_zero_and_commits_a_positive_value() {
+        let context = egui::Context::default();
+        let mut app = DrillApp::default();
+        app.begin_new_show();
+        app.execute_command(Command::DuplicateSet, &context);
+        let before = app.document.sets[0].counts;
+        assert!(!app.commit_transition_counts(0, 0));
+        assert_eq!(app.document.sets[0].counts, before);
+        assert_eq!(
+            app.status,
+            super::super::i18n::registered(Locale::Ja, "core-edit.035")
+        );
+        assert!(app.commit_transition_counts(0, 12));
+        assert_eq!(app.document.sets[0].counts, 12);
+        assert!(app.history.can_undo());
+    }
+
+    #[test]
+    fn scrubbing_pauses_playback_and_does_not_commit_mid_set_positions() {
+        let context = egui::Context::default();
+        let mut app = DrillApp::default();
+        app.begin_new_show();
+        app.execute_command(Command::DuplicateSet, &context);
+        app.navigate_to_set(1);
+        app.replace_selection([0].into_iter().collect());
+        let origin = app.document.sets[1].positions[0];
+        let moved = Point {
+            x: (origin.x + 8.0).min(app.document.grid.width),
+            y: origin.y,
+        };
+        let set_id = app.document.sets[1].id;
+        let performer_id = app.document.performers[0].id;
+        assert!(app.execute_edit(
+            Edit::MovePerformers {
+                set_id,
+                performer_ids: vec![performer_id],
+                positions: vec![moved],
+            },
+            "move for scrub test",
+        ));
+        let committed_start = app.document.sets[0].positions[0];
+        app.playing = true;
+        app.scrub_to(0, 4.0);
+        assert!(!app.playing);
+        assert_eq!(app.current_set, 0);
+        assert_eq!(app.count_position, 4.0);
+        assert!(!app.is_editable_set_start());
+        assert_eq!(app.document.sets[0].positions[0], committed_start);
+        assert_eq!(app.document.sets[1].positions[0], moved);
+        let mut interpolated = Vec::new();
+        app.document
+            .positions_at_count(0, app.count_position, &mut interpolated);
+        assert_ne!(interpolated[0], committed_start);
+        assert_ne!(interpolated[0], moved);
+    }
+
+    #[test]
+    fn playback_speed_presets_and_jump_to_start_pause_at_count_zero() {
+        let mut app = DrillApp::default();
+        app.begin_new_show();
+        app.speed = 0.5;
+        assert!((app.speed - super::super::PLAYBACK_SPEED_PRESETS[0]).abs() < f32::EPSILON);
+        app.speed = 2.0;
+        assert!((app.speed - super::super::PLAYBACK_SPEED_PRESETS[2]).abs() < f32::EPSILON);
+        app.current_set = 0;
+        app.count_position = 3.0;
+        app.playing = true;
+        app.jump_to_show_start();
+        assert_eq!(app.current_set, 0);
+        assert_eq!(app.count_position, 0.0);
+        assert!(!app.playing);
+        assert!(app.is_editable_set_start());
+    }
+
+    #[test]
+    fn set_card_navigation_syncs_the_field_to_the_clicked_set() {
+        let context = egui::Context::default();
+        let mut app = DrillApp::default();
+        app.begin_new_show();
+        app.execute_command(Command::DuplicateSet, &context);
+        app.document.sets[1].name = "Impact".into();
+        app.replace_selection([0, 1].into_iter().collect());
+        app.playing = true;
+        app.navigate_to_set(1);
+        assert_eq!(app.current_set, 1);
+        assert_eq!(app.count_position, 0.0);
+        assert!(!app.playing);
+        assert_eq!(app.selected, [0, 1].into_iter().collect());
+        assert!(app.is_editable_set_start());
     }
 
     #[test]

@@ -2656,6 +2656,16 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "core-edit.032") => {
             "Use Place in the toolbar, then click the field to add performers."
         }
+        (Locale::Ja, "core-edit.033") => "先頭",
+        (Locale::En, "core-edit.033") => "Start",
+        (Locale::Ja, "core-edit.034") => "ショーの先頭（カウント0）へ戻ります",
+        (Locale::En, "core-edit.034") => "Jump to the start of the show (count 0)",
+        (Locale::Ja, "core-edit.035") => "セット間のカウントは1以上にしてください",
+        (Locale::En, "core-edit.035") => "Counts between sets must be greater than 0",
+        (Locale::Ja, "core-edit.036") => "次のセットまでのカウント（1以上）",
+        (Locale::En, "core-edit.036") => "Counts to the next set (must be 1 or more)",
+        (Locale::Ja, "core-edit.037") => "クリックでこのセットへ移動します",
+        (Locale::En, "core-edit.037") => "Click to jump to this set",
         _ => "[missing message]",
     }
 }

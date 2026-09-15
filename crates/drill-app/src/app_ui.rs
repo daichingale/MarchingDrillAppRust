@@ -929,10 +929,7 @@ impl eframe::App for DrillApp {
                 {
                     self.execute_command(UiCommand::Redo, ui.ctx());
                 }
-                ui.add(
-                    egui::Slider::new(&mut self.speed, 0.25..=4.0)
-                        .text(text(self.locale, Text::Speed)),
-                );
+                self.show_playback_speed_presets(ui);
                 if ui
                     .add(
                         egui::DragValue::new(&mut self.tempo_bpm)
@@ -1533,6 +1530,8 @@ impl eframe::App for DrillApp {
                 });
                 ui.small(super::i18n::registered(self.locale, "app-ui.118"));
             });
+        self.show_timeline_playback_bar(ui);
+        self.show_set_card_strip(ui);
         let current_global = self
             .document
             .global_count(self.current_set, self.count_position);
@@ -1638,19 +1637,7 @@ impl eframe::App for DrillApp {
             self.execute_edit(edit, super::i18n::registered(self.locale, "app-ui.109"));
         }
         if let Some((set_index, local_count)) = timeline_change.seek {
-            self.current_set = set_index;
-            self.count_position = local_count;
-            self.playing = false;
-            self.audio_state.pause();
-            if let Some(track) = &self.document.audio {
-                let global = self.document.global_count(set_index, local_count);
-                self.audio_state
-                    .seek_seconds(drill_core::audio::count_to_audio_time(
-                        track,
-                        &self.document.tempo,
-                        global,
-                    ));
-            }
+            self.scrub_to(set_index, local_count);
             // Performer identity is stable across sets, so seeking the count
             // track keeps the current working group intact.
         }
@@ -2871,6 +2858,123 @@ impl eframe::App for DrillApp {
 }
 
 impl DrillApp {
+    fn show_playback_speed_presets(&mut self, ui: &mut egui::Ui) {
+        ui.label(text(self.locale, Text::Speed));
+        for speed in PLAYBACK_SPEED_PRESETS {
+            if ui
+                .selectable_label(
+                    (self.speed - speed).abs() < f32::EPSILON,
+                    format!("{speed}×"),
+                )
+                .clicked()
+            {
+                self.speed = speed;
+            }
+        }
+    }
+
+    fn show_timeline_playback_bar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            if ui
+                .button(if self.playing {
+                    text(self.locale, Text::Pause)
+                } else {
+                    text(self.locale, Text::Play)
+                })
+                .clicked()
+            {
+                self.toggle_playback(ui.ctx());
+            }
+            if ui
+                .button(super::i18n::registered(self.locale, "core-edit.033"))
+                .on_hover_text(super::i18n::registered(self.locale, "core-edit.034"))
+                .clicked()
+            {
+                self.jump_to_show_start();
+            }
+            self.show_playback_speed_presets(ui);
+        });
+    }
+
+    fn show_set_card_strip(&mut self, ui: &mut egui::Ui) {
+        let cards: Vec<(usize, String, u16, drill_core::SetId)> = self
+            .document
+            .sets
+            .iter()
+            .enumerate()
+            .map(|(index, set)| (index, set.name.clone(), set.counts, set.id))
+            .collect();
+        let current_set = self.current_set;
+        let mut clicked_set = None;
+        let mut count_edit: Option<(usize, u16, bool)> = None;
+        egui::ScrollArea::horizontal()
+            .id_salt("set-card-strip")
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    for (index, name, counts, set_id) in &cards {
+                        let selected = *index == current_set;
+                        let response = ui
+                            .selectable_label(selected, format!("{}  {name}", index + 1))
+                            .on_hover_text(super::i18n::registered(self.locale, "core-edit.037"));
+                        if selected
+                            && super::timeline::card_needs_follow_scroll(
+                                ui.clip_rect(),
+                                response.rect,
+                            )
+                        {
+                            response.scroll_to_me(Some(egui::Align::Center));
+                        }
+                        if response.clicked() {
+                            clicked_set = Some(*index);
+                        }
+                        if *index + 1 < cards.len() {
+                            let editing = self
+                                .set_count_draft
+                                .is_some_and(|draft| draft.set_id == *set_id);
+                            let mut value = if editing {
+                                self.set_count_draft.expect("active draft").moves
+                            } else {
+                                *counts
+                            };
+                            let editor = ui
+                                .add(egui::DragValue::new(&mut value).range(1..=512).suffix(" c"))
+                                .on_hover_text(super::i18n::registered(
+                                    self.locale,
+                                    "core-edit.036",
+                                ));
+                            if editor.changed() || editor.lost_focus() {
+                                count_edit = Some((*index, value, editor.lost_focus()));
+                            }
+                        }
+                    }
+                });
+            });
+        if let Some(index) = clicked_set {
+            self.navigate_to_set(index);
+        }
+        if let Some((index, moves, lost_focus)) = count_edit {
+            let set_id = cards[index].3;
+            if let Some(draft) = self.set_count_draft
+                && draft.set_id != set_id
+            {
+                self.apply_set_count_draft();
+            }
+            if !self
+                .set_count_draft
+                .is_some_and(|draft| draft.set_id == set_id)
+            {
+                self.begin_set_count_draft_at(index);
+            }
+            if let Some(draft) = &mut self.set_count_draft {
+                draft.moves = moves.max(1);
+            }
+            if lost_focus {
+                let _ = self.commit_transition_counts(index, moves.max(1));
+            }
+        }
+    }
+
     fn core_edit_toolbar(&mut self, ui: &mut egui::Ui) {
         let context = self.command_context();
         ui.separator();
