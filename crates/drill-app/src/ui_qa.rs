@@ -69,6 +69,111 @@ mod tests {
     }
 
     #[test]
+    fn new_show_supports_the_core_edit_loop() {
+        let context = egui::Context::default();
+        let mut app = DrillApp::default();
+        app.begin_new_show();
+
+        assert_eq!(app.document.performers.len(), 16);
+        assert_eq!(app.document.sets.len(), 1);
+        assert!(!app.dirty);
+        assert!(app.current_path.is_none());
+        assert!(app.is_editable_set_start());
+        assert!(Command::DeleteSet
+            .enabled(app.command_context(), app.locale)
+            .is_err());
+
+        let playback_before = app.playback_end;
+        app.document.sets[0].generated_by = drill_core::GeneratorId::new(99);
+        app.execute_command(Command::DuplicateSet, &context);
+        assert_eq!(app.document.sets.len(), 2);
+        assert_eq!(app.current_set, 1);
+        assert!(app.document.sets[1].generated_by.is_none());
+        assert_eq!(app.playback_end, app.document.timeline_counts());
+        assert!(app.playback_end > playback_before);
+        assert!(app.dirty);
+        assert_eq!(app.count_position, 0.0);
+
+        let roster = app.document.performers.len();
+        app.execute_command(Command::AddPerformer, &context);
+        assert_eq!(app.document.performers.len(), roster + 1);
+        assert!(app
+            .document
+            .sets
+            .iter()
+            .all(|set| set.positions.len() == roster + 1));
+        assert_eq!(app.selected.len(), 1);
+
+        app.execute_command(Command::RemoveSelectedPerformers, &context);
+        assert_eq!(app.document.performers.len(), roster);
+        assert!(app.selected.is_empty());
+
+        app.execute_command(Command::SelectAll, &context);
+        app.execute_command(Command::RemoveSelectedPerformers, &context);
+        assert_eq!(app.document.performers.len(), roster);
+        assert_eq!(
+            app.status,
+            "最後の演者は削除できません。先に選択を減らしてください"
+        );
+
+        app.execute_command(Command::DeleteSet, &context);
+        assert_eq!(app.document.sets.len(), 1);
+        assert_eq!(app.current_set, 0);
+        assert!(Command::DeleteSet
+            .enabled(app.command_context(), app.locale)
+            .is_err());
+        app.execute_command(Command::DeleteSet, &context);
+        assert_eq!(app.document.sets.len(), 1);
+    }
+
+    #[test]
+    fn duplicating_a_set_then_undoing_keeps_current_set_in_range() {
+        let context = egui::Context::default();
+        let mut app = DrillApp::default();
+        app.begin_new_show();
+        app.execute_command(Command::DuplicateSet, &context);
+        assert_eq!(app.current_set, 1);
+        app.execute_command(Command::Undo, &context);
+        assert_eq!(app.document.sets.len(), 1);
+        assert!(app.current_set < app.document.sets.len());
+        assert_eq!(app.playback_end, app.document.timeline_counts());
+        let _ = app.document.sets[app.current_set].name.as_str();
+    }
+
+    #[test]
+    fn new_document_prompts_when_the_show_is_dirty() {
+        let context = egui::Context::default();
+        let mut app = DrillApp {
+            dirty: true,
+            ..DrillApp::default()
+        };
+        app.execute_command(Command::NewDocument, &context);
+        assert!(matches!(
+            app.document_open_guard,
+            super::super::DocumentOpenGuard::Prompt(super::super::DocumentOpenTarget::NewShow)
+        ));
+        assert_eq!(
+            app.document.sets.len(),
+            DrillApp::default().document.sets.len()
+        );
+    }
+
+    #[test]
+    fn new_document_starts_immediately_when_clean() {
+        let context = egui::Context::default();
+        let mut app = DrillApp::default();
+        let demo_sets = app.document.sets.len();
+        assert!(demo_sets > 1);
+        app.execute_command(Command::NewDocument, &context);
+        assert_eq!(app.document.sets.len(), 1);
+        assert_eq!(app.document.performers.len(), 16);
+        assert!(matches!(
+            app.document_open_guard,
+            super::super::DocumentOpenGuard::Idle
+        ));
+    }
+
+    #[test]
     fn menus_open_every_workspace_and_english_copy_is_clean() {
         let context = egui::Context::default();
         let mut app = DrillApp {
@@ -179,17 +284,16 @@ mod tests {
         let mut invalid = app.document.grid.clone();
         invalid.width = f32::NAN;
 
-        assert!(
-            app.history
-                .execute(
-                    &mut app.document,
-                    Edit::ReplaceGrid {
-                        grid: invalid,
-                        scale_positions: false,
-                    },
-                )
-                .is_err()
-        );
+        assert!(app
+            .history
+            .execute(
+                &mut app.document,
+                Edit::ReplaceGrid {
+                    grid: invalid,
+                    scale_positions: false,
+                },
+            )
+            .is_err());
         assert_eq!(app.document, original);
         assert!(!app.history.can_undo());
     }
@@ -629,12 +733,13 @@ mod tests {
             .expect("document object")
             .remove("generators");
         for set in legacy["sets"].as_array_mut().expect("sets array") {
-            set.as_object_mut().expect("set object").remove("generated_by");
+            set.as_object_mut()
+                .expect("set object")
+                .remove("generated_by");
         }
-        let legacy = drill_core::Document::from_json(
-            &serde_json::to_string(&legacy).expect("re-serialize"),
-        )
-        .expect("older document loads");
+        let legacy =
+            drill_core::Document::from_json(&serde_json::to_string(&legacy).expect("re-serialize"))
+                .expect("older document loads");
         assert!(legacy.generators.is_empty());
         assert!(legacy.sets.iter().all(|set| set.generated_by.is_none()));
     }
@@ -794,10 +899,9 @@ mod tests {
         app.restore_selection_history_at(1);
 
         assert_eq!(app.selected, [0_usize, 1].into_iter().collect());
-        assert!(
-            app.selection_stack
-                .contains(&[3_usize].into_iter().collect())
-        );
+        assert!(app
+            .selection_stack
+            .contains(&[3_usize].into_iter().collect()));
         assert_eq!(app.document, document);
         assert_eq!(app.history.revision(), revision);
     }
@@ -884,8 +988,10 @@ mod tests {
 
     #[test]
     fn knife_ignores_a_degenerate_zero_length_line() {
-        let mut app = DrillApp::default();
-        app.selected = [0_usize, 1].into_iter().collect();
+        let mut app = DrillApp {
+            selected: [0_usize, 1].into_iter().collect(),
+            ..DrillApp::default()
+        };
         let before = app.selected.clone();
 
         app.apply_knife_cut(Point { x: 3.0, y: 3.0 }, Point { x: 3.0, y: 3.0 });
@@ -911,10 +1017,9 @@ mod tests {
         // The two merged entries are consumed; the pre-glue selection ({3})
         // is remembered in their place, so it stays one Restore away.
         assert_eq!(app.selection_stack.len(), 1);
-        assert!(
-            app.selection_stack
-                .contains(&[3_usize].into_iter().collect())
-        );
+        assert!(app
+            .selection_stack
+            .contains(&[3_usize].into_iter().collect()));
         assert_eq!(app.document, document);
         assert_eq!(app.history.revision(), revision);
     }
@@ -930,7 +1035,9 @@ mod tests {
         app.glue_merge_one(1); // recency 1 = the older entry, {0}.
 
         assert_eq!(app.selected, [0_usize, 2].into_iter().collect());
-        assert!(app.selection_stack.contains(&[1_usize].into_iter().collect()));
+        assert!(app
+            .selection_stack
+            .contains(&[1_usize].into_iter().collect()));
         assert_eq!(app.selection_stack.len(), 2); // {1} plus the pre-glue {2}.
     }
 
@@ -947,10 +1054,9 @@ mod tests {
         // history stack automatically, the same as any other selection
         // change, without Glue needing its own explicit bookkeeping.
         app.replace_selection([2_usize].into_iter().collect());
-        assert!(
-            app.selection_stack
-                .contains(&[0_usize, 1].into_iter().collect())
-        );
+        assert!(app
+            .selection_stack
+            .contains(&[0_usize, 1].into_iter().collect()));
     }
 
     #[test]
@@ -1029,20 +1135,16 @@ mod tests {
         assert_eq!(app.count_position, 0.0);
         assert!(!app.playing);
         assert_eq!(app.selected, [0, 1].into_iter().collect());
-        assert!(
-            Command::NextSet
-                .enabled(app.command_context(), app.locale)
-                .is_err()
-        );
+        assert!(Command::NextSet
+            .enabled(app.command_context(), app.locale)
+            .is_err());
 
         app.execute_command(Command::PreviousSet, &context);
         assert_eq!(app.current_set, 0);
         assert_eq!(app.count_position, 0.0);
-        assert!(
-            Command::PreviousSet
-                .enabled(app.command_context(), app.locale)
-                .is_err()
-        );
+        assert!(Command::PreviousSet
+            .enabled(app.command_context(), app.locale)
+            .is_err());
     }
 
     #[test]

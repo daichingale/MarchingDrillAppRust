@@ -806,6 +806,14 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "onboarding.018") => {
             "Drag from empty space: box-select   Drag a performer: move formation"
         }
+        (Locale::Ja, "onboarding.029") => "セットと演者",
+        (Locale::En, "onboarding.029") => "Sets and performers",
+        (Locale::Ja, "onboarding.030") => {
+            "ツールバーの「＋セット」で現在の隊形を次のセットにコピー。PageUp/PageDownでセット移動。「＋演者」で追加、Delete（MacはBackspace）で選択を削除。最後のセットと最後の演者は残ります。"
+        }
+        (Locale::En, "onboarding.030") => {
+            "Toolbar \"+ Set\" copies this formation into the next set. PageUp/PageDown change sets. \"+ Performer\" adds one; Delete (Backspace on Mac) removes the selection. The last set and last performer are kept."
+        }
         (Locale::Ja, "onboarding.019") => "再生とタイムライン",
         (Locale::En, "onboarding.019") => "Playback and timeline",
         (Locale::Ja, "onboarding.020") => "Space: 再生/一時停止　I: 範囲開始　O: 範囲終了",
@@ -1259,7 +1267,9 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
             "Choose an earlier working group. Your current selection stays in the session history."
         }
         (Locale::Ja, "workspace-inspector.125") => "選択した演者を反時計回りに15°回転します",
-        (Locale::En, "workspace-inspector.125") => "Rotate the selected performers 15° counter-clockwise",
+        (Locale::En, "workspace-inspector.125") => {
+            "Rotate the selected performers 15° counter-clockwise"
+        }
         (Locale::Ja, "workspace-inspector.126") => "選択した演者を時計回りに15°回転します",
         (Locale::En, "workspace-inspector.126") => "Rotate the selected performers 15° clockwise",
         (Locale::Ja, "workspace-inspector.144") => "フォローザリーダー",
@@ -1272,17 +1282,13 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         }
         (Locale::Ja, "workspace-inspector.146") => "経路を描く",
         (Locale::En, "workspace-inspector.146") => "Draw Path",
-        (Locale::Ja, "workspace-inspector.147") => {
-            "選択した演者がなぞる経路をドラッグして描きます"
-        }
+        (Locale::Ja, "workspace-inspector.147") => "選択した演者がなぞる経路をドラッグして描きます",
         (Locale::En, "workspace-inspector.147") => {
             "Drag to draw the path the selected group will follow"
         }
         (Locale::Ja, "workspace-inspector.148") => "フォロー",
         (Locale::En, "workspace-inspector.148") => "Follow",
-        (Locale::Ja, "workspace-inspector.149") => {
-            "フォローザリーダーには2名以上の選択が必要です"
-        }
+        (Locale::Ja, "workspace-inspector.149") => "フォローザリーダーには2名以上の選択が必要です",
         (Locale::En, "workspace-inspector.149") => {
             "Follow the Leader needs at least two selected performers"
         }
@@ -1290,12 +1296,8 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "workspace-inspector.150") => "Couldn't allocate a new set ID",
         (Locale::Ja, "workspace-inspector.151") => "フォローザリーダーの適用に失敗しました",
         (Locale::En, "workspace-inspector.151") => "Failed to apply Follow the Leader",
-        (Locale::Ja, "workspace-inspector.152") => {
-            "フォローザリーダーの中間セットを追加しました"
-        }
-        (Locale::En, "workspace-inspector.152") => {
-            "Added Follow the Leader intermediate sets"
-        }
+        (Locale::Ja, "workspace-inspector.152") => "フォローザリーダーの中間セットを追加しました",
+        (Locale::En, "workspace-inspector.152") => "Added Follow the Leader intermediate sets",
         (Locale::Ja, "workspace-inspector.153") => "経路が無効です",
         (Locale::En, "workspace-inspector.153") => "Invalid path",
         (Locale::Ja, "workspace-inspector.154") => "中間セット数",
@@ -1308,9 +1310,7 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "workspace-inspector.157") => "Draw a path first",
         (Locale::Ja, "workspace-inspector.158") => "直線を使用",
         (Locale::En, "workspace-inspector.158") => "Use a Straight Line",
-        (Locale::Ja, "workspace-inspector.159") => {
-            "選択範囲の対角線を経路として使用します"
-        }
+        (Locale::Ja, "workspace-inspector.159") => "選択範囲の対角線を経路として使用します",
         (Locale::En, "workspace-inspector.159") => {
             "Uses the selection's bounding diagonal as the path"
         }
@@ -2148,12 +2148,8 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "app-ui.162") => "Color Theme",
         (Locale::Ja, "app-ui.163") => "ピンウィール",
         (Locale::En, "app-ui.163") => "Pinwheel",
-        (Locale::Ja, "app-ui.164") => {
-            "選択した演者を中心点を軸に回転します。"
-        }
-        (Locale::En, "app-ui.164") => {
-            "Rotate the selected performers around their centroid."
-        }
+        (Locale::Ja, "app-ui.164") => "選択した演者を中心点を軸に回転します。",
+        (Locale::En, "app-ui.164") => "Rotate the selected performers around their centroid.",
         (Locale::Ja, "app-ui.165") => "セッション表示…",
         (Locale::En, "app-ui.165") => "Session display…",
         (Locale::Ja, "clinic-ui.001") => "警告から演者をフォーカス",
@@ -2354,9 +2350,7 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "workspace-inspector.171") => "Drawing: drag on the field",
         (Locale::Ja, "workspace-inspector.172") => "破棄",
         (Locale::En, "workspace-inspector.172") => "Discard",
-        (Locale::Ja, "workspace-inspector.173") => {
-            "フォローザリーダーには2名以上の選択が必要です"
-        }
+        (Locale::Ja, "workspace-inspector.173") => "フォローザリーダーには2名以上の選択が必要です",
         (Locale::En, "workspace-inspector.173") => {
             "Follow the Leader needs at least two selected performers"
         }
@@ -2452,9 +2446,7 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "workspace-inspector.203") => "Update path",
         (Locale::Ja, "workspace-inspector.204") => "焼き込む",
         (Locale::En, "workspace-inspector.204") => "Bake",
-        (Locale::Ja, "workspace-inspector.205") => {
-            "生成情報を破棄し、通常のセットとして固定します"
-        }
+        (Locale::Ja, "workspace-inspector.205") => "生成情報を破棄し、通常のセットとして固定します",
         (Locale::En, "workspace-inspector.205") => {
             "Discard the generator and keep the sets as ordinary sets"
         }
@@ -2523,9 +2515,7 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::Ja, "presence.014") => {
             "暗号化とサインインはありません。信頼できるネットワークでのみ使用してください。"
         }
-        (Locale::En, "presence.014") => {
-            "No encryption or sign-in. Use only on a trusted network."
-        }
+        (Locale::En, "presence.014") => "No encryption or sign-in. Use only on a trusted network.",
         (Locale::Ja, "presence.015") => "ルームに参加しました",
         (Locale::En, "presence.015") => "Joined the collaboration room",
         (Locale::Ja, "presence.016") => "ルームから退出しました",
@@ -2536,6 +2526,64 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "presence.018") => "You",
         (Locale::Ja, "presence.019") => "コラボレーターを表示切替",
         (Locale::En, "presence.019") => "Toggle Collaborators",
+        (Locale::Ja, "commands.137") => "新規ドリル…",
+        (Locale::En, "commands.137") => "New Drill…",
+        (Locale::Ja, "commands.138") => "演者を追加",
+        (Locale::En, "commands.138") => "Add Performer",
+        (Locale::Ja, "commands.139") => "選択した演者を削除",
+        (Locale::En, "commands.139") => "Remove Selected Performers",
+        (Locale::Ja, "commands.140") => "このセットを削除",
+        (Locale::En, "commands.140") => "Delete Current Set",
+        (Locale::Ja, "onboarding.025") => "空のドリルで始める",
+        (Locale::En, "onboarding.025") => "Start Empty Drill",
+        (Locale::Ja, "onboarding.026") => "演者16人・1セットから作成します",
+        (Locale::En, "onboarding.026") => "Create a 16-performer, one-set show",
+        (Locale::Ja, "onboarding.027") => "かんたんモードで始める",
+        (Locale::En, "onboarding.027") => "Start in Simple Mode",
+        (Locale::Ja, "onboarding.028") => "4ステップのガイド付き編集です",
+        (Locale::En, "onboarding.028") => "A four-step guided editor",
+        (Locale::Ja, "core-edit.001") => "前のセット (PageUp)",
+        (Locale::En, "core-edit.001") => "Previous set (PageUp)",
+        (Locale::Ja, "core-edit.002") => "次のセット (PageDown)",
+        (Locale::En, "core-edit.002") => "Next set (PageDown)",
+        (Locale::Ja, "core-edit.003") => "＋セット",
+        (Locale::En, "core-edit.003") => "+ Set",
+        (Locale::Ja, "core-edit.004") => {
+            "現在の隊形をコピーして次のセットを追加します (Ctrl/Cmd+D)"
+        }
+        (Locale::En, "core-edit.004") => "Copy this formation into a new set (Ctrl/Cmd+D)",
+        (Locale::Ja, "core-edit.005") => "＋演者",
+        (Locale::En, "core-edit.005") => "+ Performer",
+        (Locale::Ja, "core-edit.006") => "選択の近く、またはフィールド中央に1人追加します",
+        (Locale::En, "core-edit.006") => "Add one performer near the selection, or at field center",
+        (Locale::Ja, "core-edit.007") => "－演者",
+        (Locale::En, "core-edit.007") => "− Performer",
+        (Locale::Ja, "core-edit.008") => "選択した演者を全セットから削除します (Delete)",
+        (Locale::En, "core-edit.008") => "Remove the selected performers from every set (Delete)",
+        (Locale::Ja, "core-edit.009") => {
+            "ホイール: 拡大　中ボタンまたはSpace+ドラッグ: 移動　PageUp/PageDown: セット移動"
+        }
+        (Locale::En, "core-edit.009") => {
+            "Wheel: zoom · Middle-button or Space-drag: pan · PageUp/PageDown: change set"
+        }
+        (Locale::Ja, "core-edit.010") => "演者16人・1セットの新しいドリルを始めました",
+        (Locale::En, "core-edit.010") => "Started a new 16-performer, one-set drill",
+        (Locale::Ja, "core-edit.011") => "演者を追加しました",
+        (Locale::En, "core-edit.011") => "Added a performer",
+        (Locale::Ja, "core-edit.012") => "選択した演者を削除しました",
+        (Locale::En, "core-edit.012") => "Removed the selected performers",
+        (Locale::Ja, "core-edit.013") => "セットを削除しました",
+        (Locale::En, "core-edit.013") => "Deleted the set",
+        (Locale::Ja, "core-edit.014") => "演者を追加できません",
+        (Locale::En, "core-edit.014") => "Could not add a performer",
+        (Locale::Ja, "core-edit.015") => "演者を削除できません",
+        (Locale::En, "core-edit.015") => "Could not remove performers",
+        (Locale::Ja, "core-edit.016") => "セットを削除できません",
+        (Locale::En, "core-edit.016") => "Could not delete the set",
+        (Locale::Ja, "core-edit.017") => "セットを削除",
+        (Locale::En, "core-edit.017") => "Delete set",
+        (Locale::Ja, "core-edit.018") => "最後の演者は削除できません。先に選択を減らしてください",
+        (Locale::En, "core-edit.018") => "Keep at least one performer. Deselect someone first",
         _ => "[missing message]",
     }
 }

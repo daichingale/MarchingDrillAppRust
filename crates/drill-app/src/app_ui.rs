@@ -916,6 +916,12 @@ impl eframe::App for DrillApp {
                     super::i18n::registered(self.locale, document_state),
                 );
                 if ui
+                    .button(UiCommand::NewDocument.label(self.locale))
+                    .clicked()
+                {
+                    self.execute_command(UiCommand::NewDocument, ui.ctx());
+                }
+                if ui
                     .button(text(self.locale, Text::Open))
                     .on_hover_text(super::i18n::registered(self.locale, "app-ui.025"))
                     .clicked()
@@ -952,6 +958,7 @@ impl eframe::App for DrillApp {
                 {
                     self.toggle_playback(ui.ctx());
                 }
+                self.core_edit_toolbar(ui);
                 if ui
                     .button(super::i18n::registered(self.locale, "app-ui.027"))
                     .on_hover_text(super::i18n::registered(self.locale, "app-ui.028"))
@@ -1856,10 +1863,8 @@ impl eframe::App for DrillApp {
                         // to a selection should land square on the field, not
                         // overshoot it.
                         self.field_viewport.stop_glide();
-                        self.field_viewport.clamp_center(
-                            &self.document.grid,
-                            response.rect.shrink(18.0).size(),
-                        );
+                        self.field_viewport
+                            .clamp_center(&self.document.grid, response.rect.shrink(18.0).size());
                     }
                 }
                 let nudge = ui.input_mut(|input| {
@@ -1934,15 +1939,9 @@ impl eframe::App for DrillApp {
                     self.field_viewport.end_pan();
                 }
                 if response.hovered() {
-                    let (scroll, modifiers, pointer) = ui.input(|input| {
-                        (
-                            input.smooth_scroll_delta.y,
-                            input.modifiers,
-                            input.pointer.hover_pos(),
-                        )
-                    });
+                    let (scroll, pointer) =
+                        ui.input(|input| (input.smooth_scroll_delta.y, input.pointer.hover_pos()));
                     if scroll != 0.0
-                        && (modifiers.command || modifiers.ctrl)
                         && let Some(pointer) = pointer
                     {
                         // Accumulate into a target; `tick` eases the live zoom
@@ -1967,8 +1966,7 @@ impl eframe::App for DrillApp {
                 // from paired begin/end calls, so a drag abandoned by any of
                 // the several early-outs below can never leave the lift stuck
                 // on.
-                self.field_viewport
-                    .set_dot_drag(self.drag_before.is_some());
+                self.field_viewport.set_dot_drag(self.drag_before.is_some());
                 if self.field_viewport.tick(dt, &self.document.grid, rect) {
                     ui.ctx().request_repaint();
                 }
@@ -2043,7 +2041,7 @@ impl eframe::App for DrillApp {
                                     }
                                 }
                             });
-                            ui.small(super::i18n::registered(self.locale, "app-ui.128"));
+                            ui.small(super::i18n::registered(self.locale, "core-edit.009"));
                         });
                     });
                 let render_options = drill_render::RenderOptions {
@@ -2782,6 +2780,11 @@ impl eframe::App for DrillApp {
             Some(onboarding::WelcomeAction::OpenProject) => {
                 self.request_open_document(DocumentOpenKind::Project)
             }
+            Some(onboarding::WelcomeAction::NewShow) => self.begin_new_show(),
+            Some(onboarding::WelcomeAction::SimpleMode) => {
+                self.begin_new_show();
+                self.simple_mode.enabled = true;
+            }
             None => {}
         }
         self.onboarding.persist_if_changed();
@@ -2813,6 +2816,86 @@ impl eframe::App for DrillApp {
 }
 
 impl DrillApp {
+    fn core_edit_toolbar(&mut self, ui: &mut egui::Ui) {
+        let context = self.command_context();
+        ui.separator();
+        let previous = UiCommand::PreviousSet.enabled(context, self.locale);
+        let previous_response = ui
+            .add_enabled(previous.is_ok(), egui::Button::new("◀"))
+            .on_hover_text(super::i18n::registered(self.locale, "core-edit.001"));
+        let previous_response = match previous {
+            Ok(()) => previous_response,
+            Err(reason) => previous_response.on_disabled_hover_text(reason),
+        };
+        if previous_response.clicked() {
+            self.execute_command(UiCommand::PreviousSet, ui.ctx());
+        }
+        let set_name = self
+            .document
+            .sets
+            .get(self.current_set)
+            .map(|set| set.name.as_str())
+            .unwrap_or("—");
+        ui.strong(format!(
+            "{} {}/{}",
+            set_name,
+            self.current_set + 1,
+            self.document.sets.len().max(1)
+        ));
+        let next = UiCommand::NextSet.enabled(context, self.locale);
+        let next_response = ui
+            .add_enabled(next.is_ok(), egui::Button::new("▶"))
+            .on_hover_text(super::i18n::registered(self.locale, "core-edit.002"));
+        let next_response = match next {
+            Ok(()) => next_response,
+            Err(reason) => next_response.on_disabled_hover_text(reason),
+        };
+        if next_response.clicked() {
+            self.execute_command(UiCommand::NextSet, ui.ctx());
+        }
+        if ui
+            .button(super::i18n::registered(self.locale, "core-edit.003"))
+            .on_hover_text(super::i18n::registered(self.locale, "core-edit.004"))
+            .clicked()
+        {
+            self.execute_command(UiCommand::DuplicateSet, ui.ctx());
+        }
+        let delete_set = UiCommand::DeleteSet.enabled(context, self.locale);
+        let delete_set_response = ui.add_enabled(
+            delete_set.is_ok(),
+            egui::Button::new(super::i18n::registered(self.locale, "core-edit.017")),
+        );
+        let delete_set_response = match delete_set {
+            Ok(()) => delete_set_response,
+            Err(reason) => delete_set_response.on_disabled_hover_text(reason),
+        };
+        if delete_set_response.clicked() {
+            self.execute_command(UiCommand::DeleteSet, ui.ctx());
+        }
+        ui.separator();
+        if ui
+            .button(super::i18n::registered(self.locale, "core-edit.005"))
+            .on_hover_text(super::i18n::registered(self.locale, "core-edit.006"))
+            .clicked()
+        {
+            self.execute_command(UiCommand::AddPerformer, ui.ctx());
+        }
+        let remove = UiCommand::RemoveSelectedPerformers.enabled(context, self.locale);
+        let remove_response = ui
+            .add_enabled(
+                remove.is_ok(),
+                egui::Button::new(super::i18n::registered(self.locale, "core-edit.007")),
+            )
+            .on_hover_text(super::i18n::registered(self.locale, "core-edit.008"));
+        let remove_response = match remove {
+            Ok(()) => remove_response,
+            Err(reason) => remove_response.on_disabled_hover_text(reason),
+        };
+        if remove_response.clicked() {
+            self.execute_command(UiCommand::RemoveSelectedPerformers, ui.ctx());
+        }
+    }
+
     /// Drives the field canvas radial marking menu: the same nine selection
     /// commands the field has always offered, chosen by the direction of a
     /// right-drag instead of by picking a row out of a list.
@@ -3170,7 +3253,12 @@ impl DrillApp {
         pos: Pos2,
         index: usize,
     ) {
-        let Some(rank) = self.selected.iter().position(|&i| i == index).map(|p| p + 1) else {
+        let Some(rank) = self
+            .selected
+            .iter()
+            .position(|&i| i == index)
+            .map(|p| p + 1)
+        else {
             return;
         };
         let mut digits: u32 = 1;
@@ -3182,7 +3270,11 @@ impl DrillApp {
         let radius = 7.5 + 2.3 * (digits - 1) as f32;
         let center = pos + Vec2::new(8.0, 9.0);
         painter.circle_filled(center, radius, Color32::from_rgb(245, 197, 66));
-        painter.circle_stroke(center, radius, Stroke::new(1.0, Color32::from_black_alpha(200)));
+        painter.circle_stroke(
+            center,
+            radius,
+            Stroke::new(1.0, Color32::from_black_alpha(200)),
+        );
         painter.text(
             center,
             egui::Align2::CENTER_CENTER,

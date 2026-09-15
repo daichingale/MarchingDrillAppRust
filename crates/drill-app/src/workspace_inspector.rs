@@ -111,8 +111,24 @@ impl DrillApp {
                     self.navigate_to_set(index);
                 }
             }
-            if ui.button(super::i18n::registered(self.locale, "workspace-inspector.003")).clicked() {
+            if ui
+                .button(super::commands::Command::DuplicateSet.label(self.locale))
+                .clicked()
+            {
                 self.duplicate_current_set();
+            }
+            let delete_set = super::commands::Command::DeleteSet
+                .enabled(self.command_context(), self.locale);
+            let delete_set_response = ui.add_enabled(
+                delete_set.is_ok(),
+                egui::Button::new(super::commands::Command::DeleteSet.label(self.locale)),
+            );
+            let delete_set_response = match delete_set {
+                Ok(()) => delete_set_response,
+                Err(reason) => delete_set_response.on_disabled_hover_text(reason),
+            };
+            if delete_set_response.clicked() {
+                self.delete_current_set();
             }
             ui.collapsing(super::i18n::registered(self.locale, "count-adjust.001"), |ui| {
                 ui.small(super::i18n::registered(self.locale, "count-adjust.002"));
@@ -229,6 +245,21 @@ impl DrillApp {
                 }
                 if ui.button(super::i18n::registered(self.locale, "workspace-inspector.021")).clicked() {
                     self.clear_selection();
+                }
+                if ui
+                    .button(super::commands::Command::AddPerformer.label(self.locale))
+                    .clicked()
+                {
+                    self.add_performer();
+                }
+                if ui
+                    .add_enabled(
+                        !self.selected.is_empty(),
+                        egui::Button::new(super::commands::Command::RemoveSelectedPerformers.label(self.locale)),
+                    )
+                    .clicked()
+                {
+                    self.remove_selected_performers();
                 }
                 if ui
                     .add_enabled(

@@ -418,6 +418,16 @@ impl DrillApp {
             {
                 self.duplicate_current_set();
             }
+            let delete_set = UiCommand::DeleteSet.enabled(self.command_context(), self.locale);
+            if ui
+                .add_enabled(
+                    delete_set.is_ok(),
+                    egui::Button::new(UiCommand::DeleteSet.label(self.locale)),
+                )
+                .clicked()
+            {
+                self.delete_current_set();
+            }
         });
         ui.add_space(6.0);
         self.simple_field_full_ui(ui, false);
@@ -436,6 +446,23 @@ impl DrillApp {
                 i18n::registered(self.locale, "simple-mode.019"),
                 self.selected.len()
             ));
+            if ui
+                .button(UiCommand::AddPerformer.label(self.locale))
+                .clicked()
+            {
+                self.add_performer();
+            }
+            let remove =
+                UiCommand::RemoveSelectedPerformers.enabled(self.command_context(), self.locale);
+            if ui
+                .add_enabled(
+                    remove.is_ok(),
+                    egui::Button::new(UiCommand::RemoveSelectedPerformers.label(self.locale)),
+                )
+                .clicked()
+            {
+                self.remove_selected_performers();
+            }
         });
         ui.add_space(6.0);
         self.simple_field_full_ui(ui, true);

@@ -42,6 +42,8 @@ mod onboarding;
 mod perf_hud;
 #[path = "plugin_state.rs"]
 mod plugin_state;
+#[path = "presence_state.rs"]
+mod presence_state;
 #[path = "print_state.rs"]
 mod print_state;
 #[path = "production_markers_panel.rs"]
@@ -68,8 +70,6 @@ mod subset_snapshot_state;
 mod text_export_state;
 #[path = "timeline.rs"]
 mod timeline;
-#[path = "presence_state.rs"]
-mod presence_state;
 #[cfg(test)]
 #[path = "ui_qa.rs"]
 mod ui_qa;
@@ -88,9 +88,9 @@ use drill_core::route_suggestions::{
 use drill_core::transition::SetCounts;
 use drill_core::video::{ExportPreset, VideoExportConfig};
 use drill_core::{
-    Document, Edit, GridConfig, GridLine, GridStyle, History, PerformerId, Point, Set, Unit,
-    camera::Camera, clinic, continuity, coordinates, editing, evenly_spaced_arc,
-    evenly_spaced_line, pathing, shapes,
+    Document, Edit, GridConfig, GridLine, GridStyle, History, Performer, PerformerId,
+    PerformerKind, Point, Set, Symbol, Unit, camera::Camera, clinic, continuity, coordinates,
+    editing, evenly_spaced_arc, evenly_spaced_line, pathing, shapes,
 };
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 use i18n::{Text, text};
@@ -384,6 +384,7 @@ pub(crate) enum DocumentOpenKind {
 pub(crate) enum DocumentOpenTarget {
     Dialog(DocumentOpenKind),
     Recent(PathBuf),
+    NewShow,
 }
 
 /// A deliberately session-only draft for timing changes.  Count changes can
@@ -720,7 +721,8 @@ impl Default for DrillApp {
                 *point = grid.snap(*point);
             }
         }
-        document.camera_program = drill_core::camera::CameraProgram::default_for_grid(&document.grid);
+        document.camera_program =
+            drill_core::camera::CameraProgram::default_for_grid(&document.grid);
         let playback_end = document.timeline_counts();
         let camera = Camera::press_box(&document.grid);
         Self {
@@ -1061,13 +1063,50 @@ impl DrillApp {
         self.cancel_knife();
     }
 
+    /// Structural edits and undo/redo can shrink the roster or the set list.
+    /// Session indexes (current set, selection, playback range) are not stored
+    /// in History, so they must be clamped or the next frame panics on
+    /// `sets[current_set]`.
+    fn clamp_session_to_document(&mut self) {
+        let set_count = self.document.sets.len().max(1);
+        self.current_set = self.current_set.min(set_count - 1);
+        let performer_count = self.document.performers.len();
+        self.selected.retain(|&index| index < performer_count);
+        let max_count = self
+            .document
+            .sets
+            .get(self.current_set)
+            .map(|set| f32::from(set.counts))
+            .unwrap_or(0.0);
+        self.count_position = self.count_position.clamp(0.0, max_count);
+        let total = self.document.timeline_counts();
+        self.playback_end = self.playback_end.min(total);
+        self.playback_start = self.playback_start.min(self.playback_end.saturating_sub(1));
+        self.timeline_view.normalize(total);
+        self.locked_performers
+            .retain(|id| self.document.performers.iter().any(|p| p.id == *id));
+        self.hidden_performers
+            .retain(|id| self.document.performers.iter().any(|p| p.id == *id));
+        if self
+            .visibility_focus
+            .is_some_and(|id| self.document.performers.iter().all(|p| p.id != id))
+        {
+            self.visibility_focus = None;
+        }
+    }
+
     /// Splits `base` into the two sides of the straight line from `start` to
     /// `end`, using a 2D cross-product half-plane test against each
     /// performer's CURRENT position. A point exactly on the line (`cross ==
     /// 0.0`) is treated as `side_a`. Returns `None` for a near-zero-length
     /// line (almost always an accidental click rather than an intended cut)
     /// or when `base` yields no on-document indexes.
-    fn knife_cut(&self, start: Point, end: Point, base: impl Iterator<Item = usize>) -> Option<KnifeSplit> {
+    fn knife_cut(
+        &self,
+        start: Point,
+        end: Point,
+        base: impl Iterator<Item = usize>,
+    ) -> Option<KnifeSplit> {
         let dx = end.x - start.x;
         let dy = end.y - start.y;
         if dx.hypot(dy) < 1e-4 {
@@ -1469,6 +1508,7 @@ impl DrillApp {
             .is_some(),
             has_previous_set: self.current_set > 0,
             has_next_set: self.current_set.saturating_add(1) < self.document.sets.len(),
+            has_multiple_sets: self.document.sets.len() > 1,
         }
     }
 
@@ -1497,11 +1537,16 @@ impl DrillApp {
             return;
         }
         let mut next = self.document.clone();
+        let previous_total = self.document.timeline_counts();
         next.sets.insert(
             insert_at,
             Set {
                 id: new_id,
-                name: format!("セット {}", insert_at + 1),
+                name: match self.locale {
+                    Locale::Ja => format!("セット {}", insert_at + 1),
+                    Locale::En => format!("Set {}", insert_at + 1),
+                },
+                generated_by: None,
                 ..source
             },
         );
@@ -1517,6 +1562,201 @@ impl DrillApp {
         self.current_set = insert_at;
         self.count_position = 0.0;
         self.dirty = true;
+        self.sync_playback_range_to_timeline(previous_total);
+    }
+
+    fn sync_playback_range_to_timeline(&mut self, previous_total: u32) {
+        let new_total = self.document.timeline_counts();
+        self.playback_end = if self.playback_end >= previous_total {
+            new_total
+        } else {
+            self.playback_end.min(new_total)
+        };
+        self.playback_start = self.playback_start.min(self.playback_end.saturating_sub(1));
+        self.timeline_view.normalize(new_total);
+    }
+
+    fn request_new_show(&mut self) {
+        self.request_open_target(DocumentOpenTarget::NewShow);
+    }
+
+    fn begin_new_show(&mut self) {
+        const BLANK_PERFORMERS: usize = 16;
+        let document = Document::blank(BLANK_PERFORMERS);
+        self.document = document;
+        self.tempo_bpm = self.document.tempo.bpm_at(0.0);
+        self.camera = Camera::press_box(&self.document.grid);
+        self.camera_program_preview = true;
+        self.section_manager.clear_drafts();
+        self.project_warnings.clear();
+        self.current_path = None;
+        self.current_set = 0;
+        self.count_position = 0.0;
+        self.playing = false;
+        self.audio_state = audio_state::AudioState::default();
+        self.audio_draft = None;
+        self.audio_draft_dirty = false;
+        self.reset_selection_for_document();
+        self.playback_start = 0;
+        self.playback_end = self.document.timeline_counts();
+        self.timeline_view = TimelineViewport::fit(self.playback_end);
+        self.field_viewport = field_view::FieldViewport::fit(&self.document.grid);
+        self.history = History::with_limit(500);
+        self.dirty = false;
+        self.frame_positions.clear();
+        self.frame_positions.reserve(self.document.performers.len());
+        self.formation_preview_spec = None;
+        self.formation_preview_points.clear();
+        self.clipboard_paste_preview = None;
+        self.formation_clipboard = FormationClipboard::default();
+        self.follow_leader_editing = None;
+        self.set_count_draft = None;
+        self.set_comparison = None;
+        self.grid_draft = None;
+        self.grid_draft_dirty = false;
+        self.tempo_draft = None;
+        self.tempo_draft_dirty = false;
+        self.free_draw_active = false;
+        self.free_draw_raw.clear();
+        self.underlay_state.remove();
+        self.status = i18n::registered(self.locale, "core-edit.010").into();
+    }
+
+    fn add_performer(&mut self) {
+        let failure = i18n::registered(self.locale, "core-edit.014");
+        let Some(id) = self.document.next_performer_id() else {
+            self.status = failure.into();
+            return;
+        };
+        let Some(section) = self.document.sections.first().map(|section| section.id) else {
+            self.status = failure.into();
+            return;
+        };
+        let grid = &self.document.grid;
+        let step = grid.horizontal_units / f32::from(grid.horizontal_steps.max(1));
+        let base = if let Some((min, max)) = self.selection_bounds() {
+            Point {
+                x: (min.x + max.x) * 0.5,
+                y: (min.y + max.y) * 0.5,
+            }
+        } else {
+            Point {
+                x: grid.width * 0.5,
+                y: grid.height * 0.5,
+            }
+        };
+        let position = grid.snap(Point {
+            x: (base.x + step).clamp(0.0, grid.max_x()),
+            y: base.y.clamp(0.0, grid.max_y()),
+        });
+        let mut next = self.document.clone();
+        if next
+            .add_performer(
+                Performer {
+                    id,
+                    label: format!("P{}", id.get()),
+                    section,
+                    symbol: Symbol::Cross,
+                    color: None.into(),
+                    height_m: 1.7,
+                    kind: PerformerKind::Wind,
+                },
+                position,
+            )
+            .is_err()
+        {
+            self.status = failure.into();
+            return;
+        }
+        if !self.execute_edit(
+            Edit::ReplaceDocument {
+                document: Box::new(next),
+            },
+            failure,
+        ) {
+            return;
+        }
+        if let Some(index) = self.document.performers.iter().position(|p| p.id == id) {
+            self.replace_selection([index].into_iter().collect());
+        }
+        self.status = i18n::registered(self.locale, "core-edit.011").into();
+    }
+
+    fn remove_selected_performers(&mut self) {
+        let failure = i18n::registered(self.locale, "core-edit.015");
+        if self.selected.is_empty() {
+            self.status = failure.into();
+            return;
+        }
+        let ids: Vec<PerformerId> = self
+            .selected
+            .iter()
+            .filter_map(|&index| self.document.performers.get(index).map(|p| p.id))
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        if ids.len() >= self.document.performers.len() {
+            self.status = i18n::registered(self.locale, "core-edit.018").into();
+            return;
+        }
+        let mut next = self.document.clone();
+        if next.remove_performers(&ids).is_err() {
+            self.status = failure.into();
+            return;
+        }
+        if !self.execute_edit(
+            Edit::ReplaceDocument {
+                document: Box::new(next),
+            },
+            failure,
+        ) {
+            return;
+        }
+        let dropped: BTreeSet<_> = ids.into_iter().collect();
+        self.locked_performers.retain(|id| !dropped.contains(id));
+        self.hidden_performers.retain(|id| !dropped.contains(id));
+        self.last_filtered_performers
+            .retain(|id| !dropped.contains(id));
+        if self
+            .visibility_focus
+            .is_some_and(|id| dropped.contains(&id))
+        {
+            self.visibility_focus = None;
+        }
+        self.selection_stack.clear();
+        self.selected.clear();
+        self.status = i18n::registered(self.locale, "core-edit.012").into();
+    }
+
+    fn delete_current_set(&mut self) {
+        let failure = i18n::registered(self.locale, "core-edit.016");
+        if self.document.sets.len() <= 1 {
+            self.status = failure.into();
+            return;
+        }
+        let previous_total = self.document.timeline_counts();
+        let index = self.current_set;
+        let mut next = self.document.clone();
+        if next.remove_set_at(index).is_err() {
+            self.status = failure.into();
+            return;
+        }
+        if !self.execute_edit(
+            Edit::ReplaceDocument {
+                document: Box::new(next),
+            },
+            failure,
+        ) {
+            return;
+        }
+        self.current_set = index.min(self.document.sets.len().saturating_sub(1));
+        self.count_position = 0.0;
+        self.playing = false;
+        self.audio_state.pause();
+        self.set_count_draft = None;
+        self.sync_playback_range_to_timeline(previous_total);
+        self.status = i18n::registered(self.locale, "core-edit.013").into();
     }
 
     /// Auto-generates a "follow the leader" snake maneuver as `steps`
@@ -1819,6 +2059,7 @@ impl DrillApp {
 
     fn execute_command(&mut self, command: UiCommand, context: &egui::Context) {
         match command {
+            UiCommand::NewDocument => self.request_new_show(),
             UiCommand::OpenDocument => self.request_open_document(DocumentOpenKind::LegacyJson),
             UiCommand::OpenProject => self.request_open_document(DocumentOpenKind::Project),
             UiCommand::OpenRecent => self.show_recent_projects = true,
@@ -1831,18 +2072,22 @@ impl DrillApp {
             UiCommand::Undo => {
                 if self.history.undo(&mut self.document) {
                     self.dirty = true;
+                    self.clamp_session_to_document();
                     self.status = i18n::registered(self.locale, "app-state.149").into();
                 }
             }
             UiCommand::Redo => {
                 if self.history.redo(&mut self.document) {
                     self.dirty = true;
+                    self.clamp_session_to_document();
                     self.status = i18n::registered(self.locale, "app-state.150").into();
                 }
             }
             UiCommand::SelectAll => {
                 self.replace_selection((0..self.document.performers.len()).collect())
             }
+            UiCommand::AddPerformer => self.add_performer(),
+            UiCommand::RemoveSelectedPerformers => self.remove_selected_performers(),
             UiCommand::ClearSelection => {
                 if self.clipboard_paste_preview.is_some() {
                     self.cancel_clipboard_paste_preview();
@@ -1865,6 +2110,7 @@ impl DrillApp {
             UiCommand::LockSelection => self.lock_selected_performers(),
             UiCommand::HideSelection => self.hide_selected_performers(),
             UiCommand::DuplicateSet => self.duplicate_current_set(),
+            UiCommand::DeleteSet => self.delete_current_set(),
             UiCommand::ManageSections => self.section_manager.open = true,
             UiCommand::PlayPause => self.toggle_playback(context),
             UiCommand::RangeStart => self.navigate_to_global_count(self.playback_start),
@@ -3475,6 +3721,7 @@ impl DrillApp {
                     self.project_state.load_legacy_json(path);
                 }
             }
+            DocumentOpenTarget::NewShow => self.begin_new_show(),
         }
     }
 }
