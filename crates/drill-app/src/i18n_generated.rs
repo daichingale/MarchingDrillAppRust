@@ -2640,6 +2640,10 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         }
         (Locale::Ja, "core-edit.029") => "選択ツールに戻しました",
         (Locale::En, "core-edit.029") => "Back to Select",
+        (Locale::Ja, "core-edit.030") => "再生を止めてセット先頭に戻ると、演者を追加・削除できます",
+        (Locale::En, "core-edit.030") => {
+            "Pause and return to the set start to add or remove performers"
+        }
         _ => "[missing message]",
     }
 }

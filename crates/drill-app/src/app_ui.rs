@@ -2321,18 +2321,25 @@ impl eframe::App for DrillApp {
                         .any(|(_, point)| to_screen(*point).distance(pos) < 18.0)
                 });
                 if response.hovered() {
+                    let editable = self.is_editable_set_start();
                     ui.ctx().set_cursor_icon(match self.field_tool {
+                        FieldTool::Place if !editable => egui::CursorIcon::NotAllowed,
                         FieldTool::Place => egui::CursorIcon::Crosshair,
                         FieldTool::Move if self.drag_before.is_some() => egui::CursorIcon::Grabbing,
+                        FieldTool::Move if !editable && !self.selected.is_empty() => {
+                            egui::CursorIcon::NotAllowed
+                        }
+                        FieldTool::Move if self.selected.is_empty() => egui::CursorIcon::Default,
                         FieldTool::Move => egui::CursorIcon::Grab,
                         FieldTool::Select if self.drag_before.is_some() => {
                             egui::CursorIcon::Grabbing
                         }
-                        FieldTool::Select if hover_on_dot => egui::CursorIcon::Grab,
+                        FieldTool::Select if hover_on_dot && editable => egui::CursorIcon::Grab,
                         FieldTool::Select => egui::CursorIcon::Default,
                     });
                 }
                 if self.field_tool == FieldTool::Place
+                    && self.is_editable_set_start()
                     && !self.free_draw_active
                     && self.formation_preview_spec.is_none()
                     && self.clipboard_paste_preview.is_none()
@@ -2982,11 +2989,18 @@ impl DrillApp {
             }
         }
         ui.separator();
-        if ui
-            .button(super::i18n::registered(self.locale, "core-edit.005"))
-            .on_hover_text(super::i18n::registered(self.locale, "core-edit.006"))
-            .clicked()
-        {
+        let add = UiCommand::AddPerformer.enabled(context, self.locale);
+        let add_response = ui
+            .add_enabled(
+                add.is_ok(),
+                egui::Button::new(super::i18n::registered(self.locale, "core-edit.005")),
+            )
+            .on_hover_text(super::i18n::registered(self.locale, "core-edit.006"));
+        let add_response = match add {
+            Ok(()) => add_response,
+            Err(reason) => add_response.on_disabled_hover_text(reason),
+        };
+        if add_response.clicked() {
             self.execute_command(UiCommand::AddPerformer, ui.ctx());
         }
         let remove = UiCommand::RemoveSelectedPerformers.enabled(context, self.locale);

@@ -1776,6 +1776,9 @@ impl DrillApp {
     }
 
     fn remove_selected_performers(&mut self) {
+        if !self.ensure_editable_set_start() {
+            return;
+        }
         let failure = i18n::registered(self.locale, "core-edit.015");
         if self.selected.is_empty() {
             self.status = failure.into();

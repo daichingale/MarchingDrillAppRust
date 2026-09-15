@@ -227,6 +227,27 @@ mod tests {
     }
 
     #[test]
+    fn playback_locks_add_and_remove_with_a_visible_reason() {
+        let context = egui::Context::default();
+        let mut app = DrillApp::default();
+        app.begin_new_show();
+        app.playing = true;
+        app.selected = [0].into_iter().collect();
+        let roster = app.document.performers.len();
+        assert!(
+            Command::AddPerformer
+                .enabled(app.command_context(), app.locale)
+                .is_err()
+        );
+        assert_eq!(
+            Command::RemoveSelectedPerformers.enabled(app.command_context(), app.locale),
+            Err(super::super::i18n::registered(Locale::Ja, "core-edit.030"))
+        );
+        app.execute_command(Command::RemoveSelectedPerformers, &context);
+        assert_eq!(app.document.performers.len(), roster);
+    }
+
+    #[test]
     fn new_document_prompts_when_the_show_is_dirty() {
         let context = egui::Context::default();
         let mut app = DrillApp {

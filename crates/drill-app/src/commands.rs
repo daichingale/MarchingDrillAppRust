@@ -665,6 +665,9 @@ impl Command {
                 Locale::Ja => "先に演者を選択してください",
                 Locale::En => "Select performers first",
             }),
+            AddPerformer | RemoveSelectedPerformers if !context.can_edit_selection => {
+                Err(super::i18n::registered(locale, "core-edit.030"))
+            }
             ClearSelection if !context.has_selection && !context.can_exit_field_tool => {
                 Err(match locale {
                     Locale::Ja => "先に演者を選択してください",
