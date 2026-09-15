@@ -1218,8 +1218,8 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "workspace-inspector.102") => {
             "The sync anchor conflicts with adjacent anchors and cannot be changed"
         }
-        (Locale::Ja, "workspace-inspector.103") => "3. 演者編集（演者を選択してください）",
-        (Locale::En, "workspace-inspector.103") => "3. Edit Performers (select performers first)",
+        (Locale::Ja, "workspace-inspector.103") => "3. 演者一覧（クリックで選択）",
+        (Locale::En, "workspace-inspector.103") => "3. Performer list (click to select)",
         (Locale::Ja, "workspace-inspector.104") => "3. 選択中:",
         (Locale::En, "workspace-inspector.104") => "3. Selected:",
         (Locale::Ja, "workspace-inspector.105") => "の座標",
@@ -2643,6 +2643,18 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::Ja, "core-edit.030") => "再生を止めてセット先頭に戻ると、演者を追加・削除できます",
         (Locale::En, "core-edit.030") => {
             "Pause and return to the set start to add or remove performers"
+        }
+        (Locale::Ja, "core-edit.031") => {
+            "一覧をクリックするとフィールド上で選択されます。Shift / Ctrl / Cmd で追加選択"
+        }
+        (Locale::En, "core-edit.031") => {
+            "Click a name to select them on the field. Shift/Ctrl/Cmd adds to the selection"
+        }
+        (Locale::Ja, "core-edit.032") => {
+            "ツールバーまたは下の「配置」でフィールドをクリックして演者を置けます。"
+        }
+        (Locale::En, "core-edit.032") => {
+            "Use Place in the toolbar, then click the field to add performers."
         }
         _ => "[missing message]",
     }

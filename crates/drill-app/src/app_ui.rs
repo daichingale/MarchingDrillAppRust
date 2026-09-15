@@ -1,6 +1,8 @@
 use super::*;
 use std::f32::consts::TAU;
 
+const SELECTION_ACCENT: Color32 = Color32::from_rgb(76, 163, 255);
+
 impl eframe::App for DrillApp {
     /// This app never wraps its content in `egui::CentralPanel`, so the
     /// canvas behind every widget is exactly this clear color. eframe's
@@ -84,13 +86,7 @@ impl eframe::App for DrillApp {
         if let Some(event) = self.project_state.poll() {
             match event {
                 project_state::ProjectEvent::Saved(path) => {
-                    self.current_path = Some(path.clone());
-                    self.dirty = false;
-                    self.status = format!(
-                        "{}: {}",
-                        super::i18n::registered(self.locale, "app-ui.068"),
-                        path.display()
-                    );
+                    self.apply_saved_path(path);
                     if self.close_guard == CloseGuard::Saving {
                         self.close_guard = CloseGuard::Idle;
                         self.status =
@@ -103,54 +99,7 @@ impl eframe::App for DrillApp {
                     }
                 }
                 project_state::ProjectEvent::Loaded { path, project } => {
-                    let mut project = *project;
-                    let embedded_audio = project.manifest.assets.iter().find_map(|entry| {
-                        if entry.kind == drill_project::container::AssetKind::Audio {
-                            project
-                                .embedded
-                                .remove(&entry.id)
-                                .map(|bytes| (bytes, entry.original_name.clone()))
-                        } else {
-                            None
-                        }
-                    });
-                    let embedded_image = project.manifest.assets.iter().find_map(|entry| {
-                        (entry.kind == drill_project::container::AssetKind::Image)
-                            .then(|| {
-                                project
-                                    .embedded
-                                    .remove(&entry.id)
-                                    .map(|bytes| (bytes, entry.original_name.clone()))
-                            })
-                            .flatten()
-                    });
-                    self.document = project.document;
-                    self.tempo_bpm = self.document.tempo.bpm_at(0.0);
-                    self.camera = Camera::press_box(&self.document.grid);
-                    self.camera_program_preview = true;
-                    self.section_manager.clear_drafts();
-                    self.project_warnings = project.warnings;
-                    self.recent_projects.remember(path.clone());
-                    self.current_path = Some(path);
-                    self.current_set = 0;
-                    self.count_position = 0.0;
-                    self.reset_selection_for_document();
-                    self.playback_start = 0;
-                    self.playback_end = self.document.timeline_counts();
-                    self.history = History::with_limit(500);
-                    self.dirty = false;
-                    self.status = super::i18n::registered(self.locale, "app-ui.069").into();
-                    if let Some((bytes, name)) = embedded_audio {
-                        self.audio_state.start_decode_bytes(bytes, &name);
-                        self.status =
-                            format!("プロジェクトを開きました · 埋込音源 {name} を準備中…");
-                    }
-                    if let Some((bytes, name)) = embedded_image {
-                        self.underlay_state.load_bytes(bytes, name);
-                    } else if self.document.underlay.is_some() {
-                        self.underlay_state.remove();
-                        self.status = super::i18n::registered(self.locale, "app-ui.004").into();
-                    }
+                    self.apply_loaded_project(path, project);
                 }
                 project_state::ProjectEvent::Failed(error) => {
                     // A failed save must return the close sheet to its choice
@@ -2503,7 +2452,7 @@ impl eframe::App for DrillApp {
                         painter.rect_stroke(
                             group,
                             4.0,
-                            Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 90)),
+                            Stroke::new(1.0, SELECTION_ACCENT.gamma_multiply(0.55)),
                             StrokeKind::Outside,
                         );
                     }
@@ -2618,13 +2567,13 @@ impl eframe::App for DrillApp {
                         painter.circle_stroke(
                             pos,
                             11.0 + settle_ring,
-                            Stroke::new(2.0, Color32::WHITE),
+                            Stroke::new(2.0, SELECTION_ACCENT),
                         );
                         if self.selected.len() >= 2 {
                             self.paint_selection_rank_badge(&painter, pos, index);
                         }
                     }
-                    // Peer rings sit outside the local white selection ring so
+                    // Peer rings sit outside the local accent selection ring so
                     // the two never merge into one thick smear.
                     if let Some(performer) = self.document.performers.get(index) {
                         self.presence

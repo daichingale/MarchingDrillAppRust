@@ -1034,6 +1034,19 @@ impl DrillApp {
         }
     }
 
+    /// Inspector roster rows use the same selection set as the field.
+    fn select_performer_from_list(&mut self, index: usize, additive: bool) {
+        if additive {
+            let mut next = self.selected.clone();
+            if !next.insert(index) {
+                next.remove(&index);
+            }
+            self.replace_selection(next);
+        } else {
+            self.replace_selection([index].into_iter().collect());
+        }
+    }
+
     fn can_restore_selection(&self) -> bool {
         !self.selection_stack.is_empty()
     }
@@ -3721,6 +3734,78 @@ impl DrillApp {
         }
     }
 
+    fn apply_saved_path(&mut self, path: PathBuf) {
+        self.current_path = Some(path.clone());
+        self.dirty = false;
+        self.status = format!(
+            "{}: {}",
+            i18n::registered(self.locale, "app-ui.068"),
+            path.display()
+        );
+    }
+
+    fn apply_loaded_project(
+        &mut self,
+        path: PathBuf,
+        project: Box<drill_project::container::LoadedProject>,
+    ) {
+        let mut project = *project;
+        let embedded_audio = project.manifest.assets.iter().find_map(|entry| {
+            if entry.kind == drill_project::container::AssetKind::Audio {
+                project
+                    .embedded
+                    .remove(&entry.id)
+                    .map(|bytes| (bytes, entry.original_name.clone()))
+            } else {
+                None
+            }
+        });
+        let embedded_image = project.manifest.assets.iter().find_map(|entry| {
+            (entry.kind == drill_project::container::AssetKind::Image)
+                .then(|| {
+                    project
+                        .embedded
+                        .remove(&entry.id)
+                        .map(|bytes| (bytes, entry.original_name.clone()))
+                })
+                .flatten()
+        });
+        self.document = project.document;
+        self.tempo_bpm = self.document.tempo.bpm_at(0.0);
+        self.camera = Camera::press_box(&self.document.grid);
+        self.camera_program_preview = true;
+        self.section_manager.clear_drafts();
+        self.project_warnings = project.warnings;
+        self.recent_projects.remember(path.clone());
+        self.current_path = Some(path);
+        self.current_set = 0;
+        self.count_position = 0.0;
+        self.playing = false;
+        self.reset_selection_for_document();
+        self.field_tool = FieldTool::Select;
+        self.field_pointer = None;
+        self.drag_before = None;
+        self.drag_preview = None;
+        self.drag_origin = None;
+        self.marquee_origin = None;
+        self.field_viewport.reset(&self.document.grid);
+        self.playback_start = 0;
+        self.playback_end = self.document.timeline_counts();
+        self.history = History::with_limit(500);
+        self.dirty = false;
+        self.status = i18n::registered(self.locale, "app-ui.069").into();
+        if let Some((bytes, name)) = embedded_audio {
+            self.audio_state.start_decode_bytes(bytes, &name);
+            self.status = format!("プロジェクトを開きました · 埋込音源 {name} を準備中…");
+        }
+        if let Some((bytes, name)) = embedded_image {
+            self.underlay_state.load_bytes(bytes, name);
+        } else if self.document.underlay.is_some() {
+            self.underlay_state.remove();
+            self.status = i18n::registered(self.locale, "app-ui.004").into();
+        }
+    }
+
     /// Read-only 3D stadium visualization of the current frame. Editing stays in 2D.
     fn save_dialog(&mut self) {
         let path = self
@@ -3729,7 +3814,7 @@ impl DrillApp {
             .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
             .or_else(|| {
                 rfd::FileDialog::new()
-                    .add_filter("DrillForge", &["drill.json"])
+                    .add_filter("JSON", &["json"])
                     .set_file_name("untitled.drill.json")
                     .save_file()
             });
@@ -3743,7 +3828,7 @@ impl DrillApp {
     /// Save, which reuses the current legacy JSON path when there is one.
     fn save_as_dialog(&mut self) {
         if let Some(path) = rfd::FileDialog::new()
-            .add_filter("DrillForge", &["drill.json"])
+            .add_filter("JSON", &["json"])
             .set_file_name("untitled.drill.json")
             .save_file()
         {
@@ -3787,7 +3872,7 @@ impl DrillApp {
         match kind {
             DocumentOpenKind::LegacyJson => {
                 if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("DrillForge", &["json"])
+                    .add_filter("JSON", &["json"])
                     .pick_file()
                 {
                     self.project_state.load_legacy_json(path);

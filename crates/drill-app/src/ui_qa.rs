@@ -226,6 +226,119 @@ mod tests {
         assert_eq!(app.document.performers.len(), roster);
     }
 
+    fn wait_for_project_event(app: &mut DrillApp) -> super::super::project_state::ProjectEvent {
+        for _ in 0..400 {
+            if let Some(event) = app.project_state.poll() {
+                return event;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("project job timed out");
+    }
+
+    #[test]
+    fn create_place_save_and_reopen_roundtrips_the_document() {
+        let mut app = DrillApp::default();
+        app.begin_new_show();
+        let target = Point { x: 8.0, y: 6.0 };
+        app.place_performer_at(target, true);
+        let roster = app.document.performers.len();
+        let placed = *app.document.sets[0]
+            .positions
+            .last()
+            .expect("placed performer has a position");
+        let labels: Vec<String> = app
+            .document
+            .performers
+            .iter()
+            .map(|performer| performer.label.clone())
+            .collect();
+
+        let path = std::env::temp_dir().join(format!(
+            "drillforge-roundtrip-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        app.project_state
+            .save_legacy_json(path.clone(), app.document.clone());
+        match wait_for_project_event(&mut app) {
+            super::super::project_state::ProjectEvent::Saved(saved) => {
+                app.apply_saved_path(saved);
+            }
+            super::super::project_state::ProjectEvent::Loaded { .. } => {
+                panic!("expected Saved, got Loaded")
+            }
+            super::super::project_state::ProjectEvent::Failed(error) => {
+                panic!("save failed: {error}")
+            }
+        }
+        assert_eq!(app.current_path.as_deref(), Some(path.as_path()));
+        assert!(!app.dirty);
+
+        app.begin_new_show();
+        assert_eq!(app.document.performers.len(), 16);
+        assert!(app.current_path.is_none());
+
+        app.playing = true;
+        app.field_tool = super::super::FieldTool::Place;
+        app.project_state.load_legacy_json(path.clone());
+        match wait_for_project_event(&mut app) {
+            super::super::project_state::ProjectEvent::Loaded {
+                path: loaded,
+                project,
+            } => {
+                app.apply_loaded_project(loaded, project);
+            }
+            super::super::project_state::ProjectEvent::Saved(_) => {
+                panic!("expected Loaded, got Saved")
+            }
+            super::super::project_state::ProjectEvent::Failed(error) => {
+                panic!("load failed: {error}")
+            }
+        }
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(app.document.performers.len(), roster);
+        assert_eq!(
+            app.document
+                .performers
+                .iter()
+                .map(|performer| performer.label.as_str())
+                .collect::<Vec<_>>(),
+            labels.iter().map(String::as_str).collect::<Vec<_>>()
+        );
+        assert_eq!(app.document.sets[0].positions.last().copied(), Some(placed));
+        assert_eq!(app.current_path.as_deref(), Some(path.as_path()));
+        assert!(!app.dirty);
+        assert!(!app.playing);
+        assert_eq!(app.field_tool, super::super::FieldTool::Select);
+        assert!(app.selected.is_empty());
+        assert!(app.is_editable_set_start());
+    }
+
+    #[test]
+    fn inspector_list_and_field_share_the_same_selection() {
+        let mut app = DrillApp::default();
+        app.begin_new_show();
+        assert!(app.selected.is_empty());
+
+        app.select_performer_from_list(3, false);
+        assert_eq!(app.selected, [3].into_iter().collect());
+
+        app.select_performer_from_list(5, true);
+        assert_eq!(app.selected, [3, 5].into_iter().collect());
+
+        app.select_performer_from_list(3, true);
+        assert_eq!(app.selected, [5].into_iter().collect());
+
+        app.replace_selection([0, 2].into_iter().collect());
+        assert_eq!(app.selected, [0, 2].into_iter().collect());
+        app.clear_selection();
+        assert!(app.selected.is_empty());
+    }
+
     #[test]
     fn playback_locks_add_and_remove_with_a_visible_reason() {
         let context = egui::Context::default();
@@ -902,8 +1015,8 @@ mod tests {
             );
         }
         let ui = include_str!("app_ui.rs");
-        assert_eq!(ui.matches("self.document =").count(), 1);
-        assert!(ui.contains("self.document = project.document;"));
+        assert_eq!(ui.matches("self.document =").count(), 0);
+        assert!(include_str!("app_state.rs").contains("self.document = project.document;"));
         assert!(!include_str!("workspace_inspector.rs").contains("self.document ="));
     }
 

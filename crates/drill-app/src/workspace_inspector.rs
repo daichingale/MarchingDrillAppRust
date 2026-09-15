@@ -223,19 +223,9 @@ impl DrillApp {
                     .corner_radius(5)
                     .show(ui, |ui| {
                         ui.label(egui::RichText::new(super::i18n::registered(self.locale, "workspace-inspector.015")).strong());
-                        ui.small(super::i18n::registered(self.locale, "workspace-inspector.016"));
-                        if ui.button(super::i18n::registered(self.locale, "workspace-inspector.017")).clicked()
-                            && self.execute_edit(
-                                Edit::ReplaceDocument { document: Box::new(Document::demo(8, 10)) },
-                                super::i18n::registered(self.locale, "workspace-inspector.018"),
-                            )
-                        {
-                            self.current_set = 0;
-                            self.count_position = 0.0;
-                            self.playback_start = 0;
-                            self.playback_end = self.document.timeline_counts();
-                            self.reset_selection_for_document();
-                            self.status = super::i18n::registered(self.locale, "workspace-inspector.019").into();
+                        ui.small(super::i18n::registered(self.locale, "core-edit.032"));
+                        if ui.button(FieldTool::Place.label(self.locale)).clicked() {
+                            self.set_field_tool(FieldTool::Place);
                         }
                     });
             }
@@ -522,7 +512,46 @@ impl DrillApp {
                     self.selected.len()
                 )
             });
-            if !self.selected.is_empty() {
+            if self.selected.is_empty() && !self.document.performers.is_empty() {
+                ui.small(super::i18n::registered(self.locale, "core-edit.031"));
+                let rows: Vec<(usize, String, Option<Point>)> = self
+                    .document
+                    .performers
+                    .iter()
+                    .enumerate()
+                    .map(|(index, performer)| {
+                        let point = self
+                            .document
+                            .sets
+                            .get(self.current_set)
+                            .and_then(|set| set.positions.get(index).copied());
+                        (index, performer.label.clone(), point)
+                    })
+                    .collect();
+                let additive = ui.input(|input| {
+                    input.modifiers.command || input.modifiers.ctrl || input.modifiers.shift
+                });
+                for (index, label, point) in rows {
+                    let text = match point {
+                        Some(point) => format!(
+                            "{}  ·  {}",
+                            label,
+                            coordinates::readable_localized(
+                                point,
+                                &self.document.grid,
+                                self.locale
+                            )
+                        ),
+                        None => label,
+                    };
+                    if ui
+                        .selectable_label(self.selected.contains(&index), text)
+                        .clicked()
+                    {
+                        self.select_performer_from_list(index, additive);
+                    }
+                }
+            } else if !self.selected.is_empty() {
                 if self.workspace_focus == Some(WorkspaceFocus::Performer) {
                     ui.scroll_to_cursor(Some(egui::Align::Center));
                     self.workspace_focus = None;
@@ -944,33 +973,6 @@ impl DrillApp {
                         }
                     });
                 }
-            } else if !self.document.performers.is_empty() {
-                ui.group(|ui| {
-                    ui.label(
-                        egui::RichText::new(super::i18n::registered(
-                            self.locale,
-                            "workspace-inspector.117",
-                        ))
-                        .strong(),
-                    );
-                    ui.small(super::i18n::registered(
-                        self.locale,
-                        "workspace-inspector.118",
-                    ));
-                    if ui
-                        .button(super::i18n::registered(
-                            self.locale,
-                            "workspace-inspector.119",
-                        ))
-                        .on_hover_text(super::i18n::registered(
-                            self.locale,
-                            "workspace-inspector.120",
-                        ))
-                        .clicked()
-                    {
-                        self.begin_free_draw();
-                    }
-                });
             }
             // Calls the spatial-hash clinic directly (instead of the
             // `analyze_transition` compatibility wrapper) so the reusable
