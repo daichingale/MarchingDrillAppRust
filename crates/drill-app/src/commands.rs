@@ -94,6 +94,8 @@ pub(crate) struct Context {
     pub has_previous_set: bool,
     pub has_next_set: bool,
     pub has_multiple_sets: bool,
+    /// Select/Move/Place: Esc can leave Place/Move even with an empty selection.
+    pub can_exit_field_tool: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -663,7 +665,13 @@ impl Command {
                 Locale::Ja => "先に演者を選択してください",
                 Locale::En => "Select performers first",
             }),
-            ClearSelection | FocusPerformerTools if !context.has_selection => Err(match locale {
+            ClearSelection if !context.has_selection && !context.can_exit_field_tool => {
+                Err(match locale {
+                    Locale::Ja => "先に演者を選択してください",
+                    Locale::En => "Select performers first",
+                })
+            }
+            FocusPerformerTools if !context.has_selection => Err(match locale {
                 Locale::Ja => "先に演者を選択してください",
                 Locale::En => "Select performers first",
             }),
@@ -825,9 +833,11 @@ mod tests {
             specs(Menu::File).next().map(|spec| spec.command),
             Some(Command::NewDocument)
         );
-        assert!(SPECS
-            .iter()
-            .any(|spec| spec.command == Command::DeleteSet && spec.menu == Menu::Set));
+        assert!(
+            SPECS
+                .iter()
+                .any(|spec| spec.command == Command::DeleteSet && spec.menu == Menu::Set)
+        );
     }
 
     #[test]
@@ -866,26 +876,32 @@ mod tests {
             Command::HideSelection,
         ];
         for command in arrange {
-            assert!(SPECS
-                .iter()
-                .any(|spec| { spec.command == command && spec.menu == Menu::Arrange }));
+            assert!(
+                SPECS
+                    .iter()
+                    .any(|spec| { spec.command == command && spec.menu == Menu::Arrange })
+            );
         }
         let no_selection = Context {
             has_formation_clipboard: true,
             can_edit_selection: true,
             ..Context::default()
         };
-        assert!(Command::AlignHorizontal
-            .enabled(no_selection, Locale::En)
-            .is_err());
+        assert!(
+            Command::AlignHorizontal
+                .enabled(no_selection, Locale::En)
+                .is_err()
+        );
         let not_at_set_start = Context {
             has_selection: true,
             has_multiple_selection: true,
             ..Context::default()
         };
-        assert!(Command::MakeLine
-            .enabled(not_at_set_start, Locale::En)
-            .is_err());
+        assert!(
+            Command::MakeLine
+                .enabled(not_at_set_start, Locale::En)
+                .is_err()
+        );
     }
 
     #[test]
@@ -983,6 +999,7 @@ mod tests {
             has_previous_set: true,
             has_next_set: true,
             has_multiple_sets: true,
+            can_exit_field_tool: true,
         };
         let mut raw_input = egui::RawInput {
             modifiers,
@@ -1034,6 +1051,7 @@ mod tests {
             has_previous_set: true,
             has_next_set: true,
             has_multiple_sets: true,
+            can_exit_field_tool: true,
         };
         for spec in SPECS {
             assert!(spec.command.enabled(available, Locale::Ja).is_ok());
@@ -1045,5 +1063,19 @@ mod tests {
                 assert!(en.is_ascii());
             }
         }
+    }
+
+    #[test]
+    fn escape_can_leave_place_without_a_selection() {
+        let context = Context {
+            can_exit_field_tool: true,
+            ..Context::default()
+        };
+        assert!(Command::ClearSelection.enabled(context, Locale::En).is_ok());
+        assert!(
+            Command::ClearSelection
+                .enabled(Context::default(), Locale::En)
+                .is_err()
+        );
     }
 }

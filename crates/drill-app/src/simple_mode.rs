@@ -1123,8 +1123,8 @@ impl DrillApp {
             // the final absolute field coordinates once the drag ends.
             let delta = pointer - last_pointer;
             for point in &mut self.simple_mode.drag_start_points {
-                point.x = (point.x + delta.x / scale).clamp(0.0, self.document.grid.width);
-                point.y = (point.y - delta.y / scale).clamp(0.0, self.document.grid.height);
+                point.x = (point.x + delta.x / scale).clamp(0.0, self.document.grid.max_x());
+                point.y = (point.y - delta.y / scale).clamp(0.0, self.document.grid.max_y());
             }
             self.simple_mode.drag_start_pointer = Some(pointer);
         }

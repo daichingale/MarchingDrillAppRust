@@ -294,6 +294,35 @@ pub(crate) enum ViewMode {
     Stadium3D,
 }
 
+/// Direct-manipulation tool on the 2D field. Select still allows dragging
+/// a hit performer; Move lets an existing selection travel from empty space;
+/// Place drops new performers at the pointer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum FieldTool {
+    #[default]
+    Select,
+    Move,
+    Place,
+}
+
+impl FieldTool {
+    fn label(self, locale: Locale) -> &'static str {
+        match self {
+            Self::Select => i18n::registered(locale, "core-edit.019"),
+            Self::Move => i18n::registered(locale, "core-edit.021"),
+            Self::Place => i18n::registered(locale, "core-edit.023"),
+        }
+    }
+
+    fn hover(self, locale: Locale) -> &'static str {
+        match self {
+            Self::Select => i18n::registered(locale, "core-edit.020"),
+            Self::Move => i18n::registered(locale, "core-edit.022"),
+            Self::Place => i18n::registered(locale, "core-edit.024"),
+        }
+    }
+}
+
 /// A familiar, task-oriented arrangement of the working surface.  This is
 /// intentionally session state: switching between writing, checking, and
 /// presenting a show must never create an edit, affect exports, or alter undo.
@@ -570,6 +599,11 @@ pub(crate) struct DrillApp {
     drag_preview: Option<Vec<Point>>,
     drag_origin: Option<Pos2>,
     marquee_origin: Option<Pos2>,
+    field_tool: FieldTool,
+    /// Last pointer position on the 2D field, in document units. Place and
+    /// Add Performer use this so a new person lands under the cursor instead
+    /// of at field centre.
+    field_pointer: Option<Point>,
     current_path: Option<PathBuf>,
     dirty: bool,
     close_guard: CloseGuard,
@@ -762,6 +796,8 @@ impl Default for DrillApp {
             drag_preview: None,
             drag_origin: None,
             marquee_origin: None,
+            field_tool: FieldTool::Select,
+            field_pointer: None,
             current_path: None,
             dirty: false,
             close_guard: CloseGuard::Idle,
@@ -1509,6 +1545,7 @@ impl DrillApp {
             has_previous_set: self.current_set > 0,
             has_next_set: self.current_set.saturating_add(1) < self.document.sets.len(),
             has_multiple_sets: self.document.sets.len() > 1,
+            can_exit_field_tool: self.field_tool != FieldTool::Select,
         }
     }
 
@@ -1619,10 +1656,65 @@ impl DrillApp {
         self.free_draw_active = false;
         self.free_draw_raw.clear();
         self.underlay_state.remove();
+        self.field_tool = FieldTool::Select;
+        self.field_pointer = None;
         self.status = i18n::registered(self.locale, "core-edit.010").into();
     }
 
     fn add_performer(&mut self) {
+        let base = self.field_pointer.or_else(|| {
+            self.selection_bounds().map(|(min, max)| Point {
+                x: (min.x + max.x) * 0.5,
+                y: (min.y + max.y) * 0.5,
+            })
+        });
+        let grid = &self.document.grid;
+        let step = grid.horizontal_units / f32::from(grid.horizontal_steps.max(1));
+        let raw = match base {
+            Some(point) if self.field_pointer.is_some() => point,
+            Some(point) => Point {
+                x: point.x + step,
+                y: point.y,
+            },
+            None => Point {
+                x: grid.width * 0.5,
+                y: grid.height * 0.5,
+            },
+        };
+        self.place_performer_at(raw, self.document.grid.snap_enabled);
+    }
+
+    fn set_field_tool(&mut self, tool: FieldTool) {
+        if self.field_tool == tool {
+            return;
+        }
+        self.field_tool = tool;
+        let id = match tool {
+            FieldTool::Select => "core-edit.028",
+            FieldTool::Move => "core-edit.027",
+            FieldTool::Place => "core-edit.026",
+        };
+        self.status = i18n::registered(self.locale, id).into();
+    }
+
+    fn begin_field_drag(&mut self, pointer: Pos2) {
+        let Some(set) = self.document.sets.get(self.current_set) else {
+            return;
+        };
+        self.drag_before = Some(
+            self.selected
+                .iter()
+                .map(|&index| set.positions[index])
+                .collect(),
+        );
+        self.drag_preview = self.drag_before.clone();
+        self.drag_origin = Some(pointer);
+    }
+
+    fn place_performer_at(&mut self, raw: Point, snap: bool) {
+        if !self.ensure_editable_set_start() {
+            return;
+        }
         let failure = i18n::registered(self.locale, "core-edit.014");
         let Some(id) = self.document.next_performer_id() else {
             self.status = failure.into();
@@ -1632,23 +1724,8 @@ impl DrillApp {
             self.status = failure.into();
             return;
         };
-        let grid = &self.document.grid;
-        let step = grid.horizontal_units / f32::from(grid.horizontal_steps.max(1));
-        let base = if let Some((min, max)) = self.selection_bounds() {
-            Point {
-                x: (min.x + max.x) * 0.5,
-                y: (min.y + max.y) * 0.5,
-            }
-        } else {
-            Point {
-                x: grid.width * 0.5,
-                y: grid.height * 0.5,
-            }
-        };
-        let position = grid.snap(Point {
-            x: (base.x + step).clamp(0.0, grid.max_x()),
-            y: base.y.clamp(0.0, grid.max_y()),
-        });
+        let position = controller::field_point(raw, &self.document, snap);
+        let overlap = self.positions_overlap(position);
         let mut next = self.document.clone();
         if next
             .add_performer(
@@ -1679,7 +1756,23 @@ impl DrillApp {
         if let Some(index) = self.document.performers.iter().position(|p| p.id == id) {
             self.replace_selection([index].into_iter().collect());
         }
-        self.status = i18n::registered(self.locale, "core-edit.011").into();
+        self.status = if overlap {
+            i18n::registered(self.locale, "core-edit.025").into()
+        } else {
+            i18n::registered(self.locale, "core-edit.011").into()
+        };
+    }
+
+    fn positions_overlap(&self, point: Point) -> bool {
+        let Some(set) = self.document.sets.get(self.current_set) else {
+            return false;
+        };
+        let step = self.document.grid.horizontal_units
+            / f32::from(self.document.grid.horizontal_steps.max(1));
+        let threshold = (step * 0.5).max(0.05);
+        set.positions
+            .iter()
+            .any(|existing| (existing.x - point.x).hypot(existing.y - point.y) < threshold)
     }
 
     fn remove_selected_performers(&mut self) {
@@ -2093,6 +2186,9 @@ impl DrillApp {
                     self.cancel_clipboard_paste_preview();
                 } else if self.formation_preview_spec.is_some() || self.free_draw_active {
                     self.cancel_shape_preview();
+                } else if self.field_tool != FieldTool::Select {
+                    self.field_tool = FieldTool::Select;
+                    self.status = i18n::registered(self.locale, "core-edit.029").into();
                 } else {
                     self.clear_selection();
                 }

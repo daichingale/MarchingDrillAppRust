@@ -800,19 +800,25 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         }
         (Locale::Ja, "onboarding.016") => "選択と編集",
         (Locale::En, "onboarding.016") => "Selection and editing",
-        (Locale::Ja, "onboarding.017") => "クリック: 1人選択　Ctrl/Cmd+クリック: 追加選択",
-        (Locale::En, "onboarding.017") => "Click: select one   Ctrl/Cmd+click: add to selection",
-        (Locale::Ja, "onboarding.018") => "空白からドラッグ: 範囲選択　演者をドラッグ: 隊形を移動",
+        (Locale::Ja, "onboarding.017") => {
+            "クリック: 1人選択　Shift / Ctrl/Cmd+クリック: 追加または解除"
+        }
+        (Locale::En, "onboarding.017") => {
+            "Click: select one   Shift or Ctrl/Cmd-click: add or remove"
+        }
+        (Locale::Ja, "onboarding.018") => {
+            "選択: 空白ドラッグで囲み選択。移動: 空欄からでも移動。配置: クリックで追加"
+        }
         (Locale::En, "onboarding.018") => {
-            "Drag from empty space: box-select   Drag a performer: move formation"
+            "Select: drag empty space to marquee. Move: drag from empty space. Place: click to add"
         }
         (Locale::Ja, "onboarding.029") => "セットと演者",
         (Locale::En, "onboarding.029") => "Sets and performers",
         (Locale::Ja, "onboarding.030") => {
-            "ツールバーの「＋セット」で現在の隊形を次のセットにコピー。PageUp/PageDownでセット移動。「＋演者」で追加、Delete（MacはBackspace）で選択を削除。最後のセットと最後の演者は残ります。"
+            "ツールバーの「＋セット」で現在の隊形を次のセットにコピー。PageUp/PageDownでセット移動。「配置」ツールまたは「＋演者」で追加、Delete（MacはBackspace）で選択を削除。最後のセットと最後の演者は残ります。"
         }
         (Locale::En, "onboarding.030") => {
-            "Toolbar \"+ Set\" copies this formation into the next set. PageUp/PageDown change sets. \"+ Performer\" adds one; Delete (Backspace on Mac) removes the selection. The last set and last performer are kept."
+            "Toolbar \"+ Set\" copies this formation into the next set. PageUp/PageDown change sets. Place tool or \"+ Performer\" adds one; Delete (Backspace on Mac) removes the selection. The last set and last performer are kept."
         }
         (Locale::Ja, "onboarding.019") => "再生とタイムライン",
         (Locale::En, "onboarding.019") => "Playback and timeline",
@@ -2554,17 +2560,21 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "core-edit.004") => "Copy this formation into a new set (Ctrl/Cmd+D)",
         (Locale::Ja, "core-edit.005") => "＋演者",
         (Locale::En, "core-edit.005") => "+ Performer",
-        (Locale::Ja, "core-edit.006") => "選択の近く、またはフィールド中央に1人追加します",
-        (Locale::En, "core-edit.006") => "Add one performer near the selection, or at field center",
+        (Locale::Ja, "core-edit.006") => {
+            "カーソル位置に1人追加。フィールド外なら選択の近く、または中央"
+        }
+        (Locale::En, "core-edit.006") => {
+            "Add one performer at the cursor, or near the selection / field center"
+        }
         (Locale::Ja, "core-edit.007") => "－演者",
         (Locale::En, "core-edit.007") => "− Performer",
         (Locale::Ja, "core-edit.008") => "選択した演者を全セットから削除します (Delete)",
         (Locale::En, "core-edit.008") => "Remove the selected performers from every set (Delete)",
         (Locale::Ja, "core-edit.009") => {
-            "ホイール: 拡大　中ボタンまたはSpace+ドラッグ: 移動　PageUp/PageDown: セット移動"
+            "ホイール: 拡大　中ボタンまたはSpace+ドラッグ: パン　ダブルクリック: 全体　Shift+ドラッグ: 吸着オフ　PageUp/PageDown: セット"
         }
         (Locale::En, "core-edit.009") => {
-            "Wheel: zoom · Middle-button or Space-drag: pan · PageUp/PageDown: change set"
+            "Wheel: zoom · Middle or Space-drag: pan · Double-click: fit · Shift-drag: no snap · PageUp/PageDown: set"
         }
         (Locale::Ja, "core-edit.010") => "演者16人・1セットの新しいドリルを始めました",
         (Locale::En, "core-edit.010") => "Started a new 16-performer, one-set drill",
@@ -2584,6 +2594,52 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "core-edit.017") => "Delete set",
         (Locale::Ja, "core-edit.018") => "最後の演者は削除できません。先に選択を減らしてください",
         (Locale::En, "core-edit.018") => "Keep at least one performer. Deselect someone first",
+        (Locale::Ja, "core-edit.019") => "選択",
+        (Locale::En, "core-edit.019") => "Select",
+        (Locale::Ja, "core-edit.020") => {
+            "クリックで1人、空欄ドラッグで囲み選択。ドットをドラッグして移動"
+        }
+        (Locale::En, "core-edit.020") => {
+            "Click one, drag empty space to marquee. Drag a dot to move"
+        }
+        (Locale::Ja, "core-edit.021") => "移動",
+        (Locale::En, "core-edit.021") => "Move",
+        (Locale::Ja, "core-edit.022") => {
+            "選択した演者をドラッグ。空欄からでも移動できます。Shiftで吸着オフ"
+        }
+        (Locale::En, "core-edit.022") => {
+            "Drag the selection, even from empty space. Shift disables snap"
+        }
+        (Locale::Ja, "core-edit.023") => "配置",
+        (Locale::En, "core-edit.023") => "Place",
+        (Locale::Ja, "core-edit.024") => {
+            "カーソル位置にプレビュー。クリックで追加（重なりは警告のみ）"
+        }
+        (Locale::En, "core-edit.024") => {
+            "Preview follows the cursor. Click to add (overlap warns, does not block)"
+        }
+        (Locale::Ja, "core-edit.025") => "既存の演者と重なっています（配置は完了しました）",
+        (Locale::En, "core-edit.025") => "Overlaps an existing performer (still placed)",
+        (Locale::Ja, "core-edit.026") => {
+            "クリックした位置に配置します。続けて置けます。Escで選択に戻ります"
+        }
+        (Locale::En, "core-edit.026") => {
+            "Click to place. Click again to place more. Esc returns to Select"
+        }
+        (Locale::Ja, "core-edit.027") => {
+            "選択をドラッグして移動。空欄からでも動かせます。Shiftで吸着オフ"
+        }
+        (Locale::En, "core-edit.027") => {
+            "Drag the selection to move, even from empty space. Shift disables snap"
+        }
+        (Locale::Ja, "core-edit.028") => {
+            "クリックで選択、空欄ドラッグで囲み選択。ドットをドラッグして移動できます"
+        }
+        (Locale::En, "core-edit.028") => {
+            "Click to select, drag empty space for a marquee. Drag a dot to move"
+        }
+        (Locale::Ja, "core-edit.029") => "選択ツールに戻しました",
+        (Locale::En, "core-edit.029") => "Back to Select",
         _ => "[missing message]",
     }
 }

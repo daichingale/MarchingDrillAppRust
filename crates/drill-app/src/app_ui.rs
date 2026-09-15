@@ -2311,8 +2311,48 @@ impl eframe::App for DrillApp {
                 // at different zoom levels still see the pointer on the same
                 // yard line. `None` while the pointer is off the field, which
                 // is how peers learn to stop drawing it.
-                self.presence
-                    .set_local_cursor(response.hover_pos().map(&from_screen));
+                self.field_pointer = response.hover_pos().map(&from_screen);
+                self.presence.set_local_cursor(self.field_pointer);
+                let hover_on_dot = response.hover_pos().is_some_and(|pos| {
+                    self.frame_positions
+                        .iter()
+                        .enumerate()
+                        .filter(|(index, _)| self.is_selectable_index(*index))
+                        .any(|(_, point)| to_screen(*point).distance(pos) < 18.0)
+                });
+                if response.hovered() {
+                    ui.ctx().set_cursor_icon(match self.field_tool {
+                        FieldTool::Place => egui::CursorIcon::Crosshair,
+                        FieldTool::Move if self.drag_before.is_some() => egui::CursorIcon::Grabbing,
+                        FieldTool::Move => egui::CursorIcon::Grab,
+                        FieldTool::Select if self.drag_before.is_some() => {
+                            egui::CursorIcon::Grabbing
+                        }
+                        FieldTool::Select if hover_on_dot => egui::CursorIcon::Grab,
+                        FieldTool::Select => egui::CursorIcon::Default,
+                    });
+                }
+                if self.field_tool == FieldTool::Place
+                    && !self.free_draw_active
+                    && self.formation_preview_spec.is_none()
+                    && self.clipboard_paste_preview.is_none()
+                    && self.drag_before.is_none()
+                    && let Some(raw) = self.field_pointer
+                {
+                    let snap =
+                        self.document.grid.snap_enabled && !ui.input(|input| input.modifiers.shift);
+                    let pos = to_screen(controller::field_point(raw, &self.document, snap));
+                    painter.circle_filled(
+                        pos,
+                        8.0,
+                        Color32::from_rgba_unmultiplied(100, 235, 255, 80),
+                    );
+                    painter.circle_stroke(
+                        pos,
+                        8.0,
+                        Stroke::new(2.0, Color32::from_rgb(100, 235, 255)),
+                    );
+                }
                 if !self.formation_preview_points.is_empty() || self.free_draw_active {
                     for pair in self.formation_preview_points.windows(2) {
                         painter.line_segment(
@@ -2412,12 +2452,53 @@ impl eframe::App for DrillApp {
                     let radius = 7.0 + 1.3 * lift;
                     let shadow = Vec2::new(0.0, 2.6 * lift);
                     let shade = Color32::from_black_alpha((70.0 * lift) as u8);
+                    if let Some(before) = &self.drag_before {
+                        for &point in before {
+                            let pos = to_screen(point);
+                            painter.circle_filled(pos, 9.0, Color32::from_black_alpha(110));
+                        }
+                    }
                     for &point in preview {
                         let pos = to_screen(point);
                         if lift > 0.01 {
                             painter.circle_filled(pos + shadow, radius + 1.6, shade);
                         }
                         painter.circle_filled(pos, radius, Color32::from_rgb(100, 235, 255));
+                        painter.circle_stroke(pos, radius + 3.0, Stroke::new(2.0, Color32::WHITE));
+                    }
+                }
+                if self.selected.len() >= 2 {
+                    let bounds = self.selected.iter().filter_map(|&index| {
+                        let point = self
+                            .drag_preview
+                            .as_ref()
+                            .and_then(|preview| {
+                                self.selected
+                                    .iter()
+                                    .position(|&i| i == index)
+                                    .and_then(|slot| preview.get(slot).copied())
+                            })
+                            .or_else(|| self.frame_positions.get(index).copied())?;
+                        Some(to_screen(point))
+                    });
+                    let mut min = Pos2::new(f32::MAX, f32::MAX);
+                    let mut max = Pos2::new(f32::MIN, f32::MIN);
+                    let mut any = false;
+                    for pos in bounds {
+                        any = true;
+                        min.x = min.x.min(pos.x);
+                        min.y = min.y.min(pos.y);
+                        max.x = max.x.max(pos.x);
+                        max.y = max.y.max(pos.y);
+                    }
+                    if any {
+                        let group = Rect::from_min_max(min, max).expand(14.0);
+                        painter.rect_stroke(
+                            group,
+                            4.0,
+                            Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 90)),
+                            StrokeKind::Outside,
+                        );
                     }
                 }
                 if let Some(preview) = &self.clipboard_paste_preview {
@@ -2526,7 +2607,7 @@ impl eframe::App for DrillApp {
                             Color32::WHITE,
                         );
                     }
-                    if selected {
+                    if selected && self.drag_preview.is_none() {
                         painter.circle_stroke(
                             pos,
                             11.0 + settle_ring,
@@ -2599,21 +2680,35 @@ impl eframe::App for DrillApp {
                     if !pointer_gesture_taken && self.free_draw_active && response.drag_stopped() {
                         self.finish_free_draw_preview();
                     }
-                    let nearest = || {
-                        self.frame_positions
-                            .iter()
-                            .enumerate()
-                            .filter(|(index, _)| self.is_selectable_index(*index))
-                            .min_by(|(_, a), (_, b)| {
-                                to_screen(**a)
-                                    .distance(pointer)
-                                    .total_cmp(&to_screen(**b).distance(pointer))
-                            })
-                            .filter(|(_, p)| to_screen(**p).distance(pointer) < 18.0)
-                            .map(|(i, _)| i)
-                    };
-                    let nearest_index = nearest();
+                    let nearest_index = self
+                        .frame_positions
+                        .iter()
+                        .enumerate()
+                        .filter(|(index, _)| self.is_selectable_index(*index))
+                        .min_by(|(_, a), (_, b)| {
+                            to_screen(**a)
+                                .distance(pointer)
+                                .total_cmp(&to_screen(**b).distance(pointer))
+                        })
+                        .filter(|(_, p)| to_screen(**p).distance(pointer) < 18.0)
+                        .map(|(i, _)| i);
+                    let shift_held = ui.input(|input| input.modifiers.shift);
+                    let snap_now = self.document.grid.snap_enabled && !shift_held;
                     if !pointer_gesture_taken
+                        && !self.free_draw_active
+                        && !interaction_locked
+                        && response.double_clicked()
+                        && nearest_index.is_none()
+                    {
+                        self.field_viewport.reset(&self.document.grid);
+                    } else if !pointer_gesture_taken
+                        && !self.free_draw_active
+                        && !interaction_locked
+                        && self.field_tool == FieldTool::Place
+                        && response.clicked()
+                    {
+                        self.place_performer_at(from_screen(pointer), snap_now);
+                    } else if !pointer_gesture_taken
                         && !self.free_draw_active
                         && !interaction_locked
                         && response.clicked()
@@ -2637,7 +2732,7 @@ impl eframe::App for DrillApp {
                             } else {
                                 self.replace_selection([index].into_iter().collect());
                             }
-                        } else {
+                        } else if self.field_tool != FieldTool::Move {
                             self.clear_selection();
                         }
                     }
@@ -2645,28 +2740,26 @@ impl eframe::App for DrillApp {
                         && !interaction_locked
                         && response.drag_started()
                         && !pointer_gesture_taken
-                        && self.is_editable_set_start()
-                        && let Some(index) = nearest_index
+                        && self.field_tool != FieldTool::Place
                     {
-                        if !self.selected.contains(&index) {
-                            self.replace_selection([index].into_iter().collect());
+                        if let Some(index) = nearest_index {
+                            if self.is_editable_set_start() {
+                                if !self.selected.contains(&index) {
+                                    self.replace_selection([index].into_iter().collect());
+                                }
+                                self.begin_field_drag(pointer);
+                            } else {
+                                self.ensure_editable_set_start();
+                            }
+                        } else if self.field_tool == FieldTool::Move && !self.selected.is_empty() {
+                            if self.is_editable_set_start() {
+                                self.begin_field_drag(pointer);
+                            } else {
+                                self.ensure_editable_set_start();
+                            }
+                        } else if self.field_tool == FieldTool::Select {
+                            self.marquee_origin = Some(pointer);
                         }
-                        self.drag_before = Some(
-                            self.selected
-                                .iter()
-                                .map(|&i| self.document.sets[self.current_set].positions[i])
-                                .collect(),
-                        );
-                        self.drag_preview = self.drag_before.clone();
-                        self.drag_origin = Some(pointer);
-                    }
-                    if !self.free_draw_active
-                        && !interaction_locked
-                        && response.drag_started()
-                        && !pointer_gesture_taken
-                        && nearest_index.is_none()
-                    {
-                        self.marquee_origin = Some(pointer);
                     }
                     if !self.free_draw_active
                         && !interaction_locked
@@ -2694,15 +2787,21 @@ impl eframe::App for DrillApp {
                         && self.is_editable_set_start()
                         && let (Some(before), Some(origin)) = (&self.drag_before, self.drag_origin)
                     {
+                        let delta = (pointer.x - origin.x, pointer.y - origin.y);
                         let preview = self.drag_preview.get_or_insert_with(Vec::new);
                         preview.clear();
-                        for &start in before {
-                            preview.push(controller::drag_point(
-                                start,
-                                (pointer.x - origin.x, pointer.y - origin.y),
-                                field_map.scale,
-                                &self.document,
-                            ));
+                        if controller::pointer_drag_committed(delta) {
+                            for &start in before {
+                                preview.push(controller::drag_point(
+                                    start,
+                                    delta,
+                                    field_map.scale,
+                                    &self.document,
+                                    snap_now,
+                                ));
+                            }
+                        } else {
+                            preview.extend_from_slice(before);
                         }
                     }
                     if !self.free_draw_active
@@ -2871,6 +2970,16 @@ impl DrillApp {
         };
         if delete_set_response.clicked() {
             self.execute_command(UiCommand::DeleteSet, ui.ctx());
+        }
+        ui.separator();
+        for tool in [FieldTool::Select, FieldTool::Move, FieldTool::Place] {
+            if ui
+                .selectable_label(self.field_tool == tool, tool.label(self.locale))
+                .on_hover_text(tool.hover(self.locale))
+                .clicked()
+            {
+                self.set_field_tool(tool);
+            }
         }
         ui.separator();
         if ui

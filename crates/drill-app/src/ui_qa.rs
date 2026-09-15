@@ -79,9 +79,11 @@ mod tests {
         assert!(!app.dirty);
         assert!(app.current_path.is_none());
         assert!(app.is_editable_set_start());
-        assert!(Command::DeleteSet
-            .enabled(app.command_context(), app.locale)
-            .is_err());
+        assert!(
+            Command::DeleteSet
+                .enabled(app.command_context(), app.locale)
+                .is_err()
+        );
 
         let playback_before = app.playback_end;
         app.document.sets[0].generated_by = drill_core::GeneratorId::new(99);
@@ -97,11 +99,12 @@ mod tests {
         let roster = app.document.performers.len();
         app.execute_command(Command::AddPerformer, &context);
         assert_eq!(app.document.performers.len(), roster + 1);
-        assert!(app
-            .document
-            .sets
-            .iter()
-            .all(|set| set.positions.len() == roster + 1));
+        assert!(
+            app.document
+                .sets
+                .iter()
+                .all(|set| set.positions.len() == roster + 1)
+        );
         assert_eq!(app.selected.len(), 1);
 
         app.execute_command(Command::RemoveSelectedPerformers, &context);
@@ -119,9 +122,11 @@ mod tests {
         app.execute_command(Command::DeleteSet, &context);
         assert_eq!(app.document.sets.len(), 1);
         assert_eq!(app.current_set, 0);
-        assert!(Command::DeleteSet
-            .enabled(app.command_context(), app.locale)
-            .is_err());
+        assert!(
+            Command::DeleteSet
+                .enabled(app.command_context(), app.locale)
+                .is_err()
+        );
         app.execute_command(Command::DeleteSet, &context);
         assert_eq!(app.document.sets.len(), 1);
     }
@@ -138,6 +143,87 @@ mod tests {
         assert!(app.current_set < app.document.sets.len());
         assert_eq!(app.playback_end, app.document.timeline_counts());
         let _ = app.document.sets[app.current_set].name.as_str();
+    }
+
+    #[test]
+    fn placing_a_performer_uses_the_field_pointer_and_clamps_to_the_grid() {
+        let context = egui::Context::default();
+        let mut app = DrillApp::default();
+        app.begin_new_show();
+        let target = Point { x: 8.0, y: 6.0 };
+        app.field_pointer = Some(target);
+        let roster = app.document.performers.len();
+        app.execute_command(Command::AddPerformer, &context);
+        assert_eq!(app.document.performers.len(), roster + 1);
+        let placed = *app.document.sets[0]
+            .positions
+            .last()
+            .expect("new performer has a position");
+        assert_eq!(
+            placed,
+            super::super::controller::field_point(target, &app.document, true)
+        );
+        assert_eq!(placed, app.document.grid.snap(placed));
+
+        app.place_performer_at(
+            Point {
+                x: 10_000.0,
+                y: -4.0,
+            },
+            true,
+        );
+        let clamped = *app.document.sets[0]
+            .positions
+            .last()
+            .expect("clamped performer has a position");
+        assert_eq!(clamped.x, app.document.grid.max_x());
+        assert_eq!(clamped.y, 0.0);
+        assert_eq!(clamped, app.document.grid.snap(clamped));
+    }
+
+    #[test]
+    fn placing_on_an_occupied_spot_warns_but_still_adds() {
+        let mut app = DrillApp::default();
+        app.begin_new_show();
+        let existing = app.document.sets[0].positions[0];
+        let roster = app.document.performers.len();
+        app.place_performer_at(existing, true);
+        assert_eq!(app.document.performers.len(), roster + 1);
+        assert_eq!(
+            app.status,
+            super::super::i18n::registered(Locale::Ja, "core-edit.025")
+        );
+    }
+
+    #[test]
+    fn escape_returns_from_place_to_select_without_a_selection() {
+        let context = egui::Context::default();
+        let mut app = DrillApp::default();
+        app.begin_new_show();
+        app.selected.clear();
+        app.set_field_tool(super::super::FieldTool::Place);
+        assert_eq!(app.field_tool, super::super::FieldTool::Place);
+        assert!(
+            Command::ClearSelection
+                .enabled(app.command_context(), app.locale)
+                .is_ok()
+        );
+        app.execute_command(Command::ClearSelection, &context);
+        assert_eq!(app.field_tool, super::super::FieldTool::Select);
+        assert_eq!(
+            app.status,
+            super::super::i18n::registered(Locale::Ja, "core-edit.029")
+        );
+    }
+
+    #[test]
+    fn playback_blocks_placing_a_performer() {
+        let mut app = DrillApp::default();
+        app.begin_new_show();
+        app.playing = true;
+        let roster = app.document.performers.len();
+        app.place_performer_at(Point { x: 5.0, y: 5.0 }, true);
+        assert_eq!(app.document.performers.len(), roster);
     }
 
     #[test]
@@ -284,16 +370,17 @@ mod tests {
         let mut invalid = app.document.grid.clone();
         invalid.width = f32::NAN;
 
-        assert!(app
-            .history
-            .execute(
-                &mut app.document,
-                Edit::ReplaceGrid {
-                    grid: invalid,
-                    scale_positions: false,
-                },
-            )
-            .is_err());
+        assert!(
+            app.history
+                .execute(
+                    &mut app.document,
+                    Edit::ReplaceGrid {
+                        grid: invalid,
+                        scale_positions: false,
+                    },
+                )
+                .is_err()
+        );
         assert_eq!(app.document, original);
         assert!(!app.history.can_undo());
     }
@@ -899,9 +986,10 @@ mod tests {
         app.restore_selection_history_at(1);
 
         assert_eq!(app.selected, [0_usize, 1].into_iter().collect());
-        assert!(app
-            .selection_stack
-            .contains(&[3_usize].into_iter().collect()));
+        assert!(
+            app.selection_stack
+                .contains(&[3_usize].into_iter().collect())
+        );
         assert_eq!(app.document, document);
         assert_eq!(app.history.revision(), revision);
     }
@@ -1017,9 +1105,10 @@ mod tests {
         // The two merged entries are consumed; the pre-glue selection ({3})
         // is remembered in their place, so it stays one Restore away.
         assert_eq!(app.selection_stack.len(), 1);
-        assert!(app
-            .selection_stack
-            .contains(&[3_usize].into_iter().collect()));
+        assert!(
+            app.selection_stack
+                .contains(&[3_usize].into_iter().collect())
+        );
         assert_eq!(app.document, document);
         assert_eq!(app.history.revision(), revision);
     }
@@ -1035,9 +1124,10 @@ mod tests {
         app.glue_merge_one(1); // recency 1 = the older entry, {0}.
 
         assert_eq!(app.selected, [0_usize, 2].into_iter().collect());
-        assert!(app
-            .selection_stack
-            .contains(&[1_usize].into_iter().collect()));
+        assert!(
+            app.selection_stack
+                .contains(&[1_usize].into_iter().collect())
+        );
         assert_eq!(app.selection_stack.len(), 2); // {1} plus the pre-glue {2}.
     }
 
@@ -1054,9 +1144,10 @@ mod tests {
         // history stack automatically, the same as any other selection
         // change, without Glue needing its own explicit bookkeeping.
         app.replace_selection([2_usize].into_iter().collect());
-        assert!(app
-            .selection_stack
-            .contains(&[0_usize, 1].into_iter().collect()));
+        assert!(
+            app.selection_stack
+                .contains(&[0_usize, 1].into_iter().collect())
+        );
     }
 
     #[test]
@@ -1135,16 +1226,20 @@ mod tests {
         assert_eq!(app.count_position, 0.0);
         assert!(!app.playing);
         assert_eq!(app.selected, [0, 1].into_iter().collect());
-        assert!(Command::NextSet
-            .enabled(app.command_context(), app.locale)
-            .is_err());
+        assert!(
+            Command::NextSet
+                .enabled(app.command_context(), app.locale)
+                .is_err()
+        );
 
         app.execute_command(Command::PreviousSet, &context);
         assert_eq!(app.current_set, 0);
         assert_eq!(app.count_position, 0.0);
-        assert!(Command::PreviousSet
-            .enabled(app.command_context(), app.locale)
-            .is_err());
+        assert!(
+            Command::PreviousSet
+                .enabled(app.command_context(), app.locale)
+                .is_err()
+        );
     }
 
     #[test]
