@@ -1849,16 +1849,16 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::Ja, "simple-mode.005") => "編集したいフォーメーション（セット）を選びましょう。",
         (Locale::En, "simple-mode.005") => "Choose the formation (set) you want to edit.",
         (Locale::Ja, "simple-mode.006") => {
-            "次は演者を選んでみましょう。フィールドの演者をタップするか、「全員を選択」を押します。"
+            "演者をタップして選びます。「配置」でフィールドをクリックすると置けます。重なっても置けます。"
         }
         (Locale::En, "simple-mode.006") => {
-            "Next, let's select performers. Tap performers on the field, or press Select All."
+            "Tap a performer to select. Use Place and click the field to add. Overlaps still place."
         }
         (Locale::Ja, "simple-mode.007") => {
-            "選んだ演者をドラッグするか、並べ方のボタンで動かしましょう。矢印ボタンで表示範囲を移動できます。"
+            "「移動」でドラッグ（グリッドONなら吸着、Shiftでオフ）。端では止まります。選択中のドットもドラッグできます。"
         }
         (Locale::En, "simple-mode.007") => {
-            "Drag the selected performers, or use a layout button. Use the arrow buttons to pan the view."
+            "Use Move to drag (snaps when grid is on; Shift unsnaps). Clamped at the edge. Select can still drag a hit performer."
         }
         (Locale::Ja, "simple-mode.008") => "再生ボタンを押して、動きを確認しましょう。",
         (Locale::En, "simple-mode.008") => "Press Play to check how it moves.",
@@ -1960,6 +1960,12 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "simple-mode.052") => "counts",
         (Locale::Ja, "simple-mode.053") => {
             "I: 現在位置を開始（IN） · O: 現在位置を終了（OUT） · タイムラインのマーカーをクリックして移動"
+        }
+        (Locale::Ja, "simple-mode.054") => {
+            "配置ツールでフィールドをクリックすると演者を置けます。続けてクリックできます。"
+        }
+        (Locale::En, "simple-mode.054") => {
+            "With Place, click the field to add a performer. Click again to place more."
         }
         (Locale::En, "simple-mode.053") => {
             "I: set Start (IN) at the playhead · O: set End (OUT) · Click timeline markers to jump"
@@ -2468,6 +2474,30 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "workspace-inspector.210") => "Auto",
         (Locale::Ja, "workspace-inspector.211") => "生成範囲を更新できませんでした",
         (Locale::En, "workspace-inspector.211") => "Couldn't update the generated range",
+        (Locale::Ja, "workspace-inspector.212") => "番号",
+        (Locale::En, "workspace-inspector.212") => "Number",
+        (Locale::Ja, "workspace-inspector.213") => "名前",
+        (Locale::En, "workspace-inspector.213") => "Name",
+        (Locale::Ja, "workspace-inspector.214") => "楽器 / パート",
+        (Locale::En, "workspace-inspector.214") => "Instrument / part",
+        (Locale::Ja, "workspace-inspector.215") => "位置 X",
+        (Locale::En, "workspace-inspector.215") => "Position X",
+        (Locale::Ja, "workspace-inspector.216") => "位置 Y",
+        (Locale::En, "workspace-inspector.216") => "Position Y",
+        (Locale::Ja, "workspace-inspector.217") => "向き",
+        (Locale::En, "workspace-inspector.217") => "Facing",
+        (Locale::Ja, "workspace-inspector.218") => "向きはショーデータにまだないため編集できません",
+        (Locale::En, "workspace-inspector.218") => {
+            "Facing is not in the show data yet, so it cannot be edited"
+        }
+        (Locale::Ja, "workspace-inspector.219") => "混在",
+        (Locale::En, "workspace-inspector.219") => "Mixed",
+        (Locale::Ja, "workspace-inspector.220") => "番号または名前を更新できませんでした",
+        (Locale::En, "workspace-inspector.220") => "Couldn't update the number or name",
+        (Locale::Ja, "workspace-inspector.221") => "パートを更新できませんでした",
+        (Locale::En, "workspace-inspector.221") => "Couldn't update the part",
+        (Locale::Ja, "workspace-inspector.222") => "位置を更新できませんでした",
+        (Locale::En, "workspace-inspector.222") => "Couldn't update the position",
         (Locale::Ja, "perf-hud.001") => "パフォーマンス",
         (Locale::En, "perf-hud.001") => "Performance",
         (Locale::Ja, "perf-hud.002") => "演者",

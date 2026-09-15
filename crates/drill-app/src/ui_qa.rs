@@ -1982,4 +1982,136 @@ mod tests {
             Some(MarkingAction::Hide)
         );
     }
+
+    #[test]
+    fn inspector_single_select_commits_label_section_and_position() {
+        let mut app = DrillApp::default();
+        app.begin_new_show();
+        app.replace_selection([0].into_iter().collect());
+        app.ensure_performer_draft();
+        let performer_id = app.document.performers[0].id;
+        let trumpet = drill_core::Section {
+            id: drill_core::SectionId::new(2).expect("section id"),
+            name: "Trumpet".into(),
+            short: "Tpt".into(),
+            color: [64, 180, 255],
+            order: 1,
+        };
+        let trumpet_id = trumpet.id;
+        assert!(app.execute_edit(
+            Edit::AddSection {
+                section: trumpet,
+                at: None,
+            },
+            "add section",
+        ));
+        {
+            let draft = app.performer_draft.as_mut().expect("single-select draft");
+            draft.number = "12".into();
+            draft.name = "Solo".into();
+            draft.label_dirty = true;
+            draft.section = trumpet_id;
+            draft.section_dirty = true;
+        }
+        app.commit_performer_draft();
+        assert_eq!(app.document.performers[0].label, "12 Solo");
+        assert_eq!(app.document.performers[0].id, performer_id);
+        assert_eq!(app.document.performers[0].section, trumpet_id);
+
+        app.ensure_performer_draft();
+        let target = super::super::controller::field_point(
+            Point { x: 9.0, y: 4.0 },
+            &app.document,
+            app.document.grid.snap_enabled,
+        );
+        if let Some(draft) = app.performer_draft.as_mut() {
+            draft.x = 9.0;
+            draft.y = 4.0;
+            draft.position_dirty = true;
+        }
+        app.commit_performer_draft();
+        assert_eq!(app.document.sets[0].positions[0], target);
+        assert!(app.history.can_undo());
+    }
+
+    #[test]
+    fn inspector_multi_select_edits_common_section_and_hides_position() {
+        let mut app = DrillApp::default();
+        app.begin_new_show();
+        app.replace_selection([0, 1].into_iter().collect());
+        app.ensure_performer_draft();
+        let draft = app.performer_draft.as_ref().expect("multi draft");
+        assert_eq!(draft.selected.len(), 2);
+        assert!(draft.number.is_empty());
+        assert_eq!(draft.x, 0.0);
+        assert_eq!(draft.y, 0.0);
+        let trumpet = drill_core::Section {
+            id: drill_core::SectionId::new(2).expect("section id"),
+            name: "Trumpet".into(),
+            short: "Tpt".into(),
+            color: [64, 180, 255],
+            order: 1,
+        };
+        let trumpet_id = trumpet.id;
+        assert!(app.execute_edit(
+            Edit::AddSection {
+                section: trumpet,
+                at: None,
+            },
+            "add section",
+        ));
+        app.commit_inspector_section(trumpet_id);
+        assert_eq!(app.document.performers[0].section, trumpet_id);
+        assert_eq!(app.document.performers[1].section, trumpet_id);
+        assert_ne!(
+            app.document.sets[0].positions[0],
+            app.document.sets[0].positions[1]
+        );
+    }
+
+    #[test]
+    fn inspector_commits_then_switches_when_selection_changes() {
+        let mut app = DrillApp::default();
+        app.begin_new_show();
+        app.replace_selection([0].into_iter().collect());
+        app.ensure_performer_draft();
+        if let Some(draft) = app.performer_draft.as_mut() {
+            draft.number = "Q".into();
+            draft.name.clear();
+            draft.label_dirty = true;
+        }
+        app.replace_selection([1].into_iter().collect());
+        assert_eq!(app.document.performers[0].label, "Q");
+        app.ensure_performer_draft();
+        assert_eq!(
+            app.performer_draft
+                .as_ref()
+                .map(|draft| draft.selected.clone()),
+            Some([1].into_iter().collect())
+        );
+        app.clear_selection();
+        assert!(app.selected.is_empty());
+        assert!(app.performer_draft.is_none());
+    }
+
+    #[test]
+    fn inspector_position_tracks_field_drag_preview() {
+        let mut app = DrillApp::default();
+        app.begin_new_show();
+        app.replace_selection([0].into_iter().collect());
+        let start = app.document.sets[0].positions[0];
+        app.begin_field_drag(eframe::egui::Pos2::new(0.0, 0.0));
+        app.update_field_drag(eframe::egui::Pos2::new(40.0, 0.0), 10.0, true);
+        let live = app.inspector_point(0).expect("live point");
+        let expected =
+            super::super::controller::drag_point(start, (40.0, 0.0), 10.0, &app.document, true);
+        assert_eq!(live, expected);
+        assert_eq!(app.document.sets[0].positions[0], start);
+        app.commit_field_drag();
+        assert_eq!(app.document.sets[0].positions[0], expected);
+        app.ensure_performer_draft();
+        let draft = app.performer_draft.as_ref().expect("synced draft");
+        assert!((draft.x - expected.x).abs() < f32::EPSILON);
+        assert!((draft.y - expected.y).abs() < f32::EPSILON);
+    }
 }

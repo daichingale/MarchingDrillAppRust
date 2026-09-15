@@ -255,8 +255,6 @@ pub(crate) struct SimpleModeState {
     pub step: SimpleStep,
     pub screen: SimpleScreen,
     viewport: EditViewport,
-    drag_start_pointer: Option<Pos2>,
-    drag_start_points: Vec<Point>,
     pan_drag_pointer: Option<Pos2>,
     pub metronome: MetronomeState,
 }
@@ -331,6 +329,9 @@ impl DrillApp {
                 ui.label(dirty_label);
             });
         });
+        if self.status != text(self.locale, Text::Ready) {
+            ui.small(&self.status);
+        }
         if self.simple_mode.screen == SimpleScreen::Wizard {
             ui.horizontal(|ui| {
                 for step in SimpleStep::ALL {
@@ -434,6 +435,8 @@ impl DrillApp {
     }
 
     fn simple_step_select_performers(&mut self, ui: &mut egui::Ui) {
+        self.simple_field_tools_ui(ui);
+        ui.small(i18n::registered(self.locale, "simple-mode.054"));
         ui.horizontal(|ui| {
             if ui.button(text(self.locale, Text::SelectAll)).clicked() {
                 self.replace_selection((0..self.document.performers.len()).collect());
@@ -446,21 +449,29 @@ impl DrillApp {
                 i18n::registered(self.locale, "simple-mode.019"),
                 self.selected.len()
             ));
-            if ui
-                .button(UiCommand::AddPerformer.label(self.locale))
-                .clicked()
-            {
+            let add = UiCommand::AddPerformer.enabled(self.command_context(), self.locale);
+            let add_response = ui.add_enabled(
+                add.is_ok(),
+                egui::Button::new(UiCommand::AddPerformer.label(self.locale)),
+            );
+            let add_response = match add {
+                Ok(()) => add_response,
+                Err(reason) => add_response.on_disabled_hover_text(reason),
+            };
+            if add_response.clicked() {
                 self.add_performer();
             }
             let remove =
                 UiCommand::RemoveSelectedPerformers.enabled(self.command_context(), self.locale);
-            if ui
-                .add_enabled(
-                    remove.is_ok(),
-                    egui::Button::new(UiCommand::RemoveSelectedPerformers.label(self.locale)),
-                )
-                .clicked()
-            {
+            let remove_response = ui.add_enabled(
+                remove.is_ok(),
+                egui::Button::new(UiCommand::RemoveSelectedPerformers.label(self.locale)),
+            );
+            let remove_response = match remove {
+                Ok(()) => remove_response,
+                Err(reason) => remove_response.on_disabled_hover_text(reason),
+            };
+            if remove_response.clicked() {
                 self.remove_selected_performers();
             }
         });
@@ -469,6 +480,7 @@ impl DrillApp {
     }
 
     fn simple_step_move_performers(&mut self, ui: &mut egui::Ui) {
+        self.simple_field_tools_ui(ui);
         if self.selected.is_empty() {
             ui.colored_label(
                 Color32::from_rgb(245, 197, 66),
@@ -681,16 +693,37 @@ impl DrillApp {
         self.simple_field_full_ui(ui, false);
     }
 
+    fn simple_field_tools_ui(&mut self, ui: &mut egui::Ui) {
+        let editable = self.is_editable_set_start();
+        ui.horizontal(|ui| {
+            for tool in [FieldTool::Select, FieldTool::Move, FieldTool::Place] {
+                let enabled = tool == FieldTool::Select || editable;
+                let response = ui.add_enabled(
+                    enabled,
+                    egui::Button::selectable(self.field_tool == tool, tool.label(self.locale)),
+                );
+                let response = response.on_hover_text(tool.hover(self.locale));
+                let response = if enabled {
+                    response
+                } else {
+                    response.on_disabled_hover_text(self.formation_edit_lock_reason())
+                };
+                if response.clicked() {
+                    self.set_field_tool(tool);
+                }
+            }
+        });
+    }
+
     /// Full-field 2D view shared by every simple-mode screen except "move
     /// performers". Reuses the exact same rendering pipeline as the normal
-    /// desktop view (`drill_render::build_field_2d` + `egui_backend::paint`),
-    /// only the interaction is simplified. `selectable` gates click-to-select;
-    /// dragging performers is intentionally not offered here (that belongs
-    /// to the zoomed step, per the precision-on-small-screens requirement).
-    fn simple_field_full_ui(&mut self, ui: &mut egui::Ui, selectable: bool) {
+    /// desktop view (`drill_render::build_field_2d` + `egui_backend::paint`).
+    /// When `interactive`, Select/Move/Place match the approved full-mode
+    /// field behavior (preview, drag ghost, snap-then-clamp, overlap warn).
+    fn simple_field_full_ui(&mut self, ui: &mut egui::Ui, interactive: bool) {
         let available = ui.available_size();
-        let sense = if selectable {
-            Sense::click()
+        let sense = if interactive {
+            Sense::click_and_drag()
         } else {
             Sense::hover()
         };
@@ -728,24 +761,77 @@ impl DrillApp {
             let v = field_map.map(point);
             Pos2::new(rect.left() + v.x, rect.top() + v.y)
         };
-        for (index, &point) in self.frame_positions.iter().enumerate() {
-            if self.selected.contains(&index) {
+        let from_screen = |pos: Pos2| {
+            field_map.unmap(drill_render::Vec2 {
+                x: pos.x - rect.left(),
+                y: pos.y - rect.top(),
+            })
+        };
+        const SELECTION_ACCENT: Color32 = Color32::from_rgb(76, 163, 255);
+        if interactive {
+            self.field_pointer = response.hover_pos().map(&from_screen);
+            let hover_on_dot = response.hover_pos().is_some_and(|pos| {
+                self.frame_positions
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| self.is_selectable_index(*index))
+                    .any(|(_, point)| to_screen(*point).distance(pos) < 18.0)
+            });
+            if response.hovered() {
+                let editable = self.is_editable_set_start();
+                ui.ctx().set_cursor_icon(match self.field_tool {
+                    FieldTool::Place if !editable => egui::CursorIcon::NotAllowed,
+                    FieldTool::Place => egui::CursorIcon::Crosshair,
+                    FieldTool::Move if self.drag_before.is_some() => egui::CursorIcon::Grabbing,
+                    FieldTool::Move if !editable && !self.selected.is_empty() => {
+                        egui::CursorIcon::NotAllowed
+                    }
+                    FieldTool::Move if self.selected.is_empty() => egui::CursorIcon::Default,
+                    FieldTool::Move => egui::CursorIcon::Grab,
+                    FieldTool::Select if self.drag_before.is_some() => egui::CursorIcon::Grabbing,
+                    FieldTool::Select if hover_on_dot && editable => egui::CursorIcon::Grab,
+                    FieldTool::Select => egui::CursorIcon::Default,
+                });
+            }
+            if self.field_tool == FieldTool::Place
+                && self.is_editable_set_start()
+                && self.drag_before.is_none()
+                && let Some(raw) = self.field_pointer
+            {
+                let snap =
+                    self.document.grid.snap_enabled && !ui.input(|input| input.modifiers.shift);
+                let pos = to_screen(controller::field_point(raw, &self.document, snap));
+                painter.circle_filled(pos, 8.0, Color32::from_rgba_unmultiplied(100, 235, 255, 80));
+                painter.circle_stroke(pos, 8.0, Stroke::new(2.0, Color32::from_rgb(100, 235, 255)));
+            }
+        }
+        if let Some(preview) = &self.drag_preview {
+            if let Some(before) = &self.drag_before {
+                for &point in before {
+                    painter.circle_filled(to_screen(point), 9.0, Color32::from_black_alpha(110));
+                }
+            }
+            for &point in preview {
                 let pos = to_screen(point);
+                painter.circle_filled(pos, 8.0, Color32::from_rgb(100, 235, 255));
                 painter.circle_stroke(pos, 11.0, Stroke::new(2.0, Color32::WHITE));
+            }
+        }
+        for (index, &point) in self.frame_positions.iter().enumerate() {
+            if self.selected.contains(&index) && self.drag_preview.is_none() {
+                let pos = to_screen(point);
+                painter.circle_stroke(pos, 11.0, Stroke::new(2.0, SELECTION_ACCENT));
                 if self.selected.len() >= 2 {
                     self.paint_selection_rank_badge(&painter, pos, index);
                 }
             }
         }
-        if !selectable {
+        if !interactive {
             return;
         }
-        let Some(pointer) = response.interact_pointer_pos() else {
+        let Some(pointer) = response.interact_pointer_pos().or(response.hover_pos()) else {
             return;
         };
-        if !response.clicked() {
-            return;
-        }
         let nearest = self
             .frame_positions
             .iter()
@@ -756,22 +842,56 @@ impl DrillApp {
                     .distance(pointer)
                     .total_cmp(&to_screen(**b).distance(pointer))
             })
-            .filter(|(_, p)| to_screen(**p).distance(pointer) < 22.0)
+            .filter(|(_, p)| to_screen(**p).distance(pointer) < 18.0)
             .map(|(index, _)| index);
-        let additive = ui.input(|input| {
-            input.modifiers.command || input.modifiers.ctrl || input.modifiers.shift
-        });
-        match nearest {
-            Some(index) if additive => {
-                let mut next = self.selected.clone();
-                if !next.insert(index) {
-                    next.remove(&index);
+        let shift_held = ui.input(|input| input.modifiers.shift);
+        let snap_now = self.document.grid.snap_enabled && !shift_held;
+        if let Some(pointer) = response.interact_pointer_pos() {
+            if self.field_tool == FieldTool::Place && response.clicked() {
+                self.place_performer_at(from_screen(pointer), snap_now);
+            } else if self.field_tool != FieldTool::Place && response.clicked() {
+                let additive = ui.input(|input| {
+                    input.modifiers.command || input.modifiers.ctrl || input.modifiers.shift
+                });
+                match nearest {
+                    Some(index) if additive => {
+                        let mut next = self.selected.clone();
+                        if !next.insert(index) {
+                            next.remove(&index);
+                        }
+                        self.replace_selection(next);
+                    }
+                    Some(index) => self.replace_selection(std::iter::once(index).collect()),
+                    None if self.field_tool != FieldTool::Move && !additive => {
+                        self.clear_selection();
+                    }
+                    None => {}
                 }
-                self.replace_selection(next);
             }
-            Some(index) => self.replace_selection(std::iter::once(index).collect()),
-            None if !additive => self.clear_selection(),
-            None => {}
+            if self.field_tool != FieldTool::Place && response.drag_started() {
+                if let Some(index) = nearest {
+                    if self.is_editable_set_start() {
+                        if !self.selected.contains(&index) {
+                            self.replace_selection(std::iter::once(index).collect());
+                        }
+                        self.begin_field_drag(pointer);
+                    } else {
+                        self.ensure_editable_set_start();
+                    }
+                } else if self.field_tool == FieldTool::Move && !self.selected.is_empty() {
+                    if self.is_editable_set_start() {
+                        self.begin_field_drag(pointer);
+                    } else {
+                        self.ensure_editable_set_start();
+                    }
+                }
+            }
+            if response.dragged() && self.is_editable_set_start() && self.drag_before.is_some() {
+                self.update_field_drag(pointer, field_map.scale, snap_now);
+            }
+            if response.drag_stopped() {
+                self.commit_field_drag();
+            }
         }
     }
 
@@ -903,7 +1023,7 @@ impl DrillApp {
 
     fn paint_zoom_viewport(
         &self,
-        _ui: &egui::Ui,
+        ui: &egui::Ui,
         painter: &egui::Painter,
         rect: Rect,
         center: Point,
@@ -976,6 +1096,21 @@ impl DrillApp {
             });
             painter.line_segment([a, b], Stroke::new(1.5, Color32::from_white_alpha(110)));
         }
+        if self.field_tool == FieldTool::Place
+            && self.is_editable_set_start()
+            && self.drag_before.is_none()
+            && let Some(raw) = self.field_pointer
+        {
+            let snap = self.document.grid.snap_enabled && !ui.input(|input| input.modifiers.shift);
+            let pos = to_screen(controller::field_point(raw, &self.document, snap));
+            painter.circle_filled(pos, 8.0, Color32::from_rgba_unmultiplied(100, 235, 255, 80));
+            painter.circle_stroke(pos, 8.0, Stroke::new(2.0, Color32::from_rgb(100, 235, 255)));
+        }
+        if let Some(before) = &self.drag_before {
+            for &point in before {
+                painter.circle_filled(to_screen(point), 9.0, Color32::from_black_alpha(110));
+            }
+        }
         for (index, performer) in self.document.performers.iter().enumerate() {
             let Some(&point) = self.frame_positions.get(index) else {
                 continue;
@@ -985,13 +1120,7 @@ impl DrillApp {
             }
             let color = performer.resolved_color(&self.document.sections);
             let selected = self.selected.contains(&index);
-            // While a performer in the current drag is being moved, its
-            // on-field dot stays put and a live preview dot is drawn at the
-            // pointer-following position instead, mirroring the desktop
-            // field view's drag preview.
-            let pos = if self.simple_mode.drag_start_pointer.is_some()
-                && let Some(preview) = self.drag_preview_point(index)
-            {
+            let pos = if let Some(preview) = self.inspector_point(index).filter(|_| selected) {
                 to_screen(preview)
             } else {
                 to_screen(point)
@@ -1014,24 +1143,17 @@ impl DrillApp {
                 );
             }
             if selected {
-                painter.circle_stroke(pos, 12.0, Stroke::new(2.5, Color32::WHITE));
+                let ring = if self.drag_preview.is_some() {
+                    Color32::WHITE
+                } else {
+                    Color32::from_rgb(76, 163, 255)
+                };
+                painter.circle_stroke(pos, 12.0, Stroke::new(2.5, ring));
                 if self.selected.len() >= 2 {
                     self.paint_selection_rank_badge(painter, pos, index);
                 }
             }
         }
-    }
-
-    /// While a drag is in flight, the live preview position for `index`
-    /// (screen-independent, in field units), or `None` if it isn't part of
-    /// the current drag.
-    fn drag_preview_point(&self, index: usize) -> Option<Point> {
-        if !self.selected.contains(&index) {
-            return None;
-        }
-        let selected_order: Vec<usize> = self.selected.iter().copied().collect();
-        let slot = selected_order.iter().position(|&i| i == index)?;
-        self.simple_mode.drag_start_points.get(slot).copied()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1055,12 +1177,18 @@ impl DrillApp {
                 rect.top() + offset.y + (vp_max_y - p.y) * scale,
             )
         };
-        let Some(pointer) = response.interact_pointer_pos() else {
+        let from_screen = |pos: Pos2| -> Point {
+            Point {
+                x: vp_min_x + (pos.x - rect.left() - offset.x) / scale,
+                y: vp_max_y - (pos.y - rect.top() - offset.y) / scale,
+            }
+        };
+        if let Some(hover) = response.hover_pos() {
+            self.field_pointer = Some(from_screen(hover));
+        }
+        let Some(pointer) = response.interact_pointer_pos().or(response.hover_pos()) else {
             return;
         };
-        // Resolve the hit before mutating `self`. Keeping this as a value (not
-        // a closure that borrows frame_positions) makes click and drag share
-        // one stable target and avoids a stale borrow across selection changes.
         let nearest = self
             .frame_positions
             .iter()
@@ -1077,7 +1205,14 @@ impl DrillApp {
         let additive = ui.input(|input| {
             input.modifiers.command || input.modifiers.ctrl || input.modifiers.shift
         });
-        if response.clicked() {
+        let shift_held = ui.input(|input| input.modifiers.shift);
+        let snap_now = self.document.grid.snap_enabled && !shift_held;
+        let Some(pointer) = response.interact_pointer_pos() else {
+            return;
+        };
+        if self.field_tool == FieldTool::Place && response.clicked() {
+            self.place_performer_at(from_screen(pointer), snap_now);
+        } else if self.field_tool != FieldTool::Place && response.clicked() {
             match nearest {
                 Some(index) if additive => {
                     let mut next = self.selected.clone();
@@ -1087,46 +1222,38 @@ impl DrillApp {
                     self.replace_selection(next);
                 }
                 Some(index) => self.replace_selection(std::iter::once(index).collect()),
-                None if !additive => self.clear_selection(),
+                None if self.field_tool != FieldTool::Move && !additive => self.clear_selection(),
                 None => {}
             }
         }
-        if response.drag_started() {
+        if self.field_tool != FieldTool::Place && response.drag_started() {
             if let Some(index) = nearest {
                 if !self.is_editable_set_start() {
                     self.ensure_editable_set_start();
-                    return;
-                }
-                if !self.selected.contains(&index) {
-                    if additive {
-                        let mut next = self.selected.clone();
-                        next.insert(index);
-                        self.replace_selection(next);
-                    } else {
-                        self.replace_selection(std::iter::once(index).collect());
+                } else {
+                    if !self.selected.contains(&index) {
+                        if additive {
+                            let mut next = self.selected.clone();
+                            next.insert(index);
+                            self.replace_selection(next);
+                        } else {
+                            self.replace_selection(std::iter::once(index).collect());
+                        }
                     }
+                    self.begin_field_drag(pointer);
                 }
-                self.simple_mode.drag_start_points = self.selected_points();
-                self.simple_mode.drag_start_pointer = Some(pointer);
+            } else if self.field_tool == FieldTool::Move && !self.selected.is_empty() {
+                if self.is_editable_set_start() {
+                    self.begin_field_drag(pointer);
+                } else {
+                    self.ensure_editable_set_start();
+                }
             } else if self.selected.is_empty() {
-                // Panning by dragging empty background, but only while
-                // nothing is selected, so a move-drag never gets stolen.
                 self.simple_mode.pan_drag_pointer = Some(pointer);
             }
         }
-        if response.dragged()
-            && !self.simple_mode.drag_start_points.is_empty()
-            && let Some(last_pointer) = self.simple_mode.drag_start_pointer
-        {
-            // Integrate frame-to-frame screen delta into the live preview
-            // positions (in field units); `commit_layout` snaps and writes
-            // the final absolute field coordinates once the drag ends.
-            let delta = pointer - last_pointer;
-            for point in &mut self.simple_mode.drag_start_points {
-                point.x = (point.x + delta.x / scale).clamp(0.0, self.document.grid.max_x());
-                point.y = (point.y - delta.y / scale).clamp(0.0, self.document.grid.max_y());
-            }
-            self.simple_mode.drag_start_pointer = Some(pointer);
+        if response.dragged() && self.is_editable_set_start() && self.drag_before.is_some() {
+            self.update_field_drag(pointer, scale, snap_now);
         }
         if response.dragged()
             && let Some(start_pointer) = self.simple_mode.pan_drag_pointer
@@ -1141,14 +1268,9 @@ impl DrillApp {
             self.simple_mode.pan_drag_pointer = Some(pointer);
         }
         if response.drag_stopped() {
-            if !self.simple_mode.drag_start_points.is_empty() {
-                let final_points = std::mem::take(&mut self.simple_mode.drag_start_points);
-                self.commit_layout(final_points);
-            }
-            self.simple_mode.drag_start_pointer = None;
+            self.commit_field_drag();
             self.simple_mode.pan_drag_pointer = None;
         }
-        let _ = ui;
     }
 
     fn simple_metronome_ui(&mut self, ui: &mut egui::Ui) {
@@ -1334,5 +1456,101 @@ mod tests {
         assert!(!start.contains("ClickSchedule::build"));
         assert!(start.contains("begin_open"));
         assert!(start.contains("begin_schedule"));
+    }
+
+    #[test]
+    fn simple_mode_place_uses_the_shared_pointer_and_warns_on_overlap() {
+        let mut app = DrillApp {
+            simple_mode: SimpleModeState {
+                enabled: true,
+                step: SimpleStep::SelectPerformers,
+                ..SimpleModeState::default()
+            },
+            ..DrillApp::default()
+        };
+        app.begin_new_show();
+        app.field_tool = FieldTool::Place;
+        let target = Point { x: 8.0, y: 6.0 };
+        app.field_pointer = Some(target);
+        let roster = app.document.performers.len();
+        app.place_performer_at(target, true);
+        assert_eq!(app.document.performers.len(), roster + 1);
+        let placed = *app.document.sets[0]
+            .positions
+            .last()
+            .expect("placed performer");
+        assert_eq!(placed, controller::field_point(target, &app.document, true));
+
+        app.place_performer_at(placed, true);
+        assert_eq!(app.document.performers.len(), roster + 2);
+        assert_ne!(app.status, text(Locale::Ja, Text::Ready));
+    }
+
+    #[test]
+    fn simple_mode_place_and_move_respect_playback_lock() {
+        let mut app = DrillApp {
+            simple_mode: SimpleModeState {
+                enabled: true,
+                step: SimpleStep::SelectPerformers,
+                ..SimpleModeState::default()
+            },
+            ..DrillApp::default()
+        };
+        app.begin_new_show();
+        app.playing = true;
+        let roster = app.document.performers.len();
+        app.place_performer_at(Point { x: 5.0, y: 5.0 }, true);
+        assert_eq!(app.document.performers.len(), roster);
+        assert!(!app.is_editable_set_start());
+        app.replace_selection([0].into_iter().collect());
+        let origin = app.document.sets[0].positions[0];
+        app.begin_field_drag(Pos2::new(0.0, 0.0));
+        app.update_field_drag(Pos2::new(80.0, 0.0), 10.0, true);
+        app.commit_field_drag();
+        assert_eq!(app.document.sets[0].positions[0], origin);
+    }
+
+    #[test]
+    fn simple_mode_move_snaps_clamps_and_shift_unsnaps() {
+        let mut app = DrillApp::default();
+        app.begin_new_show();
+        app.simple_mode.enabled = true;
+        app.simple_mode.step = SimpleStep::MovePerformers;
+        app.field_tool = FieldTool::Move;
+        app.replace_selection([0].into_iter().collect());
+        let start = app.document.sets[0].positions[0];
+        app.document.grid.snap_enabled = true;
+
+        app.begin_field_drag(Pos2::new(0.0, 0.0));
+        app.update_field_drag(Pos2::new(50.0, 0.0), 10.0, true);
+        let snapped = app
+            .drag_preview
+            .as_ref()
+            .and_then(|preview| preview.first().copied());
+        app.commit_field_drag();
+        let after = app.document.sets[0].positions[0];
+        assert_eq!(snapped, Some(after));
+        assert_eq!(
+            after,
+            controller::drag_point(start, (50.0, 0.0), 10.0, &app.document, true)
+        );
+        assert_eq!(after, app.document.grid.snap(after));
+
+        app.begin_field_drag(Pos2::new(0.0, 0.0));
+        app.update_field_drag(Pos2::new(13.0, 0.0), 10.0, false);
+        app.commit_field_drag();
+        let unsnapped = app.document.sets[0].positions[0];
+        assert_eq!(
+            unsnapped,
+            controller::drag_point(after, (13.0, 0.0), 10.0, &app.document, false)
+        );
+
+        app.begin_field_drag(Pos2::new(0.0, 0.0));
+        app.update_field_drag(Pos2::new(10_000.0, 0.0), 10.0, true);
+        app.commit_field_drag();
+        assert_eq!(
+            app.document.sets[0].positions[0].x,
+            app.document.grid.max_x()
+        );
     }
 }

@@ -2728,54 +2728,16 @@ impl eframe::App for DrillApp {
                         && response.dragged()
                         && !pointer_gesture_taken
                         && self.is_editable_set_start()
-                        && let (Some(before), Some(origin)) = (&self.drag_before, self.drag_origin)
+                        && self.drag_before.is_some()
                     {
-                        let delta = (pointer.x - origin.x, pointer.y - origin.y);
-                        let preview = self.drag_preview.get_or_insert_with(Vec::new);
-                        preview.clear();
-                        if controller::pointer_drag_committed(delta) {
-                            for &start in before {
-                                preview.push(controller::drag_point(
-                                    start,
-                                    delta,
-                                    field_map.scale,
-                                    &self.document,
-                                    snap_now,
-                                ));
-                            }
-                        } else {
-                            preview.extend_from_slice(before);
-                        }
+                        self.update_field_drag(pointer, field_map.scale, snap_now);
                     }
                     if !self.free_draw_active
                         && !interaction_locked
                         && response.drag_stopped()
                         && !pointer_gesture_taken
-                        && let Some(before) = self.drag_before.take()
                     {
-                        let after = self.drag_preview.take().unwrap_or_else(|| before.clone());
-                        // The dots have left the pointer and snapped to the
-                        // grid; run the one-shot landing settle.
-                        self.field_viewport.dots_landed();
-                        if before != after && self.ensure_editable_set_start() {
-                            let set_id = self.document.sets[self.current_set].id;
-                            let performer_ids = self
-                                .selected
-                                .iter()
-                                .filter_map(|&index| {
-                                    self.document.performers.get(index).map(|p| p.id)
-                                })
-                                .collect();
-                            self.execute_edit(
-                                Edit::MovePerformers {
-                                    set_id,
-                                    performer_ids,
-                                    positions: after,
-                                },
-                                super::i18n::registered(self.locale, "app-ui.063"),
-                            );
-                        }
-                        self.drag_origin = None;
+                        self.commit_field_drag();
                     }
                     if !self.free_draw_active
                         && !interaction_locked

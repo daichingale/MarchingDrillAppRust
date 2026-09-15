@@ -556,25 +556,7 @@ impl DrillApp {
                     ui.scroll_to_cursor(Some(egui::Align::Center));
                     self.workspace_focus = None;
                 }
-                if let Some(&first) = self.selected.iter().next() {
-                    let pos = self.document.sets[self.current_set].positions[first];
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "{} {}",
-                            self.document.performers[first].label
-                            ,super::i18n::registered(self.locale, "workspace-inspector.105")
-                        ))
-                        .strong(),
-                    );
-                    ui.small(coordinates::readable_localized(pos, &self.document.grid, self.locale));
-                    let segments =
-                        continuity::performer_continuity(&self.document, first);
-                    if let Some(seg) =
-                        segments.iter().find(|s| s.from_set == self.current_set)
-                    {
-                        ui.small(format!("→ {}", continuity::format_segment(seg, self.locale)));
-                    }
-                }
+                self.show_performer_properties(ui);
                 if let Some((min, max)) = self.selection_bounds() {
                     ui.label(egui::RichText::new(super::i18n::registered(self.locale, "workspace-inspector.079")).strong());
                     ui.horizontal_wrapped(|ui| {
@@ -1829,5 +1811,171 @@ impl DrillApp {
                 });
             },
         );
+    }
+
+    #[rustfmt::skip]
+    fn show_performer_properties(&mut self, ui: &mut egui::Ui) {
+        self.ensure_performer_draft();
+        let editable = self.is_editable_set_start();
+        let single = self.selected.len() == 1;
+        let sections: Vec<(SectionId, String)> = self
+            .document
+            .sections
+            .iter()
+            .map(|section| (section.id, section.name.clone()))
+            .collect();
+        let enter = ui.input(|input| input.key_pressed(egui::Key::Enter));
+        if single {
+            if let Some(&first) = self.selected.iter().next() {
+                let segments = continuity::performer_continuity(&self.document, first);
+                if let Some(seg) = segments.iter().find(|s| s.from_set == self.current_set) {
+                    ui.small(format!(
+                        "→ {}",
+                        continuity::format_segment(seg, self.locale)
+                    ));
+                }
+            }
+            let mut number = self
+                .performer_draft
+                .as_ref()
+                .map(|draft| draft.number.clone())
+                .unwrap_or_default();
+            let mut name = self
+                .performer_draft
+                .as_ref()
+                .map(|draft| draft.name.clone())
+                .unwrap_or_default();
+            ui.label(super::i18n::registered(self.locale, "workspace-inspector.212"));
+            let number_response = ui.add_enabled(
+                editable,
+                egui::TextEdit::singleline(&mut number).desired_width(f32::INFINITY),
+            );
+            ui.label(super::i18n::registered(self.locale, "workspace-inspector.213"));
+            let name_response = ui.add_enabled(
+                editable,
+                egui::TextEdit::singleline(&mut name).desired_width(f32::INFINITY),
+            );
+            if (number_response.changed() || name_response.changed())
+                && let Some(draft) = self.performer_draft.as_mut()
+            {
+                draft.number = number.clone();
+                draft.name = name.clone();
+                draft.label_dirty = true;
+            }
+            if (number_response.lost_focus()
+                || name_response.lost_focus()
+                || ((number_response.has_focus() || name_response.has_focus()) && enter))
+                && self
+                    .performer_draft
+                    .as_ref()
+                    .is_some_and(|draft| draft.label_dirty)
+            {
+                self.commit_performer_draft();
+            }
+        }
+        ui.label(super::i18n::registered(self.locale, "workspace-inspector.214"));
+        let mixed = self
+            .performer_draft
+            .as_ref()
+            .is_some_and(|draft| draft.section_mixed);
+        let current_section = self.performer_draft.as_ref().map(|draft| draft.section);
+        let selected_text = if mixed {
+            super::i18n::registered(self.locale, "workspace-inspector.219").to_owned()
+        } else {
+            current_section
+                .and_then(|id| {
+                    sections
+                        .iter()
+                        .find(|(section_id, _)| *section_id == id)
+                        .map(|(_, name)| name.clone())
+                })
+                .unwrap_or_else(|| "—".into())
+        };
+        let mut assigned = None;
+        egui::ComboBox::from_id_salt("performer-section")
+            .selected_text(selected_text)
+            .show_ui(ui, |ui| {
+                for (id, name) in &sections {
+                    if ui
+                        .selectable_label(current_section == Some(*id) && !mixed, name)
+                        .clicked()
+                    {
+                        assigned = Some(*id);
+                    }
+                }
+            });
+        if let Some(section) = assigned.filter(|_| editable) {
+            if let Some(draft) = self.performer_draft.as_mut() {
+                draft.section = section;
+                draft.section_mixed = false;
+                draft.section_dirty = true;
+            }
+            self.commit_performer_draft();
+        }
+        if single {
+            let mut x = self
+                .performer_draft
+                .as_ref()
+                .map(|draft| draft.x)
+                .unwrap_or(0.0);
+            let mut y = self
+                .performer_draft
+                .as_ref()
+                .map(|draft| draft.y)
+                .unwrap_or(0.0);
+            let dragging = self.drag_preview.is_some();
+            ui.horizontal(|ui| {
+                ui.label(super::i18n::registered(self.locale, "workspace-inspector.215"));
+                let x_response = ui.add_enabled(
+                    editable && !dragging,
+                    egui::DragValue::new(&mut x).speed(0.1),
+                );
+                ui.label(super::i18n::registered(self.locale, "workspace-inspector.216"));
+                let y_response = ui.add_enabled(
+                    editable && !dragging,
+                    egui::DragValue::new(&mut y).speed(0.1),
+                );
+                if (x_response.changed() || y_response.changed())
+                    && let Some(draft) = self.performer_draft.as_mut()
+                {
+                    draft.x = x;
+                    draft.y = y;
+                    draft.position_dirty = true;
+                }
+                let commit_xy = x_response.lost_focus()
+                    || y_response.lost_focus()
+                    || x_response.drag_stopped()
+                    || y_response.drag_stopped()
+                    || ((x_response.has_focus() || y_response.has_focus()) && enter);
+                if commit_xy
+                    && self
+                        .performer_draft
+                        .as_ref()
+                        .is_some_and(|draft| draft.position_dirty)
+                {
+                    self.commit_performer_draft();
+                }
+            });
+            if let Some(point) = self
+                .selected
+                .iter()
+                .next()
+                .and_then(|&index| self.inspector_point(index))
+            {
+                ui.small(coordinates::readable_localized(
+                    point,
+                    &self.document.grid,
+                    self.locale,
+                ));
+            }
+        }
+        ui.horizontal(|ui| {
+            ui.label(super::i18n::registered(self.locale, "workspace-inspector.217"));
+            let facing = ui.add_enabled(false, egui::Button::new("—"));
+            facing.on_disabled_hover_text(super::i18n::registered(self.locale, "workspace-inspector.218"));
+        });
+        if !editable {
+            ui.small(self.formation_edit_lock_reason());
+        }
     }
 }

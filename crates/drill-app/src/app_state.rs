@@ -89,8 +89,8 @@ use drill_core::transition::SetCounts;
 use drill_core::video::{ExportPreset, VideoExportConfig};
 use drill_core::{
     Document, Edit, GridConfig, GridLine, GridStyle, History, Performer, PerformerId,
-    PerformerKind, Point, Set, Symbol, Unit, camera::Camera, clinic, continuity, coordinates,
-    editing, evenly_spaced_arc, evenly_spaced_line, pathing, shapes,
+    PerformerKind, Point, SectionId, Set, Symbol, Unit, camera::Camera, clinic, continuity,
+    coordinates, editing, evenly_spaced_arc, evenly_spaced_line, pathing, shapes,
 };
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 use i18n::{Text, text};
@@ -428,6 +428,43 @@ pub(crate) struct SetCountDraft {
     pub(crate) moves: u16,
 }
 
+/// Session-only inspector fields for the current selection. Number and name
+/// share `Performer.label` (there is no separate number column). Facing is
+/// not on the performer schema; the inspector shows it disabled.
+#[derive(Clone, Debug, PartialEq)]
+struct PerformerInspectorDraft {
+    selected: BTreeSet<usize>,
+    number: String,
+    name: String,
+    section: SectionId,
+    section_mixed: bool,
+    x: f32,
+    y: f32,
+    label_dirty: bool,
+    section_dirty: bool,
+    position_dirty: bool,
+}
+
+fn split_performer_label(label: &str) -> (String, String) {
+    let label = label.trim();
+    match label.split_once(char::is_whitespace) {
+        Some((number, name)) => (number.to_string(), name.trim().to_string()),
+        None => (label.to_string(), String::new()),
+    }
+}
+
+fn join_performer_label(number: &str, name: &str) -> String {
+    let number = number.trim();
+    let name = name.trim();
+    if name.is_empty() {
+        number.to_string()
+    } else if number.is_empty() {
+        name.to_string()
+    } else {
+        format!("{number} {name}")
+    }
+}
+
 /// The result of a Knife cut, kept only long enough for the writer to pick a
 /// side. Session-only: drawing, inverting, or dismissing a cut never records
 /// an `Edit`; the resulting selection change goes through the same direct
@@ -726,6 +763,7 @@ pub(crate) struct DrillApp {
     /// Optional translucent reference form for A/B visual checks.
     set_comparison: Option<SetComparison>,
     set_count_draft: Option<SetCountDraft>,
+    performer_draft: Option<PerformerInspectorDraft>,
     formation_clipboard: FormationClipboard,
     /// Pending positions, keyed by stable performer ID.  Like shape previews,
     /// this never changes the document until the writer explicitly applies it.
@@ -872,6 +910,7 @@ impl Default for DrillApp {
             trail_selection: drill_render::TrailSelection::None,
             set_comparison: None,
             set_count_draft: None,
+            performer_draft: None,
             formation_clipboard: FormationClipboard::default(),
             clipboard_paste_preview: None,
             clipboard_paste_targets_selection: false,
@@ -1053,8 +1092,10 @@ impl DrillApp {
     }
 
     fn clear_selection(&mut self) {
+        self.commit_performer_draft();
         self.remember_selection();
         self.selected.clear();
+        self.performer_draft = None;
     }
 
     fn replace_selection(&mut self, selection: BTreeSet<usize>) {
@@ -1063,8 +1104,10 @@ impl DrillApp {
             .filter(|&index| self.is_selectable_index(index))
             .collect();
         if self.selected != selection {
+            self.commit_performer_draft();
             self.remember_selection();
             self.selected = selection;
+            self.performer_draft = None;
         }
     }
 
@@ -1138,6 +1181,7 @@ impl DrillApp {
     /// Selection could target unrelated performers in the new production.
     fn reset_selection_for_document(&mut self) {
         self.selected.clear();
+        self.performer_draft = None;
         self.selection_stack.clear();
         self.locked_performers.clear();
         self.hidden_performers.clear();
@@ -1695,6 +1739,7 @@ impl DrillApp {
         self.formation_clipboard = FormationClipboard::default();
         self.follow_leader_editing = None;
         self.set_count_draft = None;
+        self.performer_draft = None;
         self.set_comparison = None;
         self.grid_draft = None;
         self.grid_draft_dirty = false;
@@ -1745,6 +1790,7 @@ impl DrillApp {
     }
 
     fn begin_field_drag(&mut self, pointer: Pos2) {
+        self.commit_performer_draft();
         let Some(set) = self.document.sets.get(self.current_set) else {
             return;
         };
@@ -1756,6 +1802,248 @@ impl DrillApp {
         );
         self.drag_preview = self.drag_before.clone();
         self.drag_origin = Some(pointer);
+    }
+
+    fn update_field_drag(&mut self, pointer: Pos2, scale: f32, snap: bool) {
+        let Some(origin) = self.drag_origin else {
+            return;
+        };
+        let Some(before) = self.drag_before.as_ref() else {
+            return;
+        };
+        let delta = (pointer.x - origin.x, pointer.y - origin.y);
+        let preview = self.drag_preview.get_or_insert_with(Vec::new);
+        preview.clear();
+        if controller::pointer_drag_committed(delta) {
+            for &start in before {
+                preview.push(controller::drag_point(
+                    start,
+                    delta,
+                    scale,
+                    &self.document,
+                    snap,
+                ));
+            }
+        } else {
+            preview.extend_from_slice(before);
+        }
+    }
+
+    fn commit_field_drag(&mut self) {
+        let Some(before) = self.drag_before.take() else {
+            return;
+        };
+        let after = self.drag_preview.take().unwrap_or_else(|| before.clone());
+        self.field_viewport.dots_landed();
+        self.drag_origin = None;
+        if before != after && self.ensure_editable_set_start() {
+            let set_id = self.document.sets[self.current_set].id;
+            let performer_ids = self
+                .selected
+                .iter()
+                .filter_map(|&index| self.document.performers.get(index).map(|p| p.id))
+                .collect();
+            self.execute_edit(
+                Edit::MovePerformers {
+                    set_id,
+                    performer_ids,
+                    positions: after,
+                },
+                i18n::registered(self.locale, "app-ui.063"),
+            );
+        }
+    }
+
+    fn inspector_point(&self, index: usize) -> Option<Point> {
+        if let Some(preview) = &self.drag_preview
+            && let Some(slot) = self.selected.iter().position(|&i| i == index)
+        {
+            return preview.get(slot).copied();
+        }
+        self.document
+            .sets
+            .get(self.current_set)
+            .and_then(|set| set.positions.get(index).copied())
+    }
+
+    fn fresh_performer_draft(&self) -> Option<PerformerInspectorDraft> {
+        if self.selected.is_empty() {
+            return None;
+        }
+        let sections: Vec<SectionId> = self
+            .selected
+            .iter()
+            .filter_map(|&index| self.document.performers.get(index).map(|p| p.section))
+            .collect();
+        let first_section = *sections.first()?;
+        let section_mixed = sections.iter().any(|section| *section != first_section);
+        let (number, name, x, y) = if self.selected.len() == 1 {
+            let index = *self.selected.iter().next()?;
+            let performer = self.document.performers.get(index)?;
+            let (number, name) = split_performer_label(&performer.label);
+            let point = self.inspector_point(index)?;
+            (number, name, point.x, point.y)
+        } else {
+            (String::new(), String::new(), 0.0, 0.0)
+        };
+        Some(PerformerInspectorDraft {
+            selected: self.selected.clone(),
+            number,
+            name,
+            section: first_section,
+            section_mixed,
+            x,
+            y,
+            label_dirty: false,
+            section_dirty: false,
+            position_dirty: false,
+        })
+    }
+
+    fn ensure_performer_draft(&mut self) {
+        if self.selected.is_empty() {
+            self.performer_draft = None;
+            return;
+        }
+        let stale = self
+            .performer_draft
+            .as_ref()
+            .is_none_or(|draft| draft.selected != self.selected);
+        if stale {
+            self.performer_draft = self.fresh_performer_draft();
+            return;
+        }
+        if self.selected.len() == 1
+            && self
+                .performer_draft
+                .as_ref()
+                .is_some_and(|draft| !draft.position_dirty)
+        {
+            let index = *self.selected.iter().next().expect("len == 1");
+            if let Some(point) = self.inspector_point(index)
+                && let Some(draft) = self.performer_draft.as_mut()
+            {
+                draft.x = point.x;
+                draft.y = point.y;
+            }
+        }
+    }
+
+    fn commit_performer_draft(&mut self) {
+        let Some(draft) = self.performer_draft.as_ref() else {
+            return;
+        };
+        if draft.selected != self.selected {
+            self.performer_draft = None;
+            return;
+        }
+        let label_dirty = draft.label_dirty;
+        let section_dirty = draft.section_dirty;
+        let position_dirty = draft.position_dirty;
+        let number = draft.number.clone();
+        let name = draft.name.clone();
+        let section = draft.section;
+        let x = draft.x;
+        let y = draft.y;
+        if label_dirty && self.selected.len() == 1 {
+            self.commit_inspector_label(&number, &name);
+        }
+        if section_dirty {
+            self.commit_inspector_section(section);
+        }
+        if position_dirty && self.selected.len() == 1 {
+            self.commit_inspector_position(x, y);
+        }
+        if let Some(draft) = self.performer_draft.as_mut() {
+            draft.label_dirty = false;
+            draft.section_dirty = false;
+            draft.position_dirty = false;
+        }
+    }
+
+    fn commit_inspector_label(&mut self, number: &str, name: &str) {
+        let Some(&index) = self.selected.iter().next() else {
+            return;
+        };
+        let Some(performer) = self.document.performers.get(index) else {
+            return;
+        };
+        let label = join_performer_label(number, name);
+        if label.is_empty() || label == performer.label {
+            return;
+        }
+        let mut metadata = performer.metadata();
+        metadata.label = label;
+        self.execute_edit(
+            Edit::SetPerformerMetadata {
+                performer: performer.id,
+                metadata,
+            },
+            i18n::registered(self.locale, "workspace-inspector.220"),
+        );
+    }
+
+    fn commit_inspector_section(&mut self, section: SectionId) {
+        if !self.document.sections.iter().any(|item| item.id == section) {
+            return;
+        }
+        let assignments: Vec<(PerformerId, SectionId)> = self
+            .selected
+            .iter()
+            .filter_map(|&index| {
+                let performer = self.document.performers.get(index)?;
+                (performer.section != section).then_some((performer.id, section))
+            })
+            .collect();
+        if assignments.is_empty() {
+            return;
+        }
+        self.execute_edit(
+            Edit::AssignPerformersToSection { assignments },
+            i18n::registered(self.locale, "workspace-inspector.221"),
+        );
+        if let Some(draft) = self.performer_draft.as_mut() {
+            draft.section_mixed = false;
+            draft.section = section;
+        }
+    }
+
+    fn commit_inspector_position(&mut self, x: f32, y: f32) {
+        if self.selected.len() != 1 || !self.ensure_editable_set_start() {
+            return;
+        }
+        let Some(&index) = self.selected.iter().next() else {
+            return;
+        };
+        let Some(performer) = self.document.performers.get(index) else {
+            return;
+        };
+        let point = controller::field_point(
+            Point { x, y },
+            &self.document,
+            self.document.grid.snap_enabled,
+        );
+        let current = self
+            .document
+            .sets
+            .get(self.current_set)
+            .and_then(|set| set.positions.get(index).copied());
+        if current == Some(point) {
+            return;
+        }
+        let set_id = self.document.sets[self.current_set].id;
+        if self.execute_edit(
+            Edit::MovePerformers {
+                set_id,
+                performer_ids: vec![performer.id],
+                positions: vec![point],
+            },
+            i18n::registered(self.locale, "workspace-inspector.222"),
+        ) && let Some(draft) = self.performer_draft.as_mut()
+        {
+            draft.x = point.x;
+            draft.y = point.y;
+        }
     }
 
     fn place_performer_at(&mut self, raw: Point, snap: bool) {
@@ -2924,9 +3212,13 @@ impl DrillApp {
         if self.is_editable_set_start() {
             true
         } else {
-            self.status = i18n::registered(self.locale, "app-state.154").into();
+            self.status = self.formation_edit_lock_reason().into();
             false
         }
+    }
+
+    fn formation_edit_lock_reason(&self) -> &'static str {
+        i18n::registered(self.locale, "app-state.154")
     }
 
     /// Pause at the current set's exact start without disturbing the current
