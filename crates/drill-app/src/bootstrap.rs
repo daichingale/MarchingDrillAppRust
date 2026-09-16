@@ -1,6 +1,6 @@
 use super::DrillApp;
 use super::app_theme::AppTheme;
-use eframe::egui::{self, Vec2};
+use eframe::egui::{self};
 use eframe::egui_wgpu::{SurfaceConfig, WgpuConfiguration};
 use std::sync::Arc;
 
@@ -86,10 +86,6 @@ fn install_fonts(context: &egui::Context) {
     // seeds a sensible default so there's no unstyled flash before that
     // runs.
     AppTheme::default().apply(context);
-    context.all_styles_mut(|style| {
-        style.spacing.item_spacing = Vec2::new(8.0, 7.0);
-        style.spacing.button_padding = Vec2::new(10.0, 5.0);
-    });
 }
 
 #[cfg(test)]

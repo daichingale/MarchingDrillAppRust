@@ -385,9 +385,11 @@ impl eframe::App for DrillApp {
         );
 
         if self.simple_mode.enabled {
+            self.ensure_simple_chrome(ui.ctx());
             self.simple_ui(ui);
             return;
         }
+        self.restore_full_chrome(ui.ctx());
 
         if !self.focus_field {
             egui::MenuBar::new().ui(ui, |ui| {
@@ -2786,7 +2788,7 @@ impl eframe::App for DrillApp {
             }
             Some(onboarding::WelcomeAction::NewShow) => self.begin_new_show(),
             Some(onboarding::WelcomeAction::SimpleMode) => {
-                self.begin_new_show();
+                self.begin_simple_show();
                 self.simple_mode.enabled = true;
             }
             None => {}
@@ -2874,10 +2876,29 @@ impl DrillApp {
             .auto_shrink([false, true])
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
                     for (index, name, counts, set_id) in &cards {
                         let selected = *index == current_set;
-                        let response = ui
-                            .selectable_label(selected, format!("{}  {name}", index + 1))
+                        let fill = if selected {
+                            super::app_theme::ACCENT_SOFT
+                        } else {
+                            ui.visuals().extreme_bg_color
+                        };
+                        let stroke = if selected {
+                            egui::Stroke::new(1.0, super::app_theme::ACCENT)
+                        } else {
+                            egui::Stroke::new(1.0, super::app_theme::HAIRLINE)
+                        };
+                        let response = super::app_theme::surface_frame(ui)
+                            .fill(fill)
+                            .stroke(stroke)
+                            .corner_radius(super::app_theme::CORNER_SM)
+                            .inner_margin(egui::Margin::symmetric(10, 6))
+                            .show(ui, |ui| {
+                                ui.label(format!("{}  {name}", index + 1));
+                            })
+                            .response
+                            .interact(Sense::click())
                             .on_hover_text(super::i18n::registered(self.locale, "core-edit.037"));
                         if selected
                             && super::timeline::card_needs_follow_scroll(

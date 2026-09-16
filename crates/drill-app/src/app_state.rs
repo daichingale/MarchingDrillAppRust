@@ -1753,6 +1753,20 @@ impl DrillApp {
         self.status = i18n::registered(self.locale, "core-edit.010").into();
     }
 
+    fn begin_simple_show(&mut self) {
+        self.begin_new_show();
+        let mut next = self.document.clone();
+        next.performers.clear();
+        for set in &mut next.sets {
+            set.positions.clear();
+        }
+        self.document = next;
+        self.reset_selection_for_document();
+        self.frame_positions.clear();
+        self.field_tool = FieldTool::Place;
+        self.status = text(self.locale, Text::Ready).into();
+    }
+
     fn add_performer(&mut self) {
         let base = self.field_pointer.or_else(|| {
             self.selection_bounds().map(|(min, max)| Point {
@@ -1851,6 +1865,9 @@ impl DrillApp {
                 },
                 i18n::registered(self.locale, "app-ui.063"),
             );
+            if self.simple_mode.enabled {
+                self.onboarding.simple_drag_tip_seen = true;
+            }
         }
     }
 
@@ -2096,6 +2113,9 @@ impl DrillApp {
         } else {
             i18n::registered(self.locale, "core-edit.011").into()
         };
+        if self.simple_mode.enabled && self.document.performers.len() == 1 {
+            self.field_tool = FieldTool::Move;
+        }
     }
 
     fn positions_overlap(&self, point: Point) -> bool {

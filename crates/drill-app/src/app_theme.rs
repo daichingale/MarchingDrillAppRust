@@ -12,8 +12,7 @@ pub(crate) enum AppTheme {
     /// The original DrillForge dark theme: cool blue-grays, no strong accent.
     #[default]
     Studio,
-    /// Bright, neutral grays with a warm orange accent, in the spirit of a
-    /// modern light-mode DAW.
+    /// Bright, neutral grays with a blue accent.
     Daylight,
     /// Near-black panels with a saturated green accent, in the spirit of a
     /// classic dark-mode DAW.
@@ -79,7 +78,10 @@ impl AppTheme {
         // (Daylight is light, the other two are dark). Writing only the active
         // slot would silently lose the tuning the first time the user crossed
         // that boundary from a context we didn't re-apply.
-        ctx.all_styles_mut(|style| style.animation_time = COLLAPSE_ANIMATION_SECONDS);
+        ctx.all_styles_mut(|style| {
+            style.animation_time = COLLAPSE_ANIMATION_SECONDS;
+            polish_chrome(style, style.visuals.dark_mode);
+        });
     }
 
     pub(crate) fn load() -> Self {
@@ -109,6 +111,82 @@ fn preferences_path() -> Option<PathBuf> {
 /// Open/close tween length for every `CollapsingHeader` in the app, via
 /// `Style::animation_time`. See [`AppTheme::apply`].
 const COLLAPSE_ANIMATION_SECONDS: f32 = 0.15;
+
+/// Shared chrome tokens. Field rendering stays on `drill_render::Theme`;
+/// these only tune toolbars, panels, cards, and buttons.
+pub(crate) const ACCENT: Color32 = Color32::from_rgb(76, 163, 255);
+pub(crate) const ACCENT_HOVER: Color32 = Color32::from_rgb(232, 242, 255);
+pub(crate) const ACCENT_SOFT: Color32 = Color32::from_rgb(214, 232, 255);
+pub(crate) const SECONDARY_TEXT: Color32 = Color32::from_rgb(84, 90, 102);
+pub(crate) const HAIRLINE: Color32 = Color32::from_rgb(214, 218, 226);
+pub(crate) const CORNER: u8 = 10;
+pub(crate) const CORNER_SM: u8 = 8;
+
+fn polish_chrome(style: &mut egui::Style, dark: bool) {
+    use egui::TextStyle;
+    style.spacing.item_spacing = egui::Vec2::new(10.0, 8.0);
+    style.spacing.button_padding = egui::Vec2::new(12.0, 5.0);
+    style.spacing.interact_size.y = 28.0;
+    style
+        .text_styles
+        .insert(TextStyle::Body, egui::FontId::proportional(14.0));
+    style
+        .text_styles
+        .insert(TextStyle::Small, egui::FontId::proportional(12.0));
+    style
+        .text_styles
+        .insert(TextStyle::Button, egui::FontId::proportional(14.0));
+    let rounding = egui::CornerRadius::same(CORNER);
+    style.visuals.widgets.noninteractive.corner_radius = rounding;
+    style.visuals.widgets.inactive.corner_radius = rounding;
+    style.visuals.widgets.hovered.corner_radius = rounding;
+    style.visuals.widgets.active.corner_radius = rounding;
+    style.visuals.widgets.open.corner_radius = rounding;
+    style.visuals.window_corner_radius = egui::CornerRadius::same(12);
+    style.visuals.menu_corner_radius = rounding;
+    style.visuals.window_shadow = egui::Shadow::NONE;
+    style.visuals.popup_shadow = egui::Shadow::NONE;
+    if !dark {
+        style.visuals.widgets.hovered.bg_fill = ACCENT_HOVER;
+        style.visuals.widgets.hovered.weak_bg_fill = ACCENT_HOVER;
+        style.visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, ACCENT);
+        style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, HAIRLINE);
+        style.visuals.widgets.noninteractive.fg_stroke.color = SECONDARY_TEXT;
+        style.visuals.selection.bg_fill = ACCENT_SOFT;
+        style.visuals.selection.stroke.color = ACCENT;
+        style.visuals.hyperlink_color = ACCENT;
+    }
+}
+
+pub(crate) fn surface_frame(ui: &egui::Ui) -> egui::Frame {
+    egui::Frame::new()
+        .fill(ui.visuals().extreme_bg_color)
+        .stroke(egui::Stroke::new(1.0, HAIRLINE))
+        .corner_radius(CORNER)
+        .inner_margin(egui::Margin::same(10))
+}
+
+pub(crate) fn toolbar_frame(ui: &egui::Ui) -> egui::Frame {
+    egui::Frame::new()
+        .fill(ui.visuals().panel_fill)
+        .stroke(egui::Stroke::new(1.0, HAIRLINE))
+        .corner_radius(0)
+        .inner_margin(egui::Margin::symmetric(10, 4))
+}
+
+pub(crate) fn primary_button<'a>(text: impl Into<egui::WidgetText>) -> egui::Button<'a> {
+    egui::Button::new(text)
+        .fill(ACCENT)
+        .stroke(egui::Stroke::NONE)
+        .corner_radius(CORNER)
+}
+
+pub(crate) fn quiet_button<'a>(text: impl Into<egui::WidgetText>) -> egui::Button<'a> {
+    egui::Button::new(text)
+        .fill(Color32::TRANSPARENT)
+        .stroke(egui::Stroke::new(1.0, HAIRLINE))
+        .corner_radius(CORNER)
+}
 
 /// Softens the Studio/Daylight/Nightline switch from a hard flash into a
 /// dissolve, by washing the outgoing theme's dominant color over the new one
@@ -204,34 +282,34 @@ fn studio_visuals() -> egui::Visuals {
     visuals
 }
 
-/// Bright neutral grays, dark text, warm orange selection/accent -- evokes a
-/// light-mode DAW control surface without copying any specific product's
-/// exact palette.
+/// Bright neutral grays, dark text, blue selection/accent.
 fn daylight_visuals() -> egui::Visuals {
     let mut visuals = egui::Visuals::light();
-    let accent = Color32::from_rgb(240, 130, 40);
-    visuals.override_text_color = Some(Color32::from_gray(35));
-    visuals.panel_fill = Color32::from_rgb(226, 226, 228);
-    visuals.window_fill = Color32::from_rgb(235, 235, 237);
-    visuals.faint_bg_color = Color32::from_rgb(216, 216, 219);
-    visuals.extreme_bg_color = Color32::from_rgb(250, 250, 251);
-    visuals.widgets.noninteractive.bg_fill = Color32::from_rgb(226, 226, 228);
-    visuals.widgets.noninteractive.weak_bg_fill = Color32::from_rgb(226, 226, 228);
-    visuals.widgets.noninteractive.fg_stroke.color = Color32::from_gray(60);
-    visuals.widgets.inactive.bg_fill = Color32::from_rgb(206, 206, 210);
-    visuals.widgets.inactive.weak_bg_fill = Color32::from_rgb(206, 206, 210);
-    visuals.widgets.inactive.fg_stroke.color = Color32::from_gray(35);
-    visuals.widgets.hovered.bg_fill = Color32::from_rgb(224, 178, 138);
-    visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(224, 178, 138);
-    visuals.widgets.hovered.fg_stroke.color = Color32::from_gray(20);
+    let accent = ACCENT;
+    visuals.override_text_color = Some(Color32::from_rgb(32, 36, 44));
+    visuals.panel_fill = Color32::from_rgb(244, 246, 250);
+    visuals.window_fill = Color32::from_rgb(255, 255, 255);
+    visuals.faint_bg_color = Color32::from_rgb(236, 239, 245);
+    visuals.extreme_bg_color = Color32::from_rgb(255, 255, 255);
+    visuals.widgets.noninteractive.bg_fill = Color32::from_rgb(244, 246, 250);
+    visuals.widgets.noninteractive.weak_bg_fill = Color32::from_rgb(244, 246, 250);
+    visuals.widgets.noninteractive.fg_stroke.color = SECONDARY_TEXT;
+    visuals.widgets.inactive.bg_fill = Color32::from_rgb(255, 255, 255);
+    visuals.widgets.inactive.weak_bg_fill = Color32::from_rgb(255, 255, 255);
+    visuals.widgets.inactive.fg_stroke.color = Color32::from_rgb(32, 36, 44);
+    visuals.widgets.hovered.bg_fill = ACCENT_HOVER;
+    visuals.widgets.hovered.weak_bg_fill = ACCENT_HOVER;
+    visuals.widgets.hovered.fg_stroke.color = Color32::from_rgb(24, 40, 72);
     visuals.widgets.active.bg_fill = accent;
     visuals.widgets.active.weak_bg_fill = accent;
     visuals.widgets.active.fg_stroke.color = Color32::WHITE;
-    visuals.widgets.open.bg_fill = Color32::from_rgb(214, 214, 218);
-    visuals.widgets.open.weak_bg_fill = Color32::from_rgb(214, 214, 218);
-    visuals.selection.bg_fill = accent;
-    visuals.selection.stroke.color = Color32::from_gray(20);
+    visuals.widgets.open.bg_fill = Color32::from_rgb(236, 239, 245);
+    visuals.widgets.open.weak_bg_fill = Color32::from_rgb(236, 239, 245);
+    visuals.selection.bg_fill = ACCENT_SOFT;
+    visuals.selection.stroke.color = accent;
     visuals.hyperlink_color = accent;
+    visuals.window_shadow = egui::Shadow::NONE;
+    visuals.popup_shadow = egui::Shadow::NONE;
     visuals
 }
 
@@ -285,5 +363,14 @@ mod tests {
             let loaded: AppTheme = serde_json::from_slice(&bytes).unwrap();
             assert_eq!(loaded, theme);
         }
+    }
+
+    #[test]
+    fn daylight_is_light_with_blue_accent_and_no_shadow() {
+        let visuals = AppTheme::Daylight.visuals();
+        assert!(!visuals.dark_mode);
+        assert_eq!(visuals.hyperlink_color, ACCENT);
+        assert_eq!(visuals.window_shadow, egui::Shadow::NONE);
+        assert_eq!(visuals.popup_shadow, egui::Shadow::NONE);
     }
 }

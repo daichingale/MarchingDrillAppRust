@@ -16,6 +16,8 @@ pub struct OnboardingState {
     pub welcome_seen: bool,
     pub coach_dismissed: bool,
     pub coach_step: u8,
+    pub simple_drag_tip_seen: bool,
+    pub simple_steps_dismissed: bool,
     #[serde(skip)]
     pub show_welcome: bool,
     #[serde(skip)]
@@ -30,6 +32,8 @@ impl Default for OnboardingState {
             welcome_seen: false,
             coach_dismissed: false,
             coach_step: 0,
+            simple_drag_tip_seen: false,
+            simple_steps_dismissed: false,
             show_welcome: true,
             show_help: false,
             persisted: String::new(),
