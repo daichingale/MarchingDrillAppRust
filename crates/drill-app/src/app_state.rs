@@ -42,6 +42,8 @@ mod onboarding;
 mod perf_hud;
 #[path = "plugin_state.rs"]
 mod plugin_state;
+#[path = "presence_state.rs"]
+mod presence_state;
 #[path = "print_state.rs"]
 mod print_state;
 #[path = "production_markers_panel.rs"]
@@ -68,8 +70,6 @@ mod subset_snapshot_state;
 mod text_export_state;
 #[path = "timeline.rs"]
 mod timeline;
-#[path = "presence_state.rs"]
-mod presence_state;
 #[cfg(test)]
 #[path = "ui_qa.rs"]
 mod ui_qa;
@@ -88,9 +88,9 @@ use drill_core::route_suggestions::{
 use drill_core::transition::SetCounts;
 use drill_core::video::{ExportPreset, VideoExportConfig};
 use drill_core::{
-    Document, Edit, GridConfig, GridLine, GridStyle, History, PerformerId, Point, Set, Unit,
-    camera::Camera, clinic, continuity, coordinates, editing, evenly_spaced_arc,
-    evenly_spaced_line, pathing, shapes,
+    Document, Edit, GridConfig, GridLine, GridStyle, History, Performer, PerformerId,
+    PerformerKind, Point, SectionId, Set, Symbol, Unit, camera::Camera, clinic, continuity,
+    coordinates, editing, evenly_spaced_arc, evenly_spaced_line, pathing, shapes,
 };
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 use i18n::{Text, text};
@@ -118,6 +118,8 @@ pub(crate) struct PlaybackRangeSummary {
     pub(crate) end_count: u32,
     pub(crate) length: u32,
 }
+
+pub(crate) const PLAYBACK_SPEED_PRESETS: [f32; 3] = [0.5, 1.0, 2.0];
 
 pub(crate) fn playback_range_summary(
     document: &Document,
@@ -294,6 +296,35 @@ pub(crate) enum ViewMode {
     Stadium3D,
 }
 
+/// Direct-manipulation tool on the 2D field. Select still allows dragging
+/// a hit performer; Move lets an existing selection travel from empty space;
+/// Place drops new performers at the pointer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum FieldTool {
+    #[default]
+    Select,
+    Move,
+    Place,
+}
+
+impl FieldTool {
+    fn label(self, locale: Locale) -> &'static str {
+        match self {
+            Self::Select => i18n::registered(locale, "core-edit.019"),
+            Self::Move => i18n::registered(locale, "core-edit.021"),
+            Self::Place => i18n::registered(locale, "core-edit.023"),
+        }
+    }
+
+    fn hover(self, locale: Locale) -> &'static str {
+        match self {
+            Self::Select => i18n::registered(locale, "core-edit.020"),
+            Self::Move => i18n::registered(locale, "core-edit.022"),
+            Self::Place => i18n::registered(locale, "core-edit.024"),
+        }
+    }
+}
+
 /// A familiar, task-oriented arrangement of the working surface.  This is
 /// intentionally session state: switching between writing, checking, and
 /// presenting a show must never create an edit, affect exports, or alter undo.
@@ -384,6 +415,7 @@ pub(crate) enum DocumentOpenKind {
 pub(crate) enum DocumentOpenTarget {
     Dialog(DocumentOpenKind),
     Recent(PathBuf),
+    NewShow,
 }
 
 /// A deliberately session-only draft for timing changes.  Count changes can
@@ -394,6 +426,43 @@ pub(crate) enum DocumentOpenTarget {
 pub(crate) struct SetCountDraft {
     pub(crate) set_id: drill_core::SetId,
     pub(crate) moves: u16,
+}
+
+/// Session-only inspector fields for the current selection. Number and name
+/// share `Performer.label` (there is no separate number column). Facing is
+/// not on the performer schema; the inspector shows it disabled.
+#[derive(Clone, Debug, PartialEq)]
+struct PerformerInspectorDraft {
+    selected: BTreeSet<usize>,
+    number: String,
+    name: String,
+    section: SectionId,
+    section_mixed: bool,
+    x: f32,
+    y: f32,
+    label_dirty: bool,
+    section_dirty: bool,
+    position_dirty: bool,
+}
+
+fn split_performer_label(label: &str) -> (String, String) {
+    let label = label.trim();
+    match label.split_once(char::is_whitespace) {
+        Some((number, name)) => (number.to_string(), name.trim().to_string()),
+        None => (label.to_string(), String::new()),
+    }
+}
+
+fn join_performer_label(number: &str, name: &str) -> String {
+    let number = number.trim();
+    let name = name.trim();
+    if name.is_empty() {
+        number.to_string()
+    } else if number.is_empty() {
+        name.to_string()
+    } else {
+        format!("{number} {name}")
+    }
 }
 
 /// The result of a Knife cut, kept only long enough for the writer to pick a
@@ -569,6 +638,11 @@ pub(crate) struct DrillApp {
     drag_preview: Option<Vec<Point>>,
     drag_origin: Option<Pos2>,
     marquee_origin: Option<Pos2>,
+    field_tool: FieldTool,
+    /// Last pointer position on the 2D field, in document units. Place and
+    /// Add Performer use this so a new person lands under the cursor instead
+    /// of at field centre.
+    field_pointer: Option<Point>,
     current_path: Option<PathBuf>,
     dirty: bool,
     close_guard: CloseGuard,
@@ -689,6 +763,7 @@ pub(crate) struct DrillApp {
     /// Optional translucent reference form for A/B visual checks.
     set_comparison: Option<SetComparison>,
     set_count_draft: Option<SetCountDraft>,
+    performer_draft: Option<PerformerInspectorDraft>,
     formation_clipboard: FormationClipboard,
     /// Pending positions, keyed by stable performer ID.  Like shape previews,
     /// this never changes the document until the writer explicitly applies it.
@@ -720,7 +795,8 @@ impl Default for DrillApp {
                 *point = grid.snap(*point);
             }
         }
-        document.camera_program = drill_core::camera::CameraProgram::default_for_grid(&document.grid);
+        document.camera_program =
+            drill_core::camera::CameraProgram::default_for_grid(&document.grid);
         let playback_end = document.timeline_counts();
         let camera = Camera::press_box(&document.grid);
         Self {
@@ -760,6 +836,8 @@ impl Default for DrillApp {
             drag_preview: None,
             drag_origin: None,
             marquee_origin: None,
+            field_tool: FieldTool::Select,
+            field_pointer: None,
             current_path: None,
             dirty: false,
             close_guard: CloseGuard::Idle,
@@ -832,6 +910,7 @@ impl Default for DrillApp {
             trail_selection: drill_render::TrailSelection::None,
             set_comparison: None,
             set_count_draft: None,
+            performer_draft: None,
             formation_clipboard: FormationClipboard::default(),
             clipboard_paste_preview: None,
             clipboard_paste_targets_selection: false,
@@ -918,11 +997,40 @@ impl DrillApp {
     const MAX_SELECTION_HISTORY: usize = 10;
 
     fn begin_set_count_draft(&mut self) {
-        let set = &self.document.sets[self.current_set];
+        self.begin_set_count_draft_at(self.current_set);
+    }
+
+    fn begin_set_count_draft_at(&mut self, index: usize) {
+        let Some(set) = self.document.sets.get(index) else {
+            return;
+        };
         self.set_count_draft = Some(SetCountDraft {
             set_id: set.id,
             moves: set.counts,
         });
+    }
+
+    fn commit_transition_counts(&mut self, index: usize, moves: u16) -> bool {
+        if moves == 0 {
+            self.status = i18n::registered(self.locale, "core-edit.035").into();
+            return false;
+        }
+        let Some(set) = self.document.sets.get(index) else {
+            return false;
+        };
+        if set.counts == moves {
+            self.set_count_draft = None;
+            return true;
+        }
+        self.set_count_draft = Some(SetCountDraft {
+            set_id: set.id,
+            moves,
+        });
+        self.apply_set_count_draft();
+        self.document
+            .sets
+            .get(index)
+            .is_some_and(|set| set.counts == moves)
     }
 
     fn discard_set_count_draft(&mut self) {
@@ -933,6 +1041,9 @@ impl DrillApp {
         let Some(draft) = self.set_count_draft else {
             return;
         };
+        if draft.moves == 0 {
+            return;
+        }
         let Some(index) = self
             .document
             .sets
@@ -981,8 +1092,10 @@ impl DrillApp {
     }
 
     fn clear_selection(&mut self) {
+        self.commit_performer_draft();
         self.remember_selection();
         self.selected.clear();
+        self.performer_draft = None;
     }
 
     fn replace_selection(&mut self, selection: BTreeSet<usize>) {
@@ -991,8 +1104,23 @@ impl DrillApp {
             .filter(|&index| self.is_selectable_index(index))
             .collect();
         if self.selected != selection {
+            self.commit_performer_draft();
             self.remember_selection();
             self.selected = selection;
+            self.performer_draft = None;
+        }
+    }
+
+    /// Inspector roster rows use the same selection set as the field.
+    fn select_performer_from_list(&mut self, index: usize, additive: bool) {
+        if additive {
+            let mut next = self.selected.clone();
+            if !next.insert(index) {
+                next.remove(&index);
+            }
+            self.replace_selection(next);
+        } else {
+            self.replace_selection([index].into_iter().collect());
         }
     }
 
@@ -1053,6 +1181,7 @@ impl DrillApp {
     /// Selection could target unrelated performers in the new production.
     fn reset_selection_for_document(&mut self) {
         self.selected.clear();
+        self.performer_draft = None;
         self.selection_stack.clear();
         self.locked_performers.clear();
         self.hidden_performers.clear();
@@ -1061,13 +1190,50 @@ impl DrillApp {
         self.cancel_knife();
     }
 
+    /// Structural edits and undo/redo can shrink the roster or the set list.
+    /// Session indexes (current set, selection, playback range) are not stored
+    /// in History, so they must be clamped or the next frame panics on
+    /// `sets[current_set]`.
+    fn clamp_session_to_document(&mut self) {
+        let set_count = self.document.sets.len().max(1);
+        self.current_set = self.current_set.min(set_count - 1);
+        let performer_count = self.document.performers.len();
+        self.selected.retain(|&index| index < performer_count);
+        let max_count = self
+            .document
+            .sets
+            .get(self.current_set)
+            .map(|set| f32::from(set.counts))
+            .unwrap_or(0.0);
+        self.count_position = self.count_position.clamp(0.0, max_count);
+        let total = self.document.timeline_counts();
+        self.playback_end = self.playback_end.min(total);
+        self.playback_start = self.playback_start.min(self.playback_end.saturating_sub(1));
+        self.timeline_view.normalize(total);
+        self.locked_performers
+            .retain(|id| self.document.performers.iter().any(|p| p.id == *id));
+        self.hidden_performers
+            .retain(|id| self.document.performers.iter().any(|p| p.id == *id));
+        if self
+            .visibility_focus
+            .is_some_and(|id| self.document.performers.iter().all(|p| p.id != id))
+        {
+            self.visibility_focus = None;
+        }
+    }
+
     /// Splits `base` into the two sides of the straight line from `start` to
     /// `end`, using a 2D cross-product half-plane test against each
     /// performer's CURRENT position. A point exactly on the line (`cross ==
     /// 0.0`) is treated as `side_a`. Returns `None` for a near-zero-length
     /// line (almost always an accidental click rather than an intended cut)
     /// or when `base` yields no on-document indexes.
-    fn knife_cut(&self, start: Point, end: Point, base: impl Iterator<Item = usize>) -> Option<KnifeSplit> {
+    fn knife_cut(
+        &self,
+        start: Point,
+        end: Point,
+        base: impl Iterator<Item = usize>,
+    ) -> Option<KnifeSplit> {
         let dx = end.x - start.x;
         let dy = end.y - start.y;
         if dx.hypot(dy) < 1e-4 {
@@ -1469,6 +1635,8 @@ impl DrillApp {
             .is_some(),
             has_previous_set: self.current_set > 0,
             has_next_set: self.current_set.saturating_add(1) < self.document.sets.len(),
+            has_multiple_sets: self.document.sets.len() > 1,
+            can_exit_field_tool: self.field_tool != FieldTool::Select,
         }
     }
 
@@ -1497,11 +1665,16 @@ impl DrillApp {
             return;
         }
         let mut next = self.document.clone();
+        let previous_total = self.document.timeline_counts();
         next.sets.insert(
             insert_at,
             Set {
                 id: new_id,
-                name: format!("セット {}", insert_at + 1),
+                name: match self.locale {
+                    Locale::Ja => format!("セット {}", insert_at + 1),
+                    Locale::En => format!("Set {}", insert_at + 1),
+                },
+                generated_by: None,
                 ..source
             },
         );
@@ -1517,6 +1690,524 @@ impl DrillApp {
         self.current_set = insert_at;
         self.count_position = 0.0;
         self.dirty = true;
+        self.sync_playback_range_to_timeline(previous_total);
+    }
+
+    fn sync_playback_range_to_timeline(&mut self, previous_total: u32) {
+        let new_total = self.document.timeline_counts();
+        self.playback_end = if self.playback_end >= previous_total {
+            new_total
+        } else {
+            self.playback_end.min(new_total)
+        };
+        self.playback_start = self.playback_start.min(self.playback_end.saturating_sub(1));
+        self.timeline_view.normalize(new_total);
+    }
+
+    fn request_new_show(&mut self) {
+        self.request_open_target(DocumentOpenTarget::NewShow);
+    }
+
+    fn begin_new_show(&mut self) {
+        const BLANK_PERFORMERS: usize = 16;
+        let document = Document::blank(BLANK_PERFORMERS);
+        self.document = document;
+        self.tempo_bpm = self.document.tempo.bpm_at(0.0);
+        self.camera = Camera::press_box(&self.document.grid);
+        self.camera_program_preview = true;
+        self.section_manager.clear_drafts();
+        self.project_warnings.clear();
+        self.current_path = None;
+        self.current_set = 0;
+        self.count_position = 0.0;
+        self.playing = false;
+        self.audio_state = audio_state::AudioState::default();
+        self.audio_draft = None;
+        self.audio_draft_dirty = false;
+        self.reset_selection_for_document();
+        self.playback_start = 0;
+        self.playback_end = self.document.timeline_counts();
+        self.timeline_view = TimelineViewport::fit(self.playback_end);
+        self.field_viewport = field_view::FieldViewport::fit(&self.document.grid);
+        self.history = History::with_limit(500);
+        self.dirty = false;
+        self.frame_positions.clear();
+        self.frame_positions.reserve(self.document.performers.len());
+        self.formation_preview_spec = None;
+        self.formation_preview_points.clear();
+        self.clipboard_paste_preview = None;
+        self.formation_clipboard = FormationClipboard::default();
+        self.follow_leader_editing = None;
+        self.set_count_draft = None;
+        self.performer_draft = None;
+        self.set_comparison = None;
+        self.grid_draft = None;
+        self.grid_draft_dirty = false;
+        self.tempo_draft = None;
+        self.tempo_draft_dirty = false;
+        self.free_draw_active = false;
+        self.free_draw_raw.clear();
+        self.underlay_state.remove();
+        self.field_tool = FieldTool::Select;
+        self.field_pointer = None;
+        self.status = i18n::registered(self.locale, "core-edit.010").into();
+    }
+
+    fn begin_simple_show(&mut self) {
+        self.begin_new_show();
+        let mut next = self.document.clone();
+        next.performers.clear();
+        for set in &mut next.sets {
+            set.positions.clear();
+        }
+        self.document = next;
+        self.reset_selection_for_document();
+        self.frame_positions.clear();
+        self.field_tool = FieldTool::Place;
+        self.status = text(self.locale, Text::Ready).into();
+    }
+
+    fn add_performer(&mut self) {
+        let base = self.field_pointer.or_else(|| {
+            self.selection_bounds().map(|(min, max)| Point {
+                x: (min.x + max.x) * 0.5,
+                y: (min.y + max.y) * 0.5,
+            })
+        });
+        let grid = &self.document.grid;
+        let step = grid.horizontal_units / f32::from(grid.horizontal_steps.max(1));
+        let raw = match base {
+            Some(point) if self.field_pointer.is_some() => point,
+            Some(point) => Point {
+                x: point.x + step,
+                y: point.y,
+            },
+            None => Point {
+                x: grid.width * 0.5,
+                y: grid.height * 0.5,
+            },
+        };
+        self.place_performer_at(raw, self.document.grid.snap_enabled);
+    }
+
+    fn set_field_tool(&mut self, tool: FieldTool) {
+        if self.field_tool == tool {
+            return;
+        }
+        self.field_tool = tool;
+        let id = match tool {
+            FieldTool::Select => "core-edit.028",
+            FieldTool::Move => "core-edit.027",
+            FieldTool::Place => "core-edit.026",
+        };
+        self.status = i18n::registered(self.locale, id).into();
+    }
+
+    fn begin_field_drag(&mut self, pointer: Pos2) {
+        self.commit_performer_draft();
+        let Some(set) = self.document.sets.get(self.current_set) else {
+            return;
+        };
+        self.drag_before = Some(
+            self.selected
+                .iter()
+                .map(|&index| set.positions[index])
+                .collect(),
+        );
+        self.drag_preview = self.drag_before.clone();
+        self.drag_origin = Some(pointer);
+    }
+
+    fn update_field_drag(&mut self, pointer: Pos2, scale: f32, snap: bool) {
+        let Some(origin) = self.drag_origin else {
+            return;
+        };
+        let Some(before) = self.drag_before.as_ref() else {
+            return;
+        };
+        let delta = (pointer.x - origin.x, pointer.y - origin.y);
+        let preview = self.drag_preview.get_or_insert_with(Vec::new);
+        preview.clear();
+        if controller::pointer_drag_committed(delta) {
+            for &start in before {
+                preview.push(controller::drag_point(
+                    start,
+                    delta,
+                    scale,
+                    &self.document,
+                    snap,
+                ));
+            }
+        } else {
+            preview.extend_from_slice(before);
+        }
+    }
+
+    fn commit_field_drag(&mut self) {
+        let Some(before) = self.drag_before.take() else {
+            return;
+        };
+        let after = self.drag_preview.take().unwrap_or_else(|| before.clone());
+        self.field_viewport.dots_landed();
+        self.drag_origin = None;
+        if before != after && self.ensure_editable_set_start() {
+            let set_id = self.document.sets[self.current_set].id;
+            let performer_ids = self
+                .selected
+                .iter()
+                .filter_map(|&index| self.document.performers.get(index).map(|p| p.id))
+                .collect();
+            self.execute_edit(
+                Edit::MovePerformers {
+                    set_id,
+                    performer_ids,
+                    positions: after,
+                },
+                i18n::registered(self.locale, "app-ui.063"),
+            );
+            if self.simple_mode.enabled {
+                self.onboarding.simple_drag_tip_seen = true;
+            }
+        }
+    }
+
+    fn inspector_point(&self, index: usize) -> Option<Point> {
+        if let Some(preview) = &self.drag_preview
+            && let Some(slot) = self.selected.iter().position(|&i| i == index)
+        {
+            return preview.get(slot).copied();
+        }
+        self.document
+            .sets
+            .get(self.current_set)
+            .and_then(|set| set.positions.get(index).copied())
+    }
+
+    fn fresh_performer_draft(&self) -> Option<PerformerInspectorDraft> {
+        if self.selected.is_empty() {
+            return None;
+        }
+        let sections: Vec<SectionId> = self
+            .selected
+            .iter()
+            .filter_map(|&index| self.document.performers.get(index).map(|p| p.section))
+            .collect();
+        let first_section = *sections.first()?;
+        let section_mixed = sections.iter().any(|section| *section != first_section);
+        let (number, name, x, y) = if self.selected.len() == 1 {
+            let index = *self.selected.iter().next()?;
+            let performer = self.document.performers.get(index)?;
+            let (number, name) = split_performer_label(&performer.label);
+            let point = self.inspector_point(index)?;
+            (number, name, point.x, point.y)
+        } else {
+            (String::new(), String::new(), 0.0, 0.0)
+        };
+        Some(PerformerInspectorDraft {
+            selected: self.selected.clone(),
+            number,
+            name,
+            section: first_section,
+            section_mixed,
+            x,
+            y,
+            label_dirty: false,
+            section_dirty: false,
+            position_dirty: false,
+        })
+    }
+
+    fn ensure_performer_draft(&mut self) {
+        if self.selected.is_empty() {
+            self.performer_draft = None;
+            return;
+        }
+        let stale = self
+            .performer_draft
+            .as_ref()
+            .is_none_or(|draft| draft.selected != self.selected);
+        if stale {
+            self.performer_draft = self.fresh_performer_draft();
+            return;
+        }
+        if self.selected.len() == 1
+            && self
+                .performer_draft
+                .as_ref()
+                .is_some_and(|draft| !draft.position_dirty)
+        {
+            let index = *self.selected.iter().next().expect("len == 1");
+            if let Some(point) = self.inspector_point(index)
+                && let Some(draft) = self.performer_draft.as_mut()
+            {
+                draft.x = point.x;
+                draft.y = point.y;
+            }
+        }
+    }
+
+    fn commit_performer_draft(&mut self) {
+        let Some(draft) = self.performer_draft.as_ref() else {
+            return;
+        };
+        if draft.selected != self.selected {
+            self.performer_draft = None;
+            return;
+        }
+        let label_dirty = draft.label_dirty;
+        let section_dirty = draft.section_dirty;
+        let position_dirty = draft.position_dirty;
+        let number = draft.number.clone();
+        let name = draft.name.clone();
+        let section = draft.section;
+        let x = draft.x;
+        let y = draft.y;
+        if label_dirty && self.selected.len() == 1 {
+            self.commit_inspector_label(&number, &name);
+        }
+        if section_dirty {
+            self.commit_inspector_section(section);
+        }
+        if position_dirty && self.selected.len() == 1 {
+            self.commit_inspector_position(x, y);
+        }
+        if let Some(draft) = self.performer_draft.as_mut() {
+            draft.label_dirty = false;
+            draft.section_dirty = false;
+            draft.position_dirty = false;
+        }
+    }
+
+    fn commit_inspector_label(&mut self, number: &str, name: &str) {
+        let Some(&index) = self.selected.iter().next() else {
+            return;
+        };
+        let Some(performer) = self.document.performers.get(index) else {
+            return;
+        };
+        let label = join_performer_label(number, name);
+        if label.is_empty() || label == performer.label {
+            return;
+        }
+        let mut metadata = performer.metadata();
+        metadata.label = label;
+        self.execute_edit(
+            Edit::SetPerformerMetadata {
+                performer: performer.id,
+                metadata,
+            },
+            i18n::registered(self.locale, "workspace-inspector.220"),
+        );
+    }
+
+    fn commit_inspector_section(&mut self, section: SectionId) {
+        if !self.document.sections.iter().any(|item| item.id == section) {
+            return;
+        }
+        let assignments: Vec<(PerformerId, SectionId)> = self
+            .selected
+            .iter()
+            .filter_map(|&index| {
+                let performer = self.document.performers.get(index)?;
+                (performer.section != section).then_some((performer.id, section))
+            })
+            .collect();
+        if assignments.is_empty() {
+            return;
+        }
+        self.execute_edit(
+            Edit::AssignPerformersToSection { assignments },
+            i18n::registered(self.locale, "workspace-inspector.221"),
+        );
+        if let Some(draft) = self.performer_draft.as_mut() {
+            draft.section_mixed = false;
+            draft.section = section;
+        }
+    }
+
+    fn commit_inspector_position(&mut self, x: f32, y: f32) {
+        if self.selected.len() != 1 || !self.ensure_editable_set_start() {
+            return;
+        }
+        let Some(&index) = self.selected.iter().next() else {
+            return;
+        };
+        let Some(performer) = self.document.performers.get(index) else {
+            return;
+        };
+        let point = controller::field_point(
+            Point { x, y },
+            &self.document,
+            self.document.grid.snap_enabled,
+        );
+        let current = self
+            .document
+            .sets
+            .get(self.current_set)
+            .and_then(|set| set.positions.get(index).copied());
+        if current == Some(point) {
+            return;
+        }
+        let set_id = self.document.sets[self.current_set].id;
+        if self.execute_edit(
+            Edit::MovePerformers {
+                set_id,
+                performer_ids: vec![performer.id],
+                positions: vec![point],
+            },
+            i18n::registered(self.locale, "workspace-inspector.222"),
+        ) && let Some(draft) = self.performer_draft.as_mut()
+        {
+            draft.x = point.x;
+            draft.y = point.y;
+        }
+    }
+
+    fn place_performer_at(&mut self, raw: Point, snap: bool) {
+        if !self.ensure_editable_set_start() {
+            return;
+        }
+        let failure = i18n::registered(self.locale, "core-edit.014");
+        let Some(id) = self.document.next_performer_id() else {
+            self.status = failure.into();
+            return;
+        };
+        let Some(section) = self.document.sections.first().map(|section| section.id) else {
+            self.status = failure.into();
+            return;
+        };
+        let position = controller::field_point(raw, &self.document, snap);
+        let overlap = self.positions_overlap(position);
+        let mut next = self.document.clone();
+        if next
+            .add_performer(
+                Performer {
+                    id,
+                    label: format!("P{}", id.get()),
+                    section,
+                    symbol: Symbol::Cross,
+                    color: None.into(),
+                    height_m: 1.7,
+                    kind: PerformerKind::Wind,
+                },
+                position,
+            )
+            .is_err()
+        {
+            self.status = failure.into();
+            return;
+        }
+        if !self.execute_edit(
+            Edit::ReplaceDocument {
+                document: Box::new(next),
+            },
+            failure,
+        ) {
+            return;
+        }
+        if let Some(index) = self.document.performers.iter().position(|p| p.id == id) {
+            self.replace_selection([index].into_iter().collect());
+        }
+        self.status = if overlap {
+            i18n::registered(self.locale, "core-edit.025").into()
+        } else {
+            i18n::registered(self.locale, "core-edit.011").into()
+        };
+        if self.simple_mode.enabled && self.document.performers.len() == 1 {
+            self.field_tool = FieldTool::Move;
+        }
+    }
+
+    fn positions_overlap(&self, point: Point) -> bool {
+        let Some(set) = self.document.sets.get(self.current_set) else {
+            return false;
+        };
+        let step = self.document.grid.horizontal_units
+            / f32::from(self.document.grid.horizontal_steps.max(1));
+        let threshold = (step * 0.5).max(0.05);
+        set.positions
+            .iter()
+            .any(|existing| (existing.x - point.x).hypot(existing.y - point.y) < threshold)
+    }
+
+    fn remove_selected_performers(&mut self) {
+        if !self.ensure_editable_set_start() {
+            return;
+        }
+        let failure = i18n::registered(self.locale, "core-edit.015");
+        if self.selected.is_empty() {
+            self.status = failure.into();
+            return;
+        }
+        let ids: Vec<PerformerId> = self
+            .selected
+            .iter()
+            .filter_map(|&index| self.document.performers.get(index).map(|p| p.id))
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        if ids.len() >= self.document.performers.len() {
+            self.status = i18n::registered(self.locale, "core-edit.018").into();
+            return;
+        }
+        let mut next = self.document.clone();
+        if next.remove_performers(&ids).is_err() {
+            self.status = failure.into();
+            return;
+        }
+        if !self.execute_edit(
+            Edit::ReplaceDocument {
+                document: Box::new(next),
+            },
+            failure,
+        ) {
+            return;
+        }
+        let dropped: BTreeSet<_> = ids.into_iter().collect();
+        self.locked_performers.retain(|id| !dropped.contains(id));
+        self.hidden_performers.retain(|id| !dropped.contains(id));
+        self.last_filtered_performers
+            .retain(|id| !dropped.contains(id));
+        if self
+            .visibility_focus
+            .is_some_and(|id| dropped.contains(&id))
+        {
+            self.visibility_focus = None;
+        }
+        self.selection_stack.clear();
+        self.selected.clear();
+        self.status = i18n::registered(self.locale, "core-edit.012").into();
+    }
+
+    fn delete_current_set(&mut self) {
+        let failure = i18n::registered(self.locale, "core-edit.016");
+        if self.document.sets.len() <= 1 {
+            self.status = failure.into();
+            return;
+        }
+        let previous_total = self.document.timeline_counts();
+        let index = self.current_set;
+        let mut next = self.document.clone();
+        if next.remove_set_at(index).is_err() {
+            self.status = failure.into();
+            return;
+        }
+        if !self.execute_edit(
+            Edit::ReplaceDocument {
+                document: Box::new(next),
+            },
+            failure,
+        ) {
+            return;
+        }
+        self.current_set = index.min(self.document.sets.len().saturating_sub(1));
+        self.count_position = 0.0;
+        self.playing = false;
+        self.audio_state.pause();
+        self.set_count_draft = None;
+        self.sync_playback_range_to_timeline(previous_total);
+        self.status = i18n::registered(self.locale, "core-edit.013").into();
     }
 
     /// Auto-generates a "follow the leader" snake maneuver as `steps`
@@ -1819,6 +2510,7 @@ impl DrillApp {
 
     fn execute_command(&mut self, command: UiCommand, context: &egui::Context) {
         match command {
+            UiCommand::NewDocument => self.request_new_show(),
             UiCommand::OpenDocument => self.request_open_document(DocumentOpenKind::LegacyJson),
             UiCommand::OpenProject => self.request_open_document(DocumentOpenKind::Project),
             UiCommand::OpenRecent => self.show_recent_projects = true,
@@ -1831,23 +2523,30 @@ impl DrillApp {
             UiCommand::Undo => {
                 if self.history.undo(&mut self.document) {
                     self.dirty = true;
+                    self.clamp_session_to_document();
                     self.status = i18n::registered(self.locale, "app-state.149").into();
                 }
             }
             UiCommand::Redo => {
                 if self.history.redo(&mut self.document) {
                     self.dirty = true;
+                    self.clamp_session_to_document();
                     self.status = i18n::registered(self.locale, "app-state.150").into();
                 }
             }
             UiCommand::SelectAll => {
                 self.replace_selection((0..self.document.performers.len()).collect())
             }
+            UiCommand::AddPerformer => self.add_performer(),
+            UiCommand::RemoveSelectedPerformers => self.remove_selected_performers(),
             UiCommand::ClearSelection => {
                 if self.clipboard_paste_preview.is_some() {
                     self.cancel_clipboard_paste_preview();
                 } else if self.formation_preview_spec.is_some() || self.free_draw_active {
                     self.cancel_shape_preview();
+                } else if self.field_tool != FieldTool::Select {
+                    self.field_tool = FieldTool::Select;
+                    self.status = i18n::registered(self.locale, "core-edit.029").into();
                 } else {
                     self.clear_selection();
                 }
@@ -1865,6 +2564,7 @@ impl DrillApp {
             UiCommand::LockSelection => self.lock_selected_performers(),
             UiCommand::HideSelection => self.hide_selected_performers(),
             UiCommand::DuplicateSet => self.duplicate_current_set(),
+            UiCommand::DeleteSet => self.delete_current_set(),
             UiCommand::ManageSections => self.section_manager.open = true,
             UiCommand::PlayPause => self.toggle_playback(context),
             UiCommand::RangeStart => self.navigate_to_global_count(self.playback_start),
@@ -2532,9 +3232,13 @@ impl DrillApp {
         if self.is_editable_set_start() {
             true
         } else {
-            self.status = i18n::registered(self.locale, "app-state.154").into();
+            self.status = self.formation_edit_lock_reason().into();
             false
         }
+    }
+
+    fn formation_edit_lock_reason(&self) -> &'static str {
+        i18n::registered(self.locale, "app-state.154")
     }
 
     /// Pause at the current set's exact start without disturbing the current
@@ -2542,6 +3246,31 @@ impl DrillApp {
     fn return_to_editable_set_start(&mut self) {
         self.navigate_to_set(self.current_set);
         self.status = i18n::registered(self.locale, "app-state.155").into();
+    }
+
+    fn jump_to_show_start(&mut self) {
+        self.navigate_to_global_count(0);
+    }
+
+    /// Dragging the playhead pauses both clocks and shows interpolated
+    /// positions without writing the current set's committed picture.
+    fn scrub_to(&mut self, set_index: usize, local_count: f32) {
+        if set_index >= self.document.sets.len() {
+            return;
+        }
+        self.current_set = set_index;
+        self.count_position = local_count;
+        self.playing = false;
+        self.audio_state.pause();
+        if let Some(track) = &self.document.audio {
+            let global = self.document.global_count(set_index, local_count);
+            self.audio_state
+                .seek_seconds(drill_core::audio::count_to_audio_time(
+                    track,
+                    &self.document.tempo,
+                    global,
+                ));
+        }
     }
 
     /// Jump to a set's first exact count without changing the working
@@ -3376,6 +4105,78 @@ impl DrillApp {
         }
     }
 
+    fn apply_saved_path(&mut self, path: PathBuf) {
+        self.current_path = Some(path.clone());
+        self.dirty = false;
+        self.status = format!(
+            "{}: {}",
+            i18n::registered(self.locale, "app-ui.068"),
+            path.display()
+        );
+    }
+
+    fn apply_loaded_project(
+        &mut self,
+        path: PathBuf,
+        project: Box<drill_project::container::LoadedProject>,
+    ) {
+        let mut project = *project;
+        let embedded_audio = project.manifest.assets.iter().find_map(|entry| {
+            if entry.kind == drill_project::container::AssetKind::Audio {
+                project
+                    .embedded
+                    .remove(&entry.id)
+                    .map(|bytes| (bytes, entry.original_name.clone()))
+            } else {
+                None
+            }
+        });
+        let embedded_image = project.manifest.assets.iter().find_map(|entry| {
+            (entry.kind == drill_project::container::AssetKind::Image)
+                .then(|| {
+                    project
+                        .embedded
+                        .remove(&entry.id)
+                        .map(|bytes| (bytes, entry.original_name.clone()))
+                })
+                .flatten()
+        });
+        self.document = project.document;
+        self.tempo_bpm = self.document.tempo.bpm_at(0.0);
+        self.camera = Camera::press_box(&self.document.grid);
+        self.camera_program_preview = true;
+        self.section_manager.clear_drafts();
+        self.project_warnings = project.warnings;
+        self.recent_projects.remember(path.clone());
+        self.current_path = Some(path);
+        self.current_set = 0;
+        self.count_position = 0.0;
+        self.playing = false;
+        self.reset_selection_for_document();
+        self.field_tool = FieldTool::Select;
+        self.field_pointer = None;
+        self.drag_before = None;
+        self.drag_preview = None;
+        self.drag_origin = None;
+        self.marquee_origin = None;
+        self.field_viewport.reset(&self.document.grid);
+        self.playback_start = 0;
+        self.playback_end = self.document.timeline_counts();
+        self.history = History::with_limit(500);
+        self.dirty = false;
+        self.status = i18n::registered(self.locale, "app-ui.069").into();
+        if let Some((bytes, name)) = embedded_audio {
+            self.audio_state.start_decode_bytes(bytes, &name);
+            self.status = format!("プロジェクトを開きました · 埋込音源 {name} を準備中…");
+        }
+        if let Some((bytes, name)) = embedded_image {
+            self.underlay_state.load_bytes(bytes, name);
+        } else if self.document.underlay.is_some() {
+            self.underlay_state.remove();
+            self.status = i18n::registered(self.locale, "app-ui.004").into();
+        }
+    }
+
     /// Read-only 3D stadium visualization of the current frame. Editing stays in 2D.
     fn save_dialog(&mut self) {
         let path = self
@@ -3384,7 +4185,7 @@ impl DrillApp {
             .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
             .or_else(|| {
                 rfd::FileDialog::new()
-                    .add_filter("DrillForge", &["drill.json"])
+                    .add_filter("JSON", &["json"])
                     .set_file_name("untitled.drill.json")
                     .save_file()
             });
@@ -3398,7 +4199,7 @@ impl DrillApp {
     /// Save, which reuses the current legacy JSON path when there is one.
     fn save_as_dialog(&mut self) {
         if let Some(path) = rfd::FileDialog::new()
-            .add_filter("DrillForge", &["drill.json"])
+            .add_filter("JSON", &["json"])
             .set_file_name("untitled.drill.json")
             .save_file()
         {
@@ -3442,7 +4243,7 @@ impl DrillApp {
         match kind {
             DocumentOpenKind::LegacyJson => {
                 if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("DrillForge", &["json"])
+                    .add_filter("JSON", &["json"])
                     .pick_file()
                 {
                     self.project_state.load_legacy_json(path);
@@ -3475,6 +4276,7 @@ impl DrillApp {
                     self.project_state.load_legacy_json(path);
                 }
             }
+            DocumentOpenTarget::NewShow => self.begin_new_show(),
         }
     }
 }

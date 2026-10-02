@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 pub enum WelcomeAction {
     OpenJson,
     OpenProject,
+    NewShow,
+    SimpleMode,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -14,6 +16,8 @@ pub struct OnboardingState {
     pub welcome_seen: bool,
     pub coach_dismissed: bool,
     pub coach_step: u8,
+    pub simple_drag_tip_seen: bool,
+    pub simple_steps_dismissed: bool,
     #[serde(skip)]
     pub show_welcome: bool,
     #[serde(skip)]
@@ -28,6 +32,8 @@ impl Default for OnboardingState {
             welcome_seen: false,
             coach_dismissed: false,
             coach_step: 0,
+            simple_drag_tip_seen: false,
+            simple_steps_dismissed: false,
             show_welcome: true,
             show_help: false,
             persisted: String::new(),
@@ -136,6 +142,24 @@ impl OnboardingState {
             ui.add_space(10.0);
             ui.horizontal_wrapped(|ui| {
                 if ui
+                    .button(super::i18n::registered(locale, "onboarding.025"))
+                    .on_hover_text(super::i18n::registered(locale, "onboarding.026"))
+                    .clicked()
+                {
+                    self.welcome_seen = true;
+                    self.show_welcome = false;
+                    action = Some(WelcomeAction::NewShow);
+                }
+                if ui
+                    .button(super::i18n::registered(locale, "onboarding.027"))
+                    .on_hover_text(super::i18n::registered(locale, "onboarding.028"))
+                    .clicked()
+                {
+                    self.welcome_seen = true;
+                    self.show_welcome = false;
+                    action = Some(WelcomeAction::SimpleMode);
+                }
+                if ui
                     .button(super::i18n::registered(locale, "onboarding.006"))
                     .on_hover_text(super::i18n::registered(locale, "onboarding.007"))
                     .clicked()
@@ -186,6 +210,11 @@ impl OnboardingState {
                 );
                 ui.label(super::i18n::registered(locale, "onboarding.017"));
                 ui.label(super::i18n::registered(locale, "onboarding.018"));
+                ui.separator();
+                ui.label(
+                    egui::RichText::new(super::i18n::registered(locale, "onboarding.029")).strong(),
+                );
+                ui.label(super::i18n::registered(locale, "onboarding.030"));
                 ui.separator();
                 ui.label(
                     egui::RichText::new(super::i18n::registered(locale, "onboarding.019")).strong(),

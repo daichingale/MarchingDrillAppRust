@@ -15,6 +15,7 @@ pub(crate) enum Menu {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Command {
+    NewDocument,
     OpenDocument,
     OpenProject,
     OpenRecent,
@@ -27,6 +28,8 @@ pub(crate) enum Command {
     Undo,
     Redo,
     SelectAll,
+    AddPerformer,
+    RemoveSelectedPerformers,
     ClearSelection,
     RestoreRecentSelection,
     CopyFormation,
@@ -41,6 +44,7 @@ pub(crate) enum Command {
     LockSelection,
     HideSelection,
     DuplicateSet,
+    DeleteSet,
     ManageSections,
     PlayPause,
     RangeStart,
@@ -89,6 +93,9 @@ pub(crate) struct Context {
     pub has_next_production_marker: bool,
     pub has_previous_set: bool,
     pub has_next_set: bool,
+    pub has_multiple_sets: bool,
+    /// Select/Move/Place: Esc can leave Place/Move even with an empty selection.
+    pub can_exit_field_tool: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -102,6 +109,10 @@ pub(crate) struct Spec {
 pub(crate) enum Shortcut {
     Command(egui::Key),
     CommandShift(egui::Key),
+    /// Supported by shortcut dispatch for Command+Alt chords. None are bound
+    /// today: set navigation uses PageUp/PageDown so it does not collide with
+    /// Linux desktop workspace switching.
+    #[allow(dead_code)]
     CommandAlt(egui::Key),
     Alt(egui::Key),
     Plain(egui::Key),
@@ -168,6 +179,9 @@ pub(crate) fn command_for_chord(
     if editor_owns_keyboard {
         return None;
     }
+    if key == egui::Key::Backspace && modifiers.is_none() {
+        return Some(Command::RemoveSelectedPerformers);
+    }
     SPECS.iter().find_map(|spec| {
         spec.shortcut
             .filter(|shortcut| shortcut.matches(modifiers, key))
@@ -210,9 +224,29 @@ pub(crate) fn consume_shortcut(
                 .filter(|spec| !spec.shortcut.is_some_and(Shortcut::is_extra_specific))
                 .find_map(&mut try_consume)
         })
+        .or_else(|| {
+            // macOS's key labeled Delete sends Backspace. Keep remove reachable
+            // without a second Edit-menu row that would duplicate the command.
+            if Command::RemoveSelectedPerformers
+                .enabled(context, locale)
+                .is_ok()
+                && ui.input_mut(|input| {
+                    input.consume_key(egui::Modifiers::NONE, egui::Key::Backspace)
+                })
+            {
+                Some(Command::RemoveSelectedPerformers)
+            } else {
+                None
+            }
+        })
 }
 
 pub(crate) const SPECS: &[Spec] = &[
+    Spec {
+        command: Command::NewDocument,
+        menu: Menu::File,
+        shortcut: Some(Shortcut::Command(egui::Key::N)),
+    },
     Spec {
         command: Command::OpenDocument,
         menu: Menu::File,
@@ -274,6 +308,16 @@ pub(crate) const SPECS: &[Spec] = &[
         command: Command::SelectAll,
         menu: Menu::Edit,
         shortcut: Some(Shortcut::Command(egui::Key::A)),
+    },
+    Spec {
+        command: Command::AddPerformer,
+        menu: Menu::Edit,
+        shortcut: Some(Shortcut::CommandShift(egui::Key::A)),
+    },
+    Spec {
+        command: Command::RemoveSelectedPerformers,
+        menu: Menu::Edit,
+        shortcut: Some(Shortcut::Plain(egui::Key::Delete)),
     },
     Spec {
         command: Command::ClearSelection,
@@ -351,6 +395,11 @@ pub(crate) const SPECS: &[Spec] = &[
         shortcut: Some(Shortcut::Command(egui::Key::D)),
     },
     Spec {
+        command: Command::DeleteSet,
+        menu: Menu::Set,
+        shortcut: None,
+    },
+    Spec {
         command: Command::ManageSections,
         menu: Menu::Set,
         shortcut: None,
@@ -398,12 +447,12 @@ pub(crate) const SPECS: &[Spec] = &[
     Spec {
         command: Command::PreviousSet,
         menu: Menu::Playback,
-        shortcut: Some(Shortcut::CommandAlt(egui::Key::ArrowLeft)),
+        shortcut: Some(Shortcut::Plain(egui::Key::PageUp)),
     },
     Spec {
         command: Command::NextSet,
         menu: Menu::Playback,
-        shortcut: Some(Shortcut::CommandAlt(egui::Key::ArrowRight)),
+        shortcut: Some(Shortcut::Plain(egui::Key::PageDown)),
     },
     Spec {
         command: Command::GoToGlobalCount,
@@ -508,6 +557,7 @@ impl Command {
     pub(crate) fn label(self, locale: Locale) -> &'static str {
         use Command::*;
         match (locale, self) {
+            (_, NewDocument) => super::i18n::registered(locale, "commands.137"),
             (_, OpenDocument) => super::i18n::registered(locale, "commands.115"),
             (_, OpenProject) => super::i18n::registered(locale, "commands.116"),
             (_, OpenRecent) => super::i18n::registered(locale, "recent-projects.013"),
@@ -523,6 +573,8 @@ impl Command {
             (Locale::En, Redo) => "Redo",
             (Locale::Ja, SelectAll) => "全員を選択",
             (Locale::En, SelectAll) => "Select All",
+            (_, AddPerformer) => super::i18n::registered(locale, "commands.138"),
+            (_, RemoveSelectedPerformers) => super::i18n::registered(locale, "commands.139"),
             (Locale::Ja, ClearSelection) => "選択を解除",
             (Locale::En, ClearSelection) => "Clear Selection",
             (Locale::Ja, RestoreRecentSelection) => "直前の選択を復元",
@@ -538,8 +590,9 @@ impl Command {
             (_, MakeLine) => super::i18n::registered(locale, "commands.129"),
             (_, LockSelection) => super::i18n::registered(locale, "commands.130"),
             (_, HideSelection) => super::i18n::registered(locale, "commands.131"),
-            (Locale::Ja, DuplicateSet) => "現在のセットを複製",
-            (Locale::En, DuplicateSet) => "Duplicate Current Set",
+            (Locale::Ja, DuplicateSet) => "次のセットを追加（隊形をコピー）",
+            (Locale::En, DuplicateSet) => "Add Next Set (Copy Formation)",
+            (_, DeleteSet) => super::i18n::registered(locale, "commands.140"),
             (Locale::Ja, ManageSections) => "セクション管理…",
             (Locale::En, ManageSections) => "Manage Sections…",
             (Locale::Ja, PlayPause) => "再生／一時停止",
@@ -608,7 +661,20 @@ impl Command {
                 Locale::Ja => "演者がいません",
                 Locale::En => "No performers",
             }),
-            ClearSelection | FocusPerformerTools if !context.has_selection => Err(match locale {
+            RemoveSelectedPerformers if !context.has_selection => Err(match locale {
+                Locale::Ja => "先に演者を選択してください",
+                Locale::En => "Select performers first",
+            }),
+            AddPerformer | RemoveSelectedPerformers if !context.can_edit_selection => {
+                Err(super::i18n::registered(locale, "core-edit.030"))
+            }
+            ClearSelection if !context.has_selection && !context.can_exit_field_tool => {
+                Err(match locale {
+                    Locale::Ja => "先に演者を選択してください",
+                    Locale::En => "Select performers first",
+                })
+            }
+            FocusPerformerTools if !context.has_selection => Err(match locale {
                 Locale::Ja => "先に演者を選択してください",
                 Locale::En => "Select performers first",
             }),
@@ -645,6 +711,10 @@ impl Command {
             DuplicateSet | RangeCurrentSet if !context.has_sets => Err(match locale {
                 Locale::Ja => "セットがありません",
                 Locale::En => "No sets",
+            }),
+            DeleteSet if !context.has_multiple_sets => Err(match locale {
+                Locale::Ja => "最後のセットは削除できません",
+                Locale::En => "Cannot delete the only set",
             }),
             PreviousProductionMarker if !context.has_previous_production_marker => {
                 Err(super::i18n::registered(locale, "commands.103"))
@@ -741,11 +811,14 @@ mod tests {
     fn every_product_workspace_is_discoverable() {
         for command in [
             Command::OpenDocument,
+            Command::NewDocument,
             Command::Save,
             Command::SaveAs,
             Command::ImportCoordinates,
             Command::ImportMusicalTimeline,
             Command::FocusPerformerTools,
+            Command::AddPerformer,
+            Command::RemoveSelectedPerformers,
             Command::ManageSections,
             Command::FocusGrid,
             Command::FocusAudio,
@@ -759,6 +832,35 @@ mod tests {
         ] {
             assert!(SPECS.iter().any(|spec| spec.command == command));
         }
+        assert_eq!(
+            specs(Menu::File).next().map(|spec| spec.command),
+            Some(Command::NewDocument)
+        );
+        assert!(
+            SPECS
+                .iter()
+                .any(|spec| spec.command == Command::DeleteSet && spec.menu == Menu::Set)
+        );
+    }
+
+    #[test]
+    fn page_keys_move_between_sets_and_backspace_removes_performers() {
+        assert_eq!(
+            command_for_chord(egui::Modifiers::NONE, egui::Key::PageUp, false),
+            Some(Command::PreviousSet)
+        );
+        assert_eq!(
+            command_for_chord(egui::Modifiers::NONE, egui::Key::PageDown, false),
+            Some(Command::NextSet)
+        );
+        assert_eq!(
+            command_for_chord(egui::Modifiers::NONE, egui::Key::Delete, false),
+            Some(Command::RemoveSelectedPerformers)
+        );
+        assert_eq!(
+            command_for_chord(egui::Modifiers::NONE, egui::Key::Backspace, false),
+            Some(Command::RemoveSelectedPerformers)
+        );
     }
 
     #[test]
@@ -857,7 +959,10 @@ mod tests {
                 continue;
             };
             checked_at_least_one_pair = true;
-            let resolved = resolve_via_real_egui_dispatch(extra_shortcut.modifiers, extra_shortcut.logical_key);
+            let resolved = resolve_via_real_egui_dispatch(
+                extra_shortcut.modifiers,
+                extra_shortcut.logical_key,
+            );
             assert_eq!(
                 resolved,
                 Some(extra.command),
@@ -877,7 +982,10 @@ mod tests {
     /// which uses the exact-match helper) through a real `egui::Context`, so
     /// assertions reflect what actually happens at the keyboard.
     #[cfg(test)]
-    fn resolve_via_real_egui_dispatch(modifiers: egui::Modifiers, key: egui::Key) -> Option<Command> {
+    fn resolve_via_real_egui_dispatch(
+        modifiers: egui::Modifiers,
+        key: egui::Key,
+    ) -> Option<Command> {
         let egui_ctx = egui::Context::default();
         let full_context = Context {
             can_undo: true,
@@ -893,9 +1001,13 @@ mod tests {
             has_next_production_marker: true,
             has_previous_set: true,
             has_next_set: true,
+            has_multiple_sets: true,
+            can_exit_field_tool: true,
         };
-        let mut raw_input = egui::RawInput::default();
-        raw_input.modifiers = modifiers;
+        let mut raw_input = egui::RawInput {
+            modifiers,
+            ..egui::RawInput::default()
+        };
         raw_input.events.push(egui::Event::Key {
             key,
             physical_key: Some(key),
@@ -941,6 +1053,8 @@ mod tests {
             has_next_production_marker: true,
             has_previous_set: true,
             has_next_set: true,
+            has_multiple_sets: true,
+            can_exit_field_tool: true,
         };
         for spec in SPECS {
             assert!(spec.command.enabled(available, Locale::Ja).is_ok());
@@ -952,5 +1066,19 @@ mod tests {
                 assert!(en.is_ascii());
             }
         }
+    }
+
+    #[test]
+    fn escape_can_leave_place_without_a_selection() {
+        let context = Context {
+            can_exit_field_tool: true,
+            ..Context::default()
+        };
+        assert!(Command::ClearSelection.enabled(context, Locale::En).is_ok());
+        assert!(
+            Command::ClearSelection
+                .enabled(Context::default(), Locale::En)
+                .is_err()
+        );
     }
 }

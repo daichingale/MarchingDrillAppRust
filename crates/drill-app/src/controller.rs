@@ -59,6 +59,27 @@ pub(crate) fn playback_decision(document: &Document, input: PlaybackInput) -> Pl
     }
 }
 
+/// Pointer travel (pixels) below which a press is a click, not a move.
+/// egui reports `drag_started` for tiny motion, and snapping a zero-pixel
+/// drag would jump an off-grid performer the moment they were clicked.
+pub(crate) const DRAG_COMMIT_PIXELS: f32 = 4.0;
+
+pub(crate) fn pointer_drag_committed(screen_delta: (f32, f32)) -> bool {
+    screen_delta.0.hypot(screen_delta.1) >= DRAG_COMMIT_PIXELS
+}
+
+/// Snap (optional) then clamp onto the writable field. `width`/`height` are
+/// the canvas size; [`drill_core::GridConfig::max_x`] is the last on-grid
+/// point that still fits, so clamping to the canvas then snapping can land
+/// a performer off-grid or past the sideline.
+pub(crate) fn field_point(raw: Point, document: &Document, snap: bool) -> Point {
+    let point = if snap { document.grid.snap(raw) } else { raw };
+    Point {
+        x: point.x.clamp(0.0, document.grid.max_x()),
+        y: point.y.clamp(0.0, document.grid.max_y()),
+    }
+}
+
 /// `scale` must be the same field<->screen scale the view is drawn and
 /// hit-tested with (see [`drill_render::FieldMap`]), not an independent
 /// per-axis stretch — otherwise a drag moves a performer by a different
@@ -69,14 +90,19 @@ pub(crate) fn drag_point(
     screen_delta: (f32, f32),
     scale: f32,
     document: &Document,
+    snap: bool,
 ) -> Point {
     let scale = scale.max(f32::EPSILON);
     let dx = screen_delta.0 / scale;
     let dy = -screen_delta.1 / scale;
-    document.grid.snap(Point {
-        x: (start.x + dx).clamp(0.0, document.grid.width),
-        y: (start.y + dy).clamp(0.0, document.grid.height),
-    })
+    field_point(
+        Point {
+            x: start.x + dx,
+            y: start.y + dy,
+        },
+        document,
+        snap,
+    )
 }
 
 #[cfg(test)]
@@ -122,7 +148,13 @@ mod tests {
     #[test]
     fn drag_is_clamped_and_snapped_by_document_grid() {
         let document = Document::demo(2, 2);
-        let point = drag_point(Point { x: 0.0, y: 0.0 }, (-1000.0, 1000.0), 1.0, &document);
+        let point = drag_point(
+            Point { x: 0.0, y: 0.0 },
+            (-1000.0, 1000.0),
+            1.0,
+            &document,
+            true,
+        );
         assert_eq!(point, Point { x: 0.0, y: 0.0 });
     }
 
@@ -132,7 +164,42 @@ mod tests {
         // pointer the same number of pixels on x and y should move the
         // performer the same document-unit distance on both axes.
         let document = Document::demo(2, 2);
-        let point = drag_point(Point { x: 10.0, y: 10.0 }, (20.0, 20.0), 4.0, &document);
+        let point = drag_point(
+            Point { x: 10.0, y: 10.0 },
+            (20.0, 20.0),
+            4.0,
+            &document,
+            true,
+        );
         assert_eq!(point, document.grid.snap(Point { x: 15.0, y: 5.0 }));
+    }
+
+    #[test]
+    fn drag_clamps_to_the_last_on_grid_point_not_the_canvas_edge() {
+        let document = Document::blank(1);
+        let max = document.grid.max_x();
+        assert!(max < document.grid.width);
+        let point = drag_point(
+            Point {
+                x: max - 1.0,
+                y: 10.0,
+            },
+            (100_000.0, 0.0),
+            1.0,
+            &document,
+            true,
+        );
+        assert_eq!(point.x, max);
+        assert_eq!(point, document.grid.snap(point));
+        let free = drag_point(Point { x: 8.0, y: 8.0 }, (3.0, -2.0), 1.0, &document, false);
+        assert_eq!(free, Point { x: 11.0, y: 10.0 });
+    }
+
+    #[test]
+    fn tiny_pointer_travel_is_a_click_not_a_move() {
+        assert!(!pointer_drag_committed((0.0, 0.0)));
+        assert!(!pointer_drag_committed((3.0, 0.0)));
+        assert!(pointer_drag_committed((DRAG_COMMIT_PIXELS, 0.0)));
+        assert!(pointer_drag_committed((3.0, 3.0)));
     }
 }

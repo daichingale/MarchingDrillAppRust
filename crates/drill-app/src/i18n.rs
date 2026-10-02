@@ -52,7 +52,9 @@ pub enum Text {
     Playback,
     View,
     Help,
+    #[allow(dead_code)]
     SelectAll,
+    #[allow(dead_code)]
     ClearSelection,
     Play,
     Pause,

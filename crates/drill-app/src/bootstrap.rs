@@ -1,6 +1,6 @@
-use super::app_theme::AppTheme;
 use super::DrillApp;
-use eframe::egui::{self, Vec2};
+use super::app_theme::AppTheme;
+use eframe::egui::{self};
 use eframe::egui_wgpu::{SurfaceConfig, WgpuConfiguration};
 use std::sync::Arc;
 
@@ -86,10 +86,6 @@ fn install_fonts(context: &egui::Context) {
     // seeds a sensible default so there's no unstyled flash before that
     // runs.
     AppTheme::default().apply(context);
-    context.all_styles_mut(|style| {
-        style.spacing.item_spacing = Vec2::new(8.0, 7.0);
-        style.spacing.button_padding = Vec2::new(10.0, 5.0);
-    });
 }
 
 #[cfg(test)]
@@ -110,7 +106,8 @@ mod tests {
             "one queued frame is the whole point of the setting"
         );
         assert_ne!(
-            surface, SurfaceConfig::HIGH_THROUGHPUT,
+            surface,
+            SurfaceConfig::HIGH_THROUGHPUT,
             "egui-wgpu's default must not be what we ship"
         );
         // Vsync stays on: the goal is to shorten the queue, not to tear.

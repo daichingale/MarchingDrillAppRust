@@ -645,6 +645,204 @@ impl Document {
         }
     }
 
+    /// A one-set show on the Japanese floor-drill grid, with `count`
+    /// performers in a centered block. This is File → New: a writable
+    /// starting roster, not a two-set demo of transitions.
+    pub fn blank(count: usize) -> Self {
+        let count = count.clamp(1, MAX_PERFORMERS);
+        let grid = GridConfig::japan_floor();
+        let section = Section {
+            id: SectionId::new(1).expect("blank section id is non-zero"),
+            name: "Ensemble".into(),
+            short: "Ens".into(),
+            color: [245, 197, 66],
+            order: 0,
+        };
+        let cols = (count as f32).sqrt().ceil().max(1.0) as usize;
+        let rows = count.div_ceil(cols);
+        let step = grid.horizontal_units / f32::from(grid.horizontal_steps.max(1));
+        let gap = step * 4.0;
+        let origin_x = (grid.width - cols.saturating_sub(1) as f32 * gap) * 0.5;
+        let origin_y = (grid.height - rows.saturating_sub(1) as f32 * gap) * 0.5;
+        let performers = (0..count)
+            .map(|i| Performer {
+                id: PerformerId::new(i as u32 + 1).expect("blank performer id is non-zero"),
+                label: format!("P{}", i + 1),
+                section: section.id,
+                symbol: Symbol::Cross,
+                color: Some([245, 197, 66]).into(),
+                height_m: default_height_m(),
+                kind: PerformerKind::Wind,
+            })
+            .collect::<Vec<_>>();
+        let positions = (0..count)
+            .map(|i| {
+                grid.snap(Point {
+                    x: origin_x + (i % cols) as f32 * gap,
+                    y: origin_y + (i / cols) as f32 * gap,
+                })
+            })
+            .collect::<Vec<_>>();
+        Self {
+            schema_version: SCHEMA_VERSION,
+            title: "新しいドリル".into(),
+            grid: grid.clone(),
+            tempo: tempo::TempoMap::constant(120.0),
+            audio: None,
+            underlay: None,
+            camera_program: camera::CameraProgram::default_for_grid(&grid),
+            sections: vec![section],
+            subsets: Vec::new(),
+            performers,
+            sets: vec![Set {
+                id: SetId::new(1).expect("blank set id is non-zero"),
+                name: "セット 1".into(),
+                annotation: SetAnnotation::default(),
+                counts: 16,
+                hold: 0,
+                routes: RouteTable::default(),
+                shape: None,
+                generated_by: None,
+                positions,
+            }],
+            production_markers: Vec::new(),
+            generators: Vec::new(),
+        }
+    }
+
+    pub fn next_performer_id(&self) -> Option<PerformerId> {
+        let max = self
+            .performers
+            .iter()
+            .map(|performer| performer.id.get())
+            .max()
+            .unwrap_or(0);
+        PerformerId::new(max.checked_add(1)?)
+    }
+
+    pub fn next_set_id(&self) -> Option<SetId> {
+        let max = self.sets.iter().map(|set| set.id.get()).max().unwrap_or(0);
+        SetId::new(max.checked_add(1)?)
+    }
+
+    /// Appends one performer, copying `position` onto every set so the
+    /// roster stays index-aligned. Route overrides and subsets are left
+    /// alone: the newcomer uses the default route and belongs to no subset.
+    pub fn add_performer(
+        &mut self,
+        performer: Performer,
+        position: Point,
+    ) -> Result<(), DrillError> {
+        if self.performers.len() >= MAX_PERFORMERS {
+            return Err(DrillError::LimitExceeded {
+                field: "performers",
+                limit: MAX_PERFORMERS,
+            });
+        }
+        if !position.x.is_finite() || !position.y.is_finite() {
+            return Err(DrillError::InvalidNumber { field: "positions" });
+        }
+        if self
+            .performers
+            .iter()
+            .any(|existing| existing.id == performer.id)
+        {
+            return Err(DrillError::DuplicatePerformerId);
+        }
+        if !self
+            .sections
+            .iter()
+            .any(|section| section.id == performer.section)
+        {
+            return Err(DrillError::InvalidEdit);
+        }
+        let position = self.grid.snap(Point {
+            x: position.x.clamp(0.0, self.grid.max_x()),
+            y: position.y.clamp(0.0, self.grid.max_y()),
+        });
+        self.performers.push(performer);
+        for set in &mut self.sets {
+            set.positions.push(position);
+        }
+        self.validate()
+    }
+
+    /// Drops the named performers from the roster, every set's position
+    /// vector, subset membership, and route overrides. A Follow the Leader
+    /// generator that listed any of them is detached rather than left with a
+    /// hole in its group.
+    pub fn remove_performers(&mut self, ids: &[PerformerId]) -> Result<(), DrillError> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let drop: BTreeSet<_> = ids.iter().copied().collect();
+        if drop
+            .iter()
+            .any(|id| self.performers.iter().all(|p| p.id != *id))
+        {
+            return Err(DrillError::MissingPerformer);
+        }
+        let keep: Vec<usize> = self
+            .performers
+            .iter()
+            .enumerate()
+            .filter(|(_, performer)| !drop.contains(&performer.id))
+            .map(|(index, _)| index)
+            .collect();
+        if keep.is_empty() {
+            return Err(DrillError::InvalidEdit);
+        }
+        self.performers = keep
+            .iter()
+            .map(|&index| self.performers[index].clone())
+            .collect();
+        for set in &mut self.sets {
+            set.positions = keep.iter().map(|&index| set.positions[index]).collect();
+            set.routes.overrides.retain(|id, _| !drop.contains(id));
+        }
+        for subset in &mut self.subsets {
+            subset.members.retain(|id| !drop.contains(id));
+        }
+        let affected_generators: Vec<GeneratorId> = self
+            .generators
+            .iter()
+            .filter(|generator| generator.group.iter().any(|id| drop.contains(id)))
+            .map(|generator| generator.id)
+            .collect();
+        for id in affected_generators {
+            self.detach_generator(id);
+        }
+        self.validate()
+    }
+
+    /// Removes the set at `index`. The last remaining set cannot be deleted
+    /// (`EmptySets`). A generator that owned the set is detached.
+    pub fn remove_set_at(&mut self, index: usize) -> Result<(), DrillError> {
+        if self.sets.len() <= 1 {
+            return Err(DrillError::EmptySets);
+        }
+        let Some(set) = self.sets.get(index) else {
+            return Err(DrillError::MissingSet);
+        };
+        if let Some(generator_id) = set.generated_by {
+            self.detach_generator(generator_id);
+        } else {
+            let owned: Vec<GeneratorId> = self
+                .generators
+                .iter()
+                .filter(|generator| {
+                    generator.owns.contains(&set.id) || generator.source_set == set.id
+                })
+                .map(|generator| generator.id)
+                .collect();
+            for id in owned {
+                self.detach_generator(id);
+            }
+        }
+        self.sets.remove(index);
+        self.validate()
+    }
+
     pub fn generator(&self, id: GeneratorId) -> Option<&FollowTheLeaderGenerator> {
         self.generators.iter().find(|entry| entry.id == id)
     }
@@ -1935,6 +2133,76 @@ mod tests {
     }
 
     #[test]
+    fn blank_show_is_a_valid_single_set_roster() {
+        let doc = Document::blank(16);
+        assert!(doc.validate().is_ok());
+        assert_eq!(doc.performers.len(), 16);
+        assert_eq!(doc.sets.len(), 1);
+        assert_eq!(doc.sets[0].positions.len(), 16);
+        assert_eq!(doc.grid, GridConfig::japan_floor());
+        assert!(
+            doc.sets[0]
+                .positions
+                .iter()
+                .all(|point| *point == doc.grid.snap(*point))
+        );
+    }
+
+    #[test]
+    fn add_and_remove_performer_keep_every_set_aligned() {
+        let mut doc = Document::demo(2, 2);
+        let id = doc.next_performer_id().unwrap();
+        let section = doc.sections[0].id;
+        doc.add_performer(
+            Performer {
+                id,
+                label: "P5".into(),
+                section,
+                symbol: Symbol::Cross,
+                color: None.into(),
+                height_m: default_height_m(),
+                kind: PerformerKind::Wind,
+            },
+            Point { x: 10.0, y: 10.0 },
+        )
+        .unwrap();
+        assert_eq!(doc.performers.len(), 5);
+        assert!(doc.sets.iter().all(|set| set.positions.len() == 5));
+        assert_eq!(
+            doc.sets[0].positions[4],
+            doc.grid.snap(Point { x: 10.0, y: 10.0 })
+        );
+
+        doc.remove_performers(&[id]).unwrap();
+        assert_eq!(doc.performers.len(), 4);
+        assert!(doc.sets.iter().all(|set| set.positions.len() == 4));
+        assert!(doc.validate().is_ok());
+
+        let everyone: Vec<_> = doc.performers.iter().map(|p| p.id).collect();
+        assert_eq!(
+            doc.remove_performers(&everyone),
+            Err(DrillError::InvalidEdit)
+        );
+        assert_eq!(doc.performers.len(), 4);
+    }
+
+    #[test]
+    fn removing_the_last_set_is_rejected() {
+        let mut doc = Document::blank(4);
+        assert_eq!(doc.remove_set_at(0), Err(DrillError::EmptySets));
+        let extra = doc.sets[0].clone();
+        let mut extra = extra;
+        extra.id = doc.next_set_id().unwrap();
+        extra.name = "セット 2".into();
+        extra.generated_by = None;
+        doc.sets.push(extra);
+        assert!(doc.validate().is_ok());
+        doc.remove_set_at(1).unwrap();
+        assert_eq!(doc.sets.len(), 1);
+        assert_eq!(doc.remove_set_at(0), Err(DrillError::EmptySets));
+    }
+
+    #[test]
     fn malformed_and_future_documents_are_rejected() {
         assert!(Document::from_json("{not json").is_err());
         let mut document = Document::demo(2, 2);
@@ -2482,7 +2750,10 @@ mod tests {
         let grid = GridConfig::japan_floor();
         let dx = grid.horizontal_units / f32::from(grid.horizontal_steps);
         let dy = grid.vertical_units / f32::from(grid.vertical_steps);
-        assert!((5.0_f32 / dx).fract() > 1e-3, "test needs an incommensurate interval/step pair");
+        assert!(
+            (5.0_f32 / dx).fract() > 1e-3,
+            "test needs an incommensurate interval/step pair"
+        );
 
         for x in grid.horizontal_major_positions() {
             let steps = x / dx;
@@ -2611,10 +2882,7 @@ mod tests {
             snap_enabled: false,
             ..GridConfig::default()
         };
-        let points = vec![
-            Point { x: 1.23, y: 4.56 },
-            Point { x: 7.89, y: 0.12 },
-        ];
+        let points = vec![Point { x: 1.23, y: 4.56 }, Point { x: 7.89, y: 0.12 }];
         assert_eq!(grid.snap_sequence(&points), points);
     }
 

@@ -279,12 +279,24 @@ impl RasterSurface {
             Symbol::Square => {
                 let half = radius * 0.8;
                 let outer = Rect {
-                    min: Vec2 { x: center.x - half - 1.0, y: center.y - half - 1.0 },
-                    max: Vec2 { x: center.x + half + 1.0, y: center.y + half + 1.0 },
+                    min: Vec2 {
+                        x: center.x - half - 1.0,
+                        y: center.y - half - 1.0,
+                    },
+                    max: Vec2 {
+                        x: center.x + half + 1.0,
+                        y: center.y + half + 1.0,
+                    },
                 };
                 let inner = Rect {
-                    min: Vec2 { x: center.x - half, y: center.y - half },
-                    max: Vec2 { x: center.x + half, y: center.y + half },
+                    min: Vec2 {
+                        x: center.x - half,
+                        y: center.y - half,
+                    },
+                    max: Vec2 {
+                        x: center.x + half,
+                        y: center.y + half,
+                    },
                 };
                 self.fill_rect(outer, stroke);
                 self.fill_rect(inner, fill);
@@ -293,14 +305,26 @@ impl RasterSurface {
                 let arm = radius;
                 let width = (radius * 0.4).max(1.0);
                 self.line(
-                    Vec2 { x: center.x - arm, y: center.y - arm },
-                    Vec2 { x: center.x + arm, y: center.y + arm },
+                    Vec2 {
+                        x: center.x - arm,
+                        y: center.y - arm,
+                    },
+                    Vec2 {
+                        x: center.x + arm,
+                        y: center.y + arm,
+                    },
                     width,
                     stroke,
                 );
                 self.line(
-                    Vec2 { x: center.x - arm, y: center.y + arm },
-                    Vec2 { x: center.x + arm, y: center.y - arm },
+                    Vec2 {
+                        x: center.x - arm,
+                        y: center.y + arm,
+                    },
+                    Vec2 {
+                        x: center.x + arm,
+                        y: center.y - arm,
+                    },
                     width,
                     stroke,
                 );

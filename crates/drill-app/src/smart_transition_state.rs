@@ -173,7 +173,10 @@ mod tests {
         state.request(&document, current);
         wait(&mut state, current);
         let suggestion = state.suggestion(current).expect("suggestion arrived");
-        assert_eq!(suggestion.outcome.assignment.len(), document.performers.len());
+        assert_eq!(
+            suggestion.outcome.assignment.len(),
+            document.performers.len()
+        );
         assert_eq!(document, before);
     }
 

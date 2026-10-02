@@ -167,8 +167,10 @@ fn dropping_a_client_announces_a_leave() {
 
     drop(leaver.take());
 
-    let message = wait_for(&mut watcher, "a Leave for the departed peer", |message| {
-        matches!(message, PresenceMessage::Leave(user) if *user == UserId::from_raw(2))
-    });
+    let message = wait_for(
+        &mut watcher,
+        "a Leave for the departed peer",
+        |message| matches!(message, PresenceMessage::Leave(user) if *user == UserId::from_raw(2)),
+    );
     assert_eq!(message, PresenceMessage::Leave(UserId::from_raw(2)));
 }

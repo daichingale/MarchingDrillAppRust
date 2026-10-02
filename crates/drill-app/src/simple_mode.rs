@@ -17,72 +17,17 @@ type PreparedClicks = (
 );
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
 enum MetronomeFailure {
     Output,
     Schedule,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub(crate) enum SimpleScreen {
-    #[default]
-    Wizard,
-    Metronome,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub(crate) enum SimpleStep {
-    #[default]
-    ChooseFormation,
-    SelectPerformers,
-    MovePerformers,
-    Playback,
-}
-
-impl SimpleStep {
-    const ALL: [Self; 4] = [
-        Self::ChooseFormation,
-        Self::SelectPerformers,
-        Self::MovePerformers,
-        Self::Playback,
-    ];
-
-    fn index(self) -> usize {
-        Self::ALL.iter().position(|&step| step == self).unwrap_or(0)
-    }
-
-    fn next(self) -> Self {
-        Self::ALL[(self.index() + 1).min(Self::ALL.len() - 1)]
-    }
-
-    fn previous(self) -> Self {
-        Self::ALL[self.index().saturating_sub(1)]
-    }
-
-    fn title(self, locale: Locale) -> &'static str {
-        let id = match self {
-            Self::ChooseFormation => "simple-mode.001",
-            Self::SelectPerformers => "simple-mode.002",
-            Self::MovePerformers => "simple-mode.003",
-            Self::Playback => "simple-mode.004",
-        };
-        i18n::registered(locale, id)
-    }
-
-    fn guidance(self, locale: Locale) -> &'static str {
-        let id = match self {
-            Self::ChooseFormation => "simple-mode.005",
-            Self::SelectPerformers => "simple-mode.006",
-            Self::MovePerformers => "simple-mode.007",
-            Self::Playback => "simple-mode.008",
-        };
-        i18n::registered(locale, id)
-    }
 }
 
 /// Standalone metronome, independent of the open `Document`. Reuses the
 /// existing `drill_audio` click-generation/output primitives (the same ones
 /// `AudioState::configure_click` drives) rather than inventing a new audio
 /// pipeline; this module only orchestrates them.
+#[allow(dead_code)]
 pub(crate) struct MetronomeState {
     pub bpm: f32,
     running: bool,
@@ -107,6 +52,7 @@ impl Default for MetronomeState {
     }
 }
 
+#[allow(dead_code)]
 impl MetronomeState {
     fn begin_open(&mut self) {
         if self.output.is_some() || self.open_job.is_some() {
@@ -145,6 +91,7 @@ impl MetronomeState {
         }));
     }
 
+    #[allow(dead_code)]
     pub fn poll(&mut self) {
         if let Some(message) = self.open_job.as_mut().and_then(Job::poll) {
             self.open_job = None;
@@ -183,10 +130,12 @@ impl MetronomeState {
         self.running
     }
 
+    #[allow(dead_code)]
     fn error(&self) -> Option<MetronomeFailure> {
         self.error
     }
 
+    #[allow(dead_code)]
     pub fn toggle(&mut self) {
         if self.running {
             self.stop();
@@ -227,6 +176,7 @@ impl MetronomeState {
 
     /// 0..1 phase within the current beat, driven by the real audio clock
     /// (not a UI timer), for a drift-free visual pulse.
+    #[allow(dead_code)]
     pub fn beat_phase(&self) -> f32 {
         let Some(output) = &self.output else {
             return 0.0;
@@ -241,429 +191,375 @@ impl MetronomeState {
     }
 }
 
-/// State for the drag-to-pan, 5m-square editing viewport used only by the
-/// "move performers" step. Kept separate from the full-field 2D view used by
-/// every other simple-mode screen and by the normal desktop UI.
-#[derive(Default)]
-struct EditViewport {
-    center: Option<Point>,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SimpleGuide {
+    Place,
+    Move,
+    NextSet,
+    Play,
 }
 
 #[derive(Default)]
 pub(crate) struct SimpleModeState {
     pub enabled: bool,
-    pub step: SimpleStep,
-    pub screen: SimpleScreen,
-    viewport: EditViewport,
-    drag_start_pointer: Option<Pos2>,
-    drag_start_points: Vec<Point>,
-    pan_drag_pointer: Option<Pos2>,
-    pub metronome: MetronomeState,
-}
-
-/// Half-width/height (in document units) of the fixed 5m-square editing
-/// viewport used by the "move performers" step, so small screens only ever
-/// need to point at a small area precisely.
-fn viewport_half_extent(grid: &GridConfig) -> f32 {
-    let five_meters = match grid.unit {
-        Unit::Meters => 5.0,
-        Unit::Yards => 5.0 * 1.093_613,
-    };
-    five_meters * 0.5
+    chrome_applied: bool,
 }
 
 impl DrillApp {
+    pub(crate) fn ensure_simple_chrome(&mut self, ctx: &egui::Context) {
+        if self.simple_mode.chrome_applied {
+            return;
+        }
+        super::app_theme::AppTheme::Daylight.apply(ctx);
+        self.simple_mode.chrome_applied = true;
+    }
+
+    pub(crate) fn restore_full_chrome(&mut self, ctx: &egui::Context) {
+        if !self.simple_mode.chrome_applied {
+            return;
+        }
+        self.app_theme.apply(ctx);
+        self.simple_mode.chrome_applied = false;
+    }
+
+    fn simple_guide(&self) -> SimpleGuide {
+        if self.document.performers.is_empty() {
+            SimpleGuide::Place
+        } else if !self.onboarding.simple_drag_tip_seen {
+            SimpleGuide::Move
+        } else if self.document.sets.len() < 2 {
+            SimpleGuide::NextSet
+        } else {
+            SimpleGuide::Play
+        }
+    }
+
     /// Entry point called instead of the full desktop UI while Simple Mode is
     /// enabled. Completely separate code path from the rest of `app_ui.rs`;
     /// every state change still flows through `execute_edit`/`commit_layout`/
     /// `commit_shape`, so undo, autosave and validation all keep working.
     pub(crate) fn simple_ui(&mut self, ui: &mut egui::Ui) {
-        if !matches!(self.simple_mode.step, SimpleStep::Playback) {
-            // Editing steps always look at the exact start of the current
-            // set, never a mid-transition interpolation, so what's on screen
-            // always matches what a drag or shape button would commit.
+        if !self.playing {
             self.count_position = 0.0;
             self.document
                 .positions_at(self.current_set, 0.0, &mut self.frame_positions);
         }
-        self.simple_header_ui(ui);
-        ui.separator();
-        match self.simple_mode.screen {
-            SimpleScreen::Metronome => self.simple_metronome_ui(ui),
-            SimpleScreen::Wizard => self.simple_wizard_ui(ui),
+        if self.document.performers.is_empty() {
+            self.field_tool = FieldTool::Place;
+        } else if self.field_tool == FieldTool::Select {
+            self.field_tool = FieldTool::Move;
         }
+        super::app_theme::toolbar_frame(ui).show(ui, |ui| {
+            self.simple_top_bar(ui);
+        });
+        ui.add_space(8.0);
+        self.simple_cue_banner(ui);
+        ui.add_space(6.0);
+        self.simple_tools_ui(ui);
+        if !self.onboarding.simple_steps_dismissed {
+            ui.add_space(4.0);
+            self.simple_step_dots(ui);
+        }
+        if self.status != text(self.locale, Text::Ready) {
+            ui.small(&self.status);
+        }
+        ui.add_space(8.0);
+        ui.horizontal_top(|ui| {
+            self.simple_field_full_ui(ui, true);
+            self.simple_roster_panel(ui);
+        });
         self.show_update_notice(ui.ctx());
         self.onboarding.help_ui(ui.ctx(), self.locale);
         self.onboarding.persist_if_changed();
     }
 
-    fn simple_header_ui(&mut self, ui: &mut egui::Ui) {
+    fn simple_top_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.heading(i18n::registered(self.locale, "simple-mode.009"));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .button(i18n::registered(self.locale, "simple-mode.010"))
-                    .on_hover_text(i18n::registered(self.locale, "simple-mode.011"))
-                    .clicked()
-                {
-                    self.simple_mode.enabled = false;
-                }
-                ui.add_space(6.0);
-                let metronome_selected = self.simple_mode.screen == SimpleScreen::Metronome;
-                if ui
-                    .selectable_label(
-                        metronome_selected,
-                        i18n::registered(self.locale, "simple-mode.012"),
-                    )
-                    .clicked()
-                {
-                    self.simple_mode.screen = if metronome_selected {
-                        SimpleScreen::Wizard
-                    } else {
-                        SimpleScreen::Metronome
-                    };
-                }
-                let dirty_label = if self.dirty {
-                    text(self.locale, Text::Unsaved)
-                } else {
-                    text(self.locale, Text::Saved)
-                };
-                ui.label(dirty_label);
-            });
-        });
-        if self.simple_mode.screen == SimpleScreen::Wizard {
-            ui.horizontal(|ui| {
-                for step in SimpleStep::ALL {
-                    let selected = self.simple_mode.step == step;
-                    if ui
-                        .selectable_label(selected, step.title(self.locale))
-                        .clicked()
-                    {
-                        self.simple_mode.step = step;
-                    }
-                }
-            });
-            ui.add_space(4.0);
-            egui::Frame::new()
-                .fill(ui.visuals().faint_bg_color)
-                .inner_margin(10)
-                .corner_radius(6)
-                .show(ui, |ui| {
-                    ui.label(self.simple_mode.step.guidance(self.locale));
-                });
-        }
-    }
-
-    fn simple_wizard_ui(&mut self, ui: &mut egui::Ui) {
-        match self.simple_mode.step {
-            SimpleStep::ChooseFormation => self.simple_step_choose_formation(ui),
-            SimpleStep::SelectPerformers => self.simple_step_select_performers(ui),
-            SimpleStep::MovePerformers => self.simple_step_move_performers(ui),
-            SimpleStep::Playback => self.simple_step_playback(ui),
-        }
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            let undo_ok = self.history.can_undo();
+            let undo_label = i18n::registered(self.locale, "simple-mode.064");
             if ui
-                .add_enabled(
-                    self.simple_mode.step != SimpleStep::ChooseFormation,
-                    egui::Button::new(i18n::registered(self.locale, "simple-mode.013")),
-                )
+                .add_enabled(undo_ok, super::app_theme::quiet_button(undo_label))
                 .clicked()
             {
-                self.simple_mode.step = self.simple_mode.step.previous();
+                self.execute_command(UiCommand::Undo, ui.ctx());
             }
-            if ui
-                .add_enabled(
-                    self.simple_mode.step != SimpleStep::Playback,
-                    egui::Button::new(i18n::registered(self.locale, "simple-mode.014")),
-                )
-                .clicked()
-            {
-                self.simple_mode.step = self.simple_mode.step.next();
+            let save_label = i18n::registered(self.locale, "simple-mode.026");
+            if ui.add(super::app_theme::quiet_button(save_label)).clicked() {
+                self.save_dialog();
             }
-        });
-    }
-
-    fn simple_step_choose_formation(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            if ui
-                .add_enabled(
-                    self.current_set > 0,
-                    egui::Button::new(i18n::registered(self.locale, "simple-mode.015")),
-                )
-                .clicked()
-            {
-                self.current_set -= 1;
-                self.count_position = 0.0;
-            }
-            ui.label(format!(
-                "{} {} / {}",
-                i18n::registered(self.locale, "simple-mode.016"),
-                self.current_set + 1,
-                self.document.sets.len()
-            ));
-            if ui
-                .add_enabled(
-                    self.current_set + 1 < self.document.sets.len(),
-                    egui::Button::new(i18n::registered(self.locale, "simple-mode.017")),
-                )
-                .clicked()
-            {
-                self.current_set += 1;
-                self.count_position = 0.0;
-            }
-            if ui
-                .button(i18n::registered(self.locale, "simple-mode.018"))
-                .clicked()
-            {
-                self.duplicate_current_set();
-            }
-        });
-        ui.add_space(6.0);
-        self.simple_field_full_ui(ui, false);
-    }
-
-    fn simple_step_select_performers(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            if ui.button(text(self.locale, Text::SelectAll)).clicked() {
-                self.replace_selection((0..self.document.performers.len()).collect());
-            }
-            if ui.button(text(self.locale, Text::ClearSelection)).clicked() {
-                self.clear_selection();
-            }
-            ui.label(format!(
-                "{}: {}",
-                i18n::registered(self.locale, "simple-mode.019"),
-                self.selected.len()
-            ));
-        });
-        ui.add_space(6.0);
-        self.simple_field_full_ui(ui, true);
-    }
-
-    fn simple_step_move_performers(&mut self, ui: &mut egui::Ui) {
-        if self.selected.is_empty() {
-            ui.colored_label(
-                Color32::from_rgb(245, 197, 66),
-                i18n::registered(self.locale, "simple-mode.020"),
-            );
-        }
-        ui.horizontal(|ui| {
-            let enabled = !self.selected.is_empty();
-            let grid = self.document.grid.clone();
-            if ui
-                .add_enabled(
-                    enabled,
-                    egui::Button::new(i18n::registered(self.locale, "simple-mode.021")),
-                )
-                .clicked()
-            {
-                self.commit_shape(shapes::ShapeSpec::Line {
-                    start: Point {
-                        x: grid.width * 0.25,
-                        y: grid.height * 0.5,
-                    },
-                    end: Point {
-                        x: grid.width * 0.75,
-                        y: grid.height * 0.5,
-                    },
-                });
-            }
-            if ui
-                .add_enabled(
-                    enabled,
-                    egui::Button::new(i18n::registered(self.locale, "simple-mode.022")),
-                )
-                .clicked()
-            {
-                self.commit_shape(shapes::ShapeSpec::Circle {
-                    center: Point {
-                        x: grid.width * 0.5,
-                        y: grid.height * 0.5,
-                    },
-                    radius: grid.width.min(grid.height * 2.0) * 0.15,
-                });
-            }
-            if ui
-                .add_enabled(
-                    enabled,
-                    egui::Button::new(i18n::registered(self.locale, "simple-mode.023")),
-                )
-                .clicked()
-            {
-                let count = self.selected.len().max(1);
-                let cols = (count as f32).sqrt().ceil() as usize;
-                let rows = count.div_ceil(cols.max(1));
-                self.commit_shape(shapes::ShapeSpec::BlockFit {
-                    rect_min: Point {
-                        x: grid.width * 0.35,
-                        y: grid.height * 0.3,
-                    },
-                    rect_max: Point {
-                        x: grid.width * 0.65,
-                        y: grid.height * 0.7,
-                    },
-                    cols: cols.max(1),
-                    rows: rows.max(1),
-                });
-            }
-            if ui
-                .button(i18n::registered(self.locale, "simple-mode.024"))
-                .clicked()
-            {
-                self.simple_mode.viewport.center = Some(self.simple_selection_anchor());
-            }
-        });
-        ui.add_space(6.0);
-        self.simple_field_zoom_ui(ui);
-    }
-
-    fn simple_step_playback(&mut self, ui: &mut egui::Ui) {
-        // Keep range selection beside the primary Play control. In the full
-        // editor these controls live above the timeline, but a learner in
-        // Simple Mode should never have to leave the playback step just to
-        // answer the essential question: "which part will play?".
-        let total_counts = self.document.timeline_counts().max(1);
-        let current_global = self
-            .document
-            .global_count(self.current_set, self.count_position)
-            .round()
-            .clamp(0.0, total_counts as f32) as u32;
-        egui::Frame::new()
-            .fill(ui.visuals().faint_bg_color)
-            .inner_margin(8)
-            .corner_radius(6)
-            .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(
-                        egui::RichText::new(i18n::registered(self.locale, "simple-mode.039"))
-                            .strong(),
-                    );
-                    if ui
-                        .button(i18n::registered(self.locale, "simple-mode.040"))
-                        .clicked()
-                    {
-                        let start = self.document.global_count(self.current_set, 0.0) as u32;
-                        self.playback_start = start;
-                        self.playback_end = (start
-                            + u32::from(self.document.sets[self.current_set].counts))
-                        .min(total_counts);
-                    }
-                    if ui
-                        .button(i18n::registered(self.locale, "simple-mode.041"))
-                        .clicked()
-                    {
-                        self.playback_start = 0;
-                        self.playback_end = total_counts;
-                    }
-                    if ui
-                        .button(i18n::registered(self.locale, "simple-mode.042"))
-                        .on_hover_text(i18n::registered(self.locale, "simple-mode.046"))
-                        .clicked()
-                    {
-                        self.playback_start =
-                            current_global.min(self.playback_end.saturating_sub(1));
-                    }
-                    if ui
-                        .button(i18n::registered(self.locale, "simple-mode.043"))
-                        .on_hover_text(i18n::registered(self.locale, "simple-mode.047"))
-                        .clicked()
-                    {
-                        self.playback_end = current_global
-                            .max(self.playback_start + 1)
-                            .min(total_counts);
-                    }
-                    ui.checkbox(
-                        &mut self.loop_playback,
-                        i18n::registered(self.locale, "simple-mode.044"),
-                    );
-                });
-                let range =
-                    playback_range_summary(&self.document, self.playback_start, self.playback_end);
-                let count_label = i18n::registered(self.locale, "simple-mode.049");
-                ui.horizontal_wrapped(|ui| {
-                    ui.small(format!(
-                        "{}: {} · {} {}",
-                        i18n::registered(self.locale, "simple-mode.048"),
-                        range.start_set,
-                        count_label,
-                        range.start_count,
-                    ));
-                    ui.separator();
-                    ui.small(format!(
-                        "{}: {} · {} {}",
-                        i18n::registered(self.locale, "simple-mode.050"),
-                        range.end_set,
-                        count_label,
-                        range.end_count,
-                    ));
-                    ui.separator();
-                    ui.small(format!(
-                        "{}: {} {}",
-                        i18n::registered(self.locale, "simple-mode.051"),
-                        range.length,
-                        i18n::registered(self.locale, "simple-mode.052"),
-                    ));
-                });
-                ui.small(i18n::registered(self.locale, "simple-mode.053"));
-            });
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            let label = if self.playing {
+            let play_label = if self.playing {
                 text(self.locale, Text::Pause)
             } else {
                 text(self.locale, Text::Play)
             };
-            if ui
-                .add_sized(
-                    [160.0, 46.0],
-                    egui::Button::new(egui::RichText::new(label).size(20.0)),
+            let play_filled = self.simple_guide() == SimpleGuide::Play;
+            let play_button = if play_filled {
+                super::app_theme::primary_button(
+                    egui::RichText::new(play_label).color(Color32::WHITE),
                 )
-                .clicked()
-            {
+            } else {
+                super::app_theme::quiet_button(play_label)
+            };
+            if ui.add(play_button).clicked() {
                 self.toggle_playback(ui.ctx());
             }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let full = i18n::registered(self.locale, "simple-mode.063");
+                let simple = i18n::registered(self.locale, "simple-mode.062");
+                if ui.add(super::app_theme::quiet_button(full)).clicked() {
+                    self.simple_mode.enabled = false;
+                }
+                let _ = ui.add(super::app_theme::primary_button(
+                    egui::RichText::new(simple).color(Color32::WHITE),
+                ));
+            });
+        });
+    }
+
+    fn simple_cue_banner(&mut self, ui: &mut egui::Ui) {
+        let guide = self.simple_guide();
+        let (message, dismiss_drag_tip) = match guide {
+            SimpleGuide::Place => (i18n::registered(self.locale, "simple-mode.058"), false),
+            SimpleGuide::Move => (i18n::registered(self.locale, "simple-mode.059"), true),
+            SimpleGuide::NextSet => (i18n::registered(self.locale, "simple-mode.060"), false),
+            SimpleGuide::Play => (i18n::registered(self.locale, "simple-mode.061"), false),
+        };
+        super::app_theme::surface_frame(ui).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(message)
+                        .size(15.0)
+                        .color(super::app_theme::SECONDARY_TEXT),
+                );
+                let got_it = i18n::registered(self.locale, "simple-mode.065");
+                if dismiss_drag_tip && ui.add(super::app_theme::quiet_button(got_it)).clicked() {
+                    self.onboarding.simple_drag_tip_seen = true;
+                }
+            });
+        });
+    }
+
+    fn simple_tools_ui(&mut self, ui: &mut egui::Ui) {
+        let guide = self.simple_guide();
+        let editable = self.is_editable_set_start();
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 12.0;
+            let place_size = if guide == SimpleGuide::Place {
+                egui::Vec2::new(188.0, 52.0)
+            } else {
+                egui::Vec2::new(132.0, 44.0)
+            };
+            let tool_size = egui::Vec2::new(132.0, 44.0);
+            let place_label = i18n::registered(self.locale, "simple-mode.055");
+            let move_label = i18n::registered(self.locale, "simple-mode.056");
+            let next_label = i18n::registered(self.locale, "simple-mode.057");
             if ui
-                .button(i18n::registered(self.locale, "simple-mode.025"))
+                .add_sized(
+                    place_size,
+                    Self::simple_action_button(place_label, guide == SimpleGuide::Place),
+                )
+                .on_hover_text(i18n::registered(self.locale, "simple-mode.069"))
                 .clicked()
+                && editable
             {
-                self.navigate_to_global_count(self.playback_start);
+                self.set_field_tool(FieldTool::Place);
             }
             if ui
                 .add_sized(
-                    [140.0, 46.0],
-                    egui::Button::new(i18n::registered(self.locale, "simple-mode.026")),
+                    tool_size,
+                    Self::simple_action_button(move_label, guide == SimpleGuide::Move),
                 )
+                .on_hover_text(i18n::registered(self.locale, "simple-mode.070"))
                 .clicked()
             {
-                self.save_dialog();
+                self.set_field_tool(FieldTool::Move);
+            }
+            if ui
+                .add_sized(
+                    tool_size,
+                    Self::simple_action_button(next_label, guide == SimpleGuide::NextSet),
+                )
+                .on_hover_text(i18n::registered(self.locale, "simple-mode.071"))
+                .clicked()
+            {
+                self.duplicate_current_set();
+            }
+            let set_name = self
+                .document
+                .sets
+                .get(self.current_set)
+                .map(|set| set.name.as_str())
+                .unwrap_or("—");
+            ui.add_space(8.0);
+            super::app_theme::surface_frame(ui).show(ui, |ui| {
+                ui.label(format!(
+                    "{}  {} / {}",
+                    i18n::registered(self.locale, "simple-mode.072"),
+                    self.current_set + 1,
+                    self.document.sets.len().max(1)
+                ));
+                ui.strong(set_name);
+            });
+        });
+    }
+
+    fn simple_action_button(label: &'static str, filled: bool) -> egui::Button<'static> {
+        if filled {
+            super::app_theme::primary_button(
+                egui::RichText::new(label).size(16.0).color(Color32::WHITE),
+            )
+        } else {
+            super::app_theme::quiet_button(egui::RichText::new(label).size(16.0))
+        }
+    }
+
+    fn simple_step_dots(&mut self, ui: &mut egui::Ui) {
+        let guide = self.simple_guide();
+        ui.horizontal(|ui| {
+            for (index, step) in [
+                SimpleGuide::Place,
+                SimpleGuide::Move,
+                SimpleGuide::NextSet,
+                SimpleGuide::Play,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let active = guide == step;
+                let (rect, _response) =
+                    ui.allocate_exact_size(egui::Vec2::splat(10.0), Sense::hover());
+                let fill = if active {
+                    super::app_theme::ACCENT
+                } else {
+                    super::app_theme::HAIRLINE
+                };
+                ui.painter().circle_filled(rect.center(), 4.0, fill);
+                if index + 1 < 4 {
+                    ui.add_space(6.0);
+                }
+            }
+            ui.add_space(12.0);
+            let hide_steps = i18n::registered(self.locale, "simple-mode.066");
+            if ui.add(super::app_theme::quiet_button(hide_steps)).clicked() {
+                self.onboarding.simple_steps_dismissed = true;
             }
         });
-        let total = total_counts as f32;
-        let position = self
-            .document
-            .global_count(self.current_set, self.count_position)
-            .clamp(0.0, total);
-        ui.add(egui::ProgressBar::new(position / total).text(format!(
-            "{}: {:.0} / {:.0}",
-            i18n::registered(self.locale, "simple-mode.027"),
-            position,
-            total
-        )));
-        ui.add_space(6.0);
-        self.simple_field_full_ui(ui, false);
+    }
+
+    fn simple_roster_panel(&mut self, ui: &mut egui::Ui) {
+        ui.allocate_ui_with_layout(
+            egui::Vec2::new(240.0, ui.available_height()),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                super::app_theme::surface_frame(ui).show(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new(i18n::registered(self.locale, "simple-mode.073"))
+                            .strong(),
+                    );
+                    ui.add_space(6.0);
+                    let rows: Vec<(usize, String)> = self
+                        .document
+                        .performers
+                        .iter()
+                        .enumerate()
+                        .map(|(index, performer)| (index, performer.label.clone()))
+                        .collect();
+                    egui::ScrollArea::vertical()
+                        .id_salt("simple-roster-list")
+                        .max_height(ui.available_height() * 0.45)
+                        .show(ui, |ui| {
+                            for (index, label) in &rows {
+                                let selected = self.selected.contains(index);
+                                let fill = if selected {
+                                    super::app_theme::ACCENT_SOFT
+                                } else {
+                                    ui.visuals().extreme_bg_color
+                                };
+                                let stroke = if selected {
+                                    egui::Stroke::new(1.0, super::app_theme::ACCENT)
+                                } else {
+                                    egui::Stroke::new(1.0, super::app_theme::HAIRLINE)
+                                };
+                                let response = egui::Frame::new()
+                                    .fill(fill)
+                                    .stroke(stroke)
+                                    .corner_radius(super::app_theme::CORNER_SM)
+                                    .inner_margin(egui::Margin::symmetric(8, 6))
+                                    .show(ui, |ui| {
+                                        ui.set_width(ui.available_width());
+                                        ui.label(label);
+                                    })
+                                    .response
+                                    .interact(Sense::click());
+                                if response.clicked() {
+                                    self.replace_selection(std::iter::once(*index).collect());
+                                }
+                                ui.add_space(4.0);
+                            }
+                        });
+                    ui.add_space(8.0);
+                    self.simple_identity_fields(ui);
+                });
+            },
+        );
+    }
+
+    fn simple_identity_fields(&mut self, ui: &mut egui::Ui) {
+        self.ensure_performer_draft();
+        if self.selected.len() != 1 {
+            return;
+        }
+        let editable = self.is_editable_set_start();
+        let enter = ui.input(|input| input.key_pressed(egui::Key::Enter));
+        let mut number = self
+            .performer_draft
+            .as_ref()
+            .map(|draft| draft.number.clone())
+            .unwrap_or_default();
+        let mut name = self
+            .performer_draft
+            .as_ref()
+            .map(|draft| draft.name.clone())
+            .unwrap_or_default();
+        ui.label(i18n::registered(self.locale, "simple-mode.067"));
+        let number_response = ui.add_enabled(
+            editable,
+            egui::TextEdit::singleline(&mut number).desired_width(f32::INFINITY),
+        );
+        ui.label(i18n::registered(self.locale, "simple-mode.068"));
+        let name_response = ui.add_enabled(
+            editable,
+            egui::TextEdit::singleline(&mut name).desired_width(f32::INFINITY),
+        );
+        if (number_response.changed() || name_response.changed())
+            && let Some(draft) = self.performer_draft.as_mut()
+        {
+            draft.number = number;
+            draft.name = name;
+            draft.label_dirty = true;
+        }
+        if (number_response.lost_focus()
+            || name_response.lost_focus()
+            || ((number_response.has_focus() || name_response.has_focus()) && enter))
+            && self
+                .performer_draft
+                .as_ref()
+                .is_some_and(|draft| draft.label_dirty)
+        {
+            self.commit_performer_draft();
+        }
     }
 
     /// Full-field 2D view shared by every simple-mode screen except "move
     /// performers". Reuses the exact same rendering pipeline as the normal
-    /// desktop view (`drill_render::build_field_2d` + `egui_backend::paint`),
-    /// only the interaction is simplified. `selectable` gates click-to-select;
-    /// dragging performers is intentionally not offered here (that belongs
-    /// to the zoomed step, per the precision-on-small-screens requirement).
-    fn simple_field_full_ui(&mut self, ui: &mut egui::Ui, selectable: bool) {
+    /// desktop view (`drill_render::build_field_2d` + `egui_backend::paint`).
+    /// When `interactive`, Select/Move/Place match the approved full-mode
+    /// field behavior (preview, drag ghost, snap-then-clamp, overlap warn).
+    fn simple_field_full_ui(&mut self, ui: &mut egui::Ui, interactive: bool) {
         let available = ui.available_size();
-        let sense = if selectable {
-            Sense::click()
+        let sense = if interactive {
+            Sense::click_and_drag()
         } else {
             Sense::hover()
         };
@@ -701,24 +597,77 @@ impl DrillApp {
             let v = field_map.map(point);
             Pos2::new(rect.left() + v.x, rect.top() + v.y)
         };
-        for (index, &point) in self.frame_positions.iter().enumerate() {
-            if self.selected.contains(&index) {
+        let from_screen = |pos: Pos2| {
+            field_map.unmap(drill_render::Vec2 {
+                x: pos.x - rect.left(),
+                y: pos.y - rect.top(),
+            })
+        };
+        const SELECTION_ACCENT: Color32 = Color32::from_rgb(76, 163, 255);
+        if interactive {
+            self.field_pointer = response.hover_pos().map(&from_screen);
+            let hover_on_dot = response.hover_pos().is_some_and(|pos| {
+                self.frame_positions
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| self.is_selectable_index(*index))
+                    .any(|(_, point)| to_screen(*point).distance(pos) < 18.0)
+            });
+            if response.hovered() {
+                let editable = self.is_editable_set_start();
+                ui.ctx().set_cursor_icon(match self.field_tool {
+                    FieldTool::Place if !editable => egui::CursorIcon::NotAllowed,
+                    FieldTool::Place => egui::CursorIcon::Crosshair,
+                    FieldTool::Move if self.drag_before.is_some() => egui::CursorIcon::Grabbing,
+                    FieldTool::Move if !editable && !self.selected.is_empty() => {
+                        egui::CursorIcon::NotAllowed
+                    }
+                    FieldTool::Move if self.selected.is_empty() => egui::CursorIcon::Default,
+                    FieldTool::Move => egui::CursorIcon::Grab,
+                    FieldTool::Select if self.drag_before.is_some() => egui::CursorIcon::Grabbing,
+                    FieldTool::Select if hover_on_dot && editable => egui::CursorIcon::Grab,
+                    FieldTool::Select => egui::CursorIcon::Default,
+                });
+            }
+            if self.field_tool == FieldTool::Place
+                && self.is_editable_set_start()
+                && self.drag_before.is_none()
+                && let Some(raw) = self.field_pointer
+            {
+                let snap =
+                    self.document.grid.snap_enabled && !ui.input(|input| input.modifiers.shift);
+                let pos = to_screen(controller::field_point(raw, &self.document, snap));
+                painter.circle_filled(pos, 8.0, Color32::from_rgba_unmultiplied(100, 235, 255, 80));
+                painter.circle_stroke(pos, 8.0, Stroke::new(2.0, Color32::from_rgb(100, 235, 255)));
+            }
+        }
+        if let Some(preview) = &self.drag_preview {
+            if let Some(before) = &self.drag_before {
+                for &point in before {
+                    painter.circle_filled(to_screen(point), 9.0, Color32::from_black_alpha(110));
+                }
+            }
+            for &point in preview {
                 let pos = to_screen(point);
+                painter.circle_filled(pos, 8.0, Color32::from_rgb(100, 235, 255));
                 painter.circle_stroke(pos, 11.0, Stroke::new(2.0, Color32::WHITE));
+            }
+        }
+        for (index, &point) in self.frame_positions.iter().enumerate() {
+            if self.selected.contains(&index) && self.drag_preview.is_none() {
+                let pos = to_screen(point);
+                painter.circle_stroke(pos, 11.0, Stroke::new(2.0, SELECTION_ACCENT));
                 if self.selected.len() >= 2 {
                     self.paint_selection_rank_badge(&painter, pos, index);
                 }
             }
         }
-        if !selectable {
+        if !interactive {
             return;
         }
-        let Some(pointer) = response.interact_pointer_pos() else {
+        let Some(pointer) = response.interact_pointer_pos().or(response.hover_pos()) else {
             return;
         };
-        if !response.clicked() {
-            return;
-        }
         let nearest = self
             .frame_positions
             .iter()
@@ -729,467 +678,56 @@ impl DrillApp {
                     .distance(pointer)
                     .total_cmp(&to_screen(**b).distance(pointer))
             })
-            .filter(|(_, p)| to_screen(**p).distance(pointer) < 22.0)
+            .filter(|(_, p)| to_screen(**p).distance(pointer) < 18.0)
             .map(|(index, _)| index);
-        let additive = ui.input(|input| {
-            input.modifiers.command || input.modifiers.ctrl || input.modifiers.shift
-        });
-        match nearest {
-            Some(index) if additive => {
-                let mut next = self.selected.clone();
-                if !next.insert(index) {
-                    next.remove(&index);
-                }
-                self.replace_selection(next);
-            }
-            Some(index) => self.replace_selection(std::iter::once(index).collect()),
-            None if !additive => self.clear_selection(),
-            None => {}
-        }
-    }
-
-    fn simple_selection_anchor(&self) -> Point {
-        let points = self.selected_points();
-        if points.is_empty() {
-            return self.frame_positions.first().copied().unwrap_or(Point {
-                x: self.document.grid.width * 0.5,
-                y: self.document.grid.height * 0.5,
-            });
-        }
-        let count = points.len() as f32;
-        Point {
-            x: points.iter().map(|p| p.x).sum::<f32>() / count,
-            y: points.iter().map(|p| p.y).sum::<f32>() / count,
-        }
-    }
-
-    /// Zoomed, pannable 5m-square editing viewport for the "move performers"
-    /// step. Performers outside the visible square simply aren't drawn; the
-    /// arrow buttons (and arrow keys) pan the square to reach them. Dragging
-    /// a performer here still ends in `commit_layout`, which snaps to the
-    /// grid and writes absolute field coordinates via `Edit::MovePerformers`
-    /// exactly like the desktop field view — only the on-screen mapping is
-    /// local to this module.
-    fn simple_field_zoom_ui(&mut self, ui: &mut egui::Ui) {
-        let grid = self.document.grid.clone();
-        let half = viewport_half_extent(&grid);
-        if self.simple_mode.viewport.center.is_none() {
-            self.simple_mode.viewport.center = Some(self.simple_selection_anchor());
-        }
-        let center = {
-            let center = self
-                .simple_mode
-                .viewport
-                .center
-                .as_mut()
-                .expect("just populated above");
-            center.x = center.x.clamp(half, (grid.width - half).max(half));
-            center.y = center.y.clamp(half, (grid.height - half).max(half));
-            *center
-        };
-
-        let step = if grid.unit == Unit::Meters {
-            1.0
-        } else {
-            1.093_613
-        };
-        let mut pan = Vec2::ZERO;
-        ui.input(|input| {
-            if input.key_pressed(egui::Key::ArrowUp) {
-                pan.y += step;
-            }
-            if input.key_pressed(egui::Key::ArrowDown) {
-                pan.y -= step;
-            }
-            if input.key_pressed(egui::Key::ArrowLeft) {
-                pan.x -= step;
-            }
-            if input.key_pressed(egui::Key::ArrowRight) {
-                pan.x += step;
-            }
-        });
-
-        ui.horizontal(|ui| {
-            ui.label(i18n::registered(self.locale, "simple-mode.028"));
-        });
-        ui.horizontal(|ui| {
-            ui.add_space((ui.available_width() * 0.5 - 24.0).max(0.0));
-            if ui
-                .add_sized(
-                    [48.0, 32.0],
-                    egui::Button::new(i18n::registered(self.locale, "simple-mode.033")),
-                )
-                .clicked()
-            {
-                pan.y += step;
-            }
-        });
-
-        let available = ui.available_size() - Vec2::new(0.0, 40.0);
-        ui.horizontal(|ui| {
-            if ui
-                .add_sized(
-                    [32.0, 48.0],
-                    egui::Button::new(i18n::registered(self.locale, "simple-mode.034")),
-                )
-                .clicked()
-            {
-                pan.x -= step;
-            }
-            let (response, painter) = ui.allocate_painter(
-                available.max(Vec2::new(80.0, 80.0)),
-                Sense::click_and_drag(),
-            );
-            let rect = response.rect;
-            self.paint_zoom_viewport(ui, &painter, rect, center, half);
-            self.handle_zoom_interaction(ui, &response, rect, center, half);
-            if ui
-                .add_sized(
-                    [32.0, 48.0],
-                    egui::Button::new(i18n::registered(self.locale, "simple-mode.035")),
-                )
-                .clicked()
-            {
-                pan.x += step;
-            }
-        });
-        ui.horizontal(|ui| {
-            ui.add_space((ui.available_width() * 0.5 - 24.0).max(0.0));
-            if ui
-                .add_sized(
-                    [48.0, 32.0],
-                    egui::Button::new(i18n::registered(self.locale, "simple-mode.036")),
-                )
-                .clicked()
-            {
-                pan.y -= step;
-            }
-        });
-
-        if pan != Vec2::ZERO
-            && let Some(center) = &mut self.simple_mode.viewport.center
-        {
-            center.x = (center.x + pan.x).clamp(half, (grid.width - half).max(half));
-            center.y = (center.y + pan.y).clamp(half, (grid.height - half).max(half));
-        }
-    }
-
-    fn paint_zoom_viewport(
-        &self,
-        _ui: &egui::Ui,
-        painter: &egui::Painter,
-        rect: Rect,
-        center: Point,
-        half: f32,
-    ) {
-        painter.rect_filled(rect, 4.0, Color32::from_rgb(25, 71, 45));
-        let size = half * 2.0;
-        let scale = (rect.width() / size).min(rect.height() / size).max(0.001);
-        let drawn = size * scale;
-        let offset = Vec2::new((rect.width() - drawn) * 0.5, (rect.height() - drawn) * 0.5);
-        let vp_min_x = center.x - half;
-        let vp_max_y = center.y + half;
-        let to_screen = |p: Point| -> Pos2 {
-            Pos2::new(
-                rect.left() + offset.x + (p.x - vp_min_x) * scale,
-                rect.top() + offset.y + (vp_max_y - p.y) * scale,
-            )
-        };
-        // Reference lines every yard/meter so a small square still reads as
-        // a field, not an abstract canvas.
-        let grid = &self.document.grid;
-        let minor = if grid.unit == Unit::Meters {
-            1.0
-        } else {
-            1.093_613
-        };
-        if minor > 0.01 {
-            let mut x = (vp_min_x / minor).floor() * minor;
-            while x <= center.x + half {
-                if x >= vp_min_x {
-                    let a = to_screen(Point {
-                        x,
-                        y: center.y - half,
-                    });
-                    let b = to_screen(Point {
-                        x,
-                        y: center.y + half,
-                    });
-                    painter.line_segment([a, b], Stroke::new(1.0, Color32::from_white_alpha(35)));
-                }
-                x += minor;
-            }
-            let mut y = ((center.y - half) / minor).floor() * minor;
-            while y <= center.y + half {
-                if y >= center.y - half {
-                    let a = to_screen(Point {
-                        x: center.x - half,
-                        y,
-                    });
-                    let b = to_screen(Point {
-                        x: center.x + half,
-                        y,
-                    });
-                    painter.line_segment([a, b], Stroke::new(1.0, Color32::from_white_alpha(35)));
-                }
-                y += minor;
-            }
-        }
-        for hash in &grid.hashes {
-            if hash.position < center.y - half || hash.position > center.y + half {
-                continue;
-            }
-            let a = to_screen(Point {
-                x: center.x - half,
-                y: hash.position,
-            });
-            let b = to_screen(Point {
-                x: center.x + half,
-                y: hash.position,
-            });
-            painter.line_segment([a, b], Stroke::new(1.5, Color32::from_white_alpha(110)));
-        }
-        for (index, performer) in self.document.performers.iter().enumerate() {
-            let Some(&point) = self.frame_positions.get(index) else {
-                continue;
-            };
-            if (point.x - center.x).abs() > half + 0.5 || (point.y - center.y).abs() > half + 0.5 {
-                continue;
-            }
-            let color = performer.resolved_color(&self.document.sections);
-            let selected = self.selected.contains(&index);
-            // While a performer in the current drag is being moved, its
-            // on-field dot stays put and a live preview dot is drawn at the
-            // pointer-following position instead, mirroring the desktop
-            // field view's drag preview.
-            let pos = if self.simple_mode.drag_start_pointer.is_some()
-                && let Some(preview) = self.drag_preview_point(index)
-            {
-                to_screen(preview)
-            } else {
-                to_screen(point)
-            };
-            painter.circle_filled(pos, 9.0, Color32::from_rgb(color[0], color[1], color[2]));
-            if self.is_hidden_index(index) {
-                painter.circle_filled(pos, 9.0, Color32::from_black_alpha(185));
-                painter.line_segment(
-                    [pos + Vec2::new(-6.0, 6.0), pos + Vec2::new(6.0, -6.0)],
-                    Stroke::new(1.5, Color32::WHITE),
-                );
-            } else if self.is_locked_index(index) {
-                painter.circle_stroke(pos, 8.5, Stroke::new(1.5, Color32::WHITE));
-                painter.text(
-                    pos + Vec2::new(7.0, -8.0),
-                    egui::Align2::CENTER_CENTER,
-                    "L",
-                    egui::FontId::proportional(10.0),
-                    Color32::WHITE,
-                );
-            }
-            if selected {
-                painter.circle_stroke(pos, 12.0, Stroke::new(2.5, Color32::WHITE));
-                if self.selected.len() >= 2 {
-                    self.paint_selection_rank_badge(painter, pos, index);
-                }
-            }
-        }
-    }
-
-    /// While a drag is in flight, the live preview position for `index`
-    /// (screen-independent, in field units), or `None` if it isn't part of
-    /// the current drag.
-    fn drag_preview_point(&self, index: usize) -> Option<Point> {
-        if !self.selected.contains(&index) {
-            return None;
-        }
-        let selected_order: Vec<usize> = self.selected.iter().copied().collect();
-        let slot = selected_order.iter().position(|&i| i == index)?;
-        self.simple_mode.drag_start_points.get(slot).copied()
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn handle_zoom_interaction(
-        &mut self,
-        ui: &egui::Ui,
-        response: &egui::Response,
-        rect: Rect,
-        center: Point,
-        half: f32,
-    ) {
-        let size = half * 2.0;
-        let scale = (rect.width() / size).min(rect.height() / size).max(0.001);
-        let drawn = size * scale;
-        let offset = Vec2::new((rect.width() - drawn) * 0.5, (rect.height() - drawn) * 0.5);
-        let vp_min_x = center.x - half;
-        let vp_max_y = center.y + half;
-        let to_screen = |p: Point| -> Pos2 {
-            Pos2::new(
-                rect.left() + offset.x + (p.x - vp_min_x) * scale,
-                rect.top() + offset.y + (vp_max_y - p.y) * scale,
-            )
-        };
-        let Some(pointer) = response.interact_pointer_pos() else {
-            return;
-        };
-        // Resolve the hit before mutating `self`. Keeping this as a value (not
-        // a closure that borrows frame_positions) makes click and drag share
-        // one stable target and avoids a stale borrow across selection changes.
-        let nearest = self
-            .frame_positions
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| self.is_selectable_index(*index))
-            .filter(|&(_, &p)| (p.x - center.x).abs() <= half && (p.y - center.y).abs() <= half)
-            .min_by(|(_, a), (_, b)| {
-                to_screen(**a)
-                    .distance(pointer)
-                    .total_cmp(&to_screen(**b).distance(pointer))
-            })
-            .filter(|&(_, &p)| to_screen(p).distance(pointer) < 22.0)
-            .map(|(index, _)| index);
-        let additive = ui.input(|input| {
-            input.modifiers.command || input.modifiers.ctrl || input.modifiers.shift
-        });
-        if response.clicked() {
-            match nearest {
-                Some(index) if additive => {
-                    let mut next = self.selected.clone();
-                    if !next.insert(index) {
-                        next.remove(&index);
-                    }
-                    self.replace_selection(next);
-                }
-                Some(index) => self.replace_selection(std::iter::once(index).collect()),
-                None if !additive => self.clear_selection(),
-                None => {}
-            }
-        }
-        if response.drag_started() {
-            if let Some(index) = nearest {
-                if !self.is_editable_set_start() {
-                    self.ensure_editable_set_start();
-                    return;
-                }
-                if !self.selected.contains(&index) {
-                    if additive {
+        let shift_held = ui.input(|input| input.modifiers.shift);
+        let snap_now = self.document.grid.snap_enabled && !shift_held;
+        if let Some(pointer) = response.interact_pointer_pos() {
+            if self.field_tool == FieldTool::Place && response.clicked() {
+                self.place_performer_at(from_screen(pointer), snap_now);
+            } else if self.field_tool != FieldTool::Place && response.clicked() {
+                let additive = ui.input(|input| {
+                    input.modifiers.command || input.modifiers.ctrl || input.modifiers.shift
+                });
+                match nearest {
+                    Some(index) if additive => {
                         let mut next = self.selected.clone();
-                        next.insert(index);
+                        if !next.insert(index) {
+                            next.remove(&index);
+                        }
                         self.replace_selection(next);
+                    }
+                    Some(index) => self.replace_selection(std::iter::once(index).collect()),
+                    None if self.field_tool != FieldTool::Move && !additive => {
+                        self.clear_selection();
+                    }
+                    None => {}
+                }
+            }
+            if self.field_tool != FieldTool::Place && response.drag_started() {
+                if let Some(index) = nearest {
+                    if self.is_editable_set_start() {
+                        if !self.selected.contains(&index) {
+                            self.replace_selection(std::iter::once(index).collect());
+                        }
+                        self.begin_field_drag(pointer);
                     } else {
-                        self.replace_selection(std::iter::once(index).collect());
+                        self.ensure_editable_set_start();
+                    }
+                } else if self.field_tool == FieldTool::Move && !self.selected.is_empty() {
+                    if self.is_editable_set_start() {
+                        self.begin_field_drag(pointer);
+                    } else {
+                        self.ensure_editable_set_start();
                     }
                 }
-                self.simple_mode.drag_start_points = self.selected_points();
-                self.simple_mode.drag_start_pointer = Some(pointer);
-            } else if self.selected.is_empty() {
-                // Panning by dragging empty background, but only while
-                // nothing is selected, so a move-drag never gets stolen.
-                self.simple_mode.pan_drag_pointer = Some(pointer);
             }
-        }
-        if response.dragged()
-            && !self.simple_mode.drag_start_points.is_empty()
-            && let Some(last_pointer) = self.simple_mode.drag_start_pointer
-        {
-            // Integrate frame-to-frame screen delta into the live preview
-            // positions (in field units); `commit_layout` snaps and writes
-            // the final absolute field coordinates once the drag ends.
-            let delta = pointer - last_pointer;
-            for point in &mut self.simple_mode.drag_start_points {
-                point.x = (point.x + delta.x / scale).clamp(0.0, self.document.grid.width);
-                point.y = (point.y - delta.y / scale).clamp(0.0, self.document.grid.height);
+            if response.dragged() && self.is_editable_set_start() && self.drag_before.is_some() {
+                self.update_field_drag(pointer, field_map.scale, snap_now);
             }
-            self.simple_mode.drag_start_pointer = Some(pointer);
-        }
-        if response.dragged()
-            && let Some(start_pointer) = self.simple_mode.pan_drag_pointer
-        {
-            let delta = pointer - start_pointer;
-            if let Some(center) = &mut self.simple_mode.viewport.center {
-                center.x = (center.x - delta.x / scale)
-                    .clamp(half, (self.document.grid.width - half).max(half));
-                center.y = (center.y + delta.y / scale)
-                    .clamp(half, (self.document.grid.height - half).max(half));
+            if response.drag_stopped() {
+                self.commit_field_drag();
             }
-            self.simple_mode.pan_drag_pointer = Some(pointer);
-        }
-        if response.drag_stopped() {
-            if !self.simple_mode.drag_start_points.is_empty() {
-                let final_points = std::mem::take(&mut self.simple_mode.drag_start_points);
-                self.commit_layout(final_points);
-            }
-            self.simple_mode.drag_start_pointer = None;
-            self.simple_mode.pan_drag_pointer = None;
-        }
-        let _ = ui;
-    }
-
-    fn simple_metronome_ui(&mut self, ui: &mut egui::Ui) {
-        self.simple_mode.metronome.poll();
-        ui.vertical_centered(|ui| {
-            ui.add_space(10.0);
-            ui.label(i18n::registered(self.locale, "simple-mode.029"));
-            ui.add_space(16.0);
-            ui.label(
-                egui::RichText::new(format!("{:.0}", self.simple_mode.metronome.bpm))
-                    .size(72.0)
-                    .strong(),
-            );
-            ui.label(i18n::registered(self.locale, "simple-mode.032"));
-            ui.add_space(12.0);
-            let mut bpm = self.simple_mode.metronome.bpm;
-            if ui
-                .add(egui::Slider::new(&mut bpm, 30.0..=300.0).show_value(false))
-                .changed()
-            {
-                self.simple_mode.metronome.set_bpm(bpm);
-            }
-            ui.add_space(18.0);
-            let running = self.simple_mode.metronome.is_running();
-            let phase = self.simple_mode.metronome.beat_phase();
-            let pulse_radius = if running { 34.0 - phase * 10.0 } else { 30.0 };
-            let pulse_color = if running {
-                let brightness = (1.0 - phase) * 200.0 + 55.0;
-                Color32::from_rgb(80, brightness as u8, 235)
-            } else {
-                Color32::from_gray(90)
-            };
-            let (response, painter) = ui.allocate_painter(Vec2::new(90.0, 90.0), Sense::hover());
-            painter.circle_filled(response.rect.center(), pulse_radius, pulse_color);
-            painter.circle_stroke(
-                response.rect.center(),
-                36.0,
-                Stroke::new(2.0, Color32::from_gray(200)),
-            );
-            ui.add_space(18.0);
-            let toggle_label = if running {
-                i18n::registered(self.locale, "simple-mode.030")
-            } else {
-                i18n::registered(self.locale, "simple-mode.031")
-            };
-            if ui
-                .add_sized(
-                    [200.0, 56.0],
-                    egui::Button::new(egui::RichText::new(toggle_label).size(22.0)),
-                )
-                .clicked()
-            {
-                self.simple_mode.metronome.toggle();
-            }
-            if let Some(error) = self.simple_mode.metronome.error() {
-                ui.add_space(8.0);
-                let id = match error {
-                    MetronomeFailure::Output => "simple-mode.037",
-                    MetronomeFailure::Schedule => "simple-mode.038",
-                };
-                ui.colored_label(
-                    Color32::from_rgb(235, 120, 120),
-                    i18n::registered(self.locale, id),
-                );
-            }
-        });
-        if self.simple_mode.metronome.is_running() {
-            ui.ctx().request_repaint_after(Duration::from_millis(33));
         }
     }
 }
@@ -1198,25 +736,68 @@ impl DrillApp {
 mod tests {
     use super::*;
 
-    #[test]
-    fn viewport_half_extent_is_small_and_finite() {
-        let grid = GridConfig::default();
-        let half = viewport_half_extent(&grid);
-        assert!(half.is_finite() && half > 0.0 && half < grid.width);
+    fn empty_simple_app() -> DrillApp {
+        let mut app = DrillApp {
+            simple_mode: SimpleModeState {
+                enabled: true,
+                ..SimpleModeState::default()
+            },
+            ..DrillApp::default()
+        };
+        app.begin_simple_show();
+        app
     }
 
     #[test]
-    fn simple_step_order_is_linear_and_bidirectional() {
-        assert_eq!(
-            SimpleStep::ChooseFormation.next(),
-            SimpleStep::SelectPerformers
-        );
-        assert_eq!(SimpleStep::Playback.next(), SimpleStep::Playback);
-        assert_eq!(
-            SimpleStep::ChooseFormation.previous(),
-            SimpleStep::ChooseFormation
-        );
-        assert_eq!(SimpleStep::Playback.previous(), SimpleStep::MovePerformers);
+    fn empty_roster_recommends_place() {
+        let app = empty_simple_app();
+        assert!(app.document.performers.is_empty());
+        assert_eq!(app.simple_guide(), SimpleGuide::Place);
+    }
+
+    #[test]
+    fn first_place_recommends_move_until_drag_tip_seen() {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 8.0, y: 6.0 }, true);
+        assert_eq!(app.document.performers.len(), 1);
+        assert_eq!(app.simple_guide(), SimpleGuide::Move);
+        assert_eq!(app.field_tool, FieldTool::Move);
+        app.onboarding.simple_drag_tip_seen = true;
+        assert_eq!(app.simple_guide(), SimpleGuide::NextSet);
+    }
+
+    #[test]
+    fn two_sets_recommend_play() {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 8.0, y: 6.0 }, true);
+        app.onboarding.simple_drag_tip_seen = true;
+        app.duplicate_current_set();
+        assert!(app.document.sets.len() >= 2);
+        assert_eq!(app.simple_guide(), SimpleGuide::Play);
+    }
+
+    #[test]
+    fn guided_place_move_next_set_and_play_is_edit_routed() {
+        let mut app = empty_simple_app();
+        let before = app.document.clone();
+        app.place_performer_at(Point { x: 8.0, y: 6.0 }, true);
+        assert_ne!(app.document, before);
+        assert!(app.history.can_undo());
+        app.replace_selection([0].into_iter().collect());
+        let start = app.document.sets[0].positions[0];
+        app.begin_field_drag(Pos2::new(0.0, 0.0));
+        app.update_field_drag(Pos2::new(50.0, 0.0), 10.0, true);
+        app.commit_field_drag();
+        assert_ne!(app.document.sets[0].positions[0], start);
+        assert!(app.onboarding.simple_drag_tip_seen);
+        let sets_before = app.document.sets.len();
+        app.duplicate_current_set();
+        assert_eq!(app.document.sets.len(), sets_before + 1);
+        let context = egui::Context::default();
+        app.toggle_playback(&context);
+        assert!(app.playing);
+        app.toggle_playback(&context);
+        assert!(!app.playing);
     }
 
     #[test]
@@ -1230,54 +811,6 @@ mod tests {
         app.restore_recent_selection();
         assert_eq!(app.selected, [0_usize, 2].into_iter().collect());
         assert!(!app.history.can_undo());
-    }
-
-    #[test]
-    fn guided_flow_select_apply_shape_and_play_is_edit_routed() {
-        let mut app = DrillApp {
-            simple_mode: SimpleModeState {
-                enabled: true,
-                ..SimpleModeState::default()
-            },
-            ..DrillApp::default()
-        };
-        let before = app.document.clone();
-
-        // Step 2: select performers, mirroring the "Select All" button.
-        app.simple_mode.step = SimpleStep::SelectPerformers;
-        app.selected = (0..app.document.performers.len()).collect();
-        assert!(!app.selected.is_empty());
-
-        // Step 3: apply a basic shape, mirroring the "Line Up" button. This
-        // must go through `commit_shape` -> `execute_edit`, so it is a single
-        // undoable transaction and never touches `document` directly.
-        app.simple_mode.step = SimpleStep::MovePerformers;
-        let grid = app.document.grid.clone();
-        app.commit_shape(shapes::ShapeSpec::Line {
-            start: Point {
-                x: grid.width * 0.25,
-                y: grid.height * 0.5,
-            },
-            end: Point {
-                x: grid.width * 0.75,
-                y: grid.height * 0.5,
-            },
-        });
-        assert_ne!(app.document, before);
-        assert!(app.history.can_undo());
-        assert!(app.history.undo(&mut app.document));
-        assert_eq!(app.document, before);
-        assert!(app.history.redo(&mut app.document));
-        assert_ne!(app.document, before);
-
-        // Step 4: start playback, mirroring the big Play button.
-        app.simple_mode.step = SimpleStep::Playback;
-        let context = egui::Context::default();
-        app.execute_command(commands::Command::RangeWholeShow, &context);
-        app.toggle_playback(&context);
-        assert!(app.playing);
-        app.toggle_playback(&context);
-        assert!(!app.playing);
     }
 
     #[test]
@@ -1307,5 +840,85 @@ mod tests {
         assert!(!start.contains("ClickSchedule::build"));
         assert!(start.contains("begin_open"));
         assert!(start.contains("begin_schedule"));
+    }
+
+    #[test]
+    fn simple_mode_place_uses_the_shared_pointer_and_warns_on_overlap() {
+        let mut app = empty_simple_app();
+        app.field_tool = FieldTool::Place;
+        let target = Point { x: 8.0, y: 6.0 };
+        app.field_pointer = Some(target);
+        let roster = app.document.performers.len();
+        app.place_performer_at(target, true);
+        assert_eq!(app.document.performers.len(), roster + 1);
+        let placed = *app.document.sets[0]
+            .positions
+            .last()
+            .expect("placed performer");
+        assert_eq!(placed, controller::field_point(target, &app.document, true));
+
+        app.field_tool = FieldTool::Place;
+        app.place_performer_at(placed, true);
+        assert_eq!(app.document.performers.len(), roster + 2);
+        assert_ne!(app.status, text(Locale::Ja, Text::Ready));
+    }
+
+    #[test]
+    fn simple_mode_place_and_move_respect_playback_lock() {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 5.0, y: 5.0 }, true);
+        app.playing = true;
+        let roster = app.document.performers.len();
+        app.place_performer_at(Point { x: 6.0, y: 6.0 }, true);
+        assert_eq!(app.document.performers.len(), roster);
+        assert!(!app.is_editable_set_start());
+        app.replace_selection([0].into_iter().collect());
+        let origin = app.document.sets[0].positions[0];
+        app.begin_field_drag(Pos2::new(0.0, 0.0));
+        app.update_field_drag(Pos2::new(80.0, 0.0), 10.0, true);
+        app.commit_field_drag();
+        assert_eq!(app.document.sets[0].positions[0], origin);
+    }
+
+    #[test]
+    fn simple_mode_move_snaps_clamps_and_shift_unsnaps() {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 8.0, y: 6.0 }, true);
+        app.field_tool = FieldTool::Move;
+        app.replace_selection([0].into_iter().collect());
+        let start = app.document.sets[0].positions[0];
+        app.document.grid.snap_enabled = true;
+
+        app.begin_field_drag(Pos2::new(0.0, 0.0));
+        app.update_field_drag(Pos2::new(50.0, 0.0), 10.0, true);
+        let snapped = app
+            .drag_preview
+            .as_ref()
+            .and_then(|preview| preview.first().copied());
+        app.commit_field_drag();
+        let after = app.document.sets[0].positions[0];
+        assert_eq!(snapped, Some(after));
+        assert_eq!(
+            after,
+            controller::drag_point(start, (50.0, 0.0), 10.0, &app.document, true)
+        );
+        assert_eq!(after, app.document.grid.snap(after));
+
+        app.begin_field_drag(Pos2::new(0.0, 0.0));
+        app.update_field_drag(Pos2::new(13.0, 0.0), 10.0, false);
+        app.commit_field_drag();
+        let unsnapped = app.document.sets[0].positions[0];
+        assert_eq!(
+            unsnapped,
+            controller::drag_point(after, (13.0, 0.0), 10.0, &app.document, false)
+        );
+
+        app.begin_field_drag(Pos2::new(0.0, 0.0));
+        app.update_field_drag(Pos2::new(10_000.0, 0.0), 10.0, true);
+        app.commit_field_drag();
+        assert_eq!(
+            app.document.sets[0].positions[0].x,
+            app.document.grid.max_x()
+        );
     }
 }

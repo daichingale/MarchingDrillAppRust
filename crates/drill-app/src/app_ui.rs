@@ -1,6 +1,8 @@
 use super::*;
 use std::f32::consts::TAU;
 
+const SELECTION_ACCENT: Color32 = Color32::from_rgb(76, 163, 255);
+
 impl eframe::App for DrillApp {
     /// This app never wraps its content in `egui::CentralPanel`, so the
     /// canvas behind every widget is exactly this clear color. eframe's
@@ -84,13 +86,7 @@ impl eframe::App for DrillApp {
         if let Some(event) = self.project_state.poll() {
             match event {
                 project_state::ProjectEvent::Saved(path) => {
-                    self.current_path = Some(path.clone());
-                    self.dirty = false;
-                    self.status = format!(
-                        "{}: {}",
-                        super::i18n::registered(self.locale, "app-ui.068"),
-                        path.display()
-                    );
+                    self.apply_saved_path(path);
                     if self.close_guard == CloseGuard::Saving {
                         self.close_guard = CloseGuard::Idle;
                         self.status =
@@ -103,54 +99,7 @@ impl eframe::App for DrillApp {
                     }
                 }
                 project_state::ProjectEvent::Loaded { path, project } => {
-                    let mut project = *project;
-                    let embedded_audio = project.manifest.assets.iter().find_map(|entry| {
-                        if entry.kind == drill_project::container::AssetKind::Audio {
-                            project
-                                .embedded
-                                .remove(&entry.id)
-                                .map(|bytes| (bytes, entry.original_name.clone()))
-                        } else {
-                            None
-                        }
-                    });
-                    let embedded_image = project.manifest.assets.iter().find_map(|entry| {
-                        (entry.kind == drill_project::container::AssetKind::Image)
-                            .then(|| {
-                                project
-                                    .embedded
-                                    .remove(&entry.id)
-                                    .map(|bytes| (bytes, entry.original_name.clone()))
-                            })
-                            .flatten()
-                    });
-                    self.document = project.document;
-                    self.tempo_bpm = self.document.tempo.bpm_at(0.0);
-                    self.camera = Camera::press_box(&self.document.grid);
-                    self.camera_program_preview = true;
-                    self.section_manager.clear_drafts();
-                    self.project_warnings = project.warnings;
-                    self.recent_projects.remember(path.clone());
-                    self.current_path = Some(path);
-                    self.current_set = 0;
-                    self.count_position = 0.0;
-                    self.reset_selection_for_document();
-                    self.playback_start = 0;
-                    self.playback_end = self.document.timeline_counts();
-                    self.history = History::with_limit(500);
-                    self.dirty = false;
-                    self.status = super::i18n::registered(self.locale, "app-ui.069").into();
-                    if let Some((bytes, name)) = embedded_audio {
-                        self.audio_state.start_decode_bytes(bytes, &name);
-                        self.status =
-                            format!("プロジェクトを開きました · 埋込音源 {name} を準備中…");
-                    }
-                    if let Some((bytes, name)) = embedded_image {
-                        self.underlay_state.load_bytes(bytes, name);
-                    } else if self.document.underlay.is_some() {
-                        self.underlay_state.remove();
-                        self.status = super::i18n::registered(self.locale, "app-ui.004").into();
-                    }
+                    self.apply_loaded_project(path, project);
                 }
                 project_state::ProjectEvent::Failed(error) => {
                     // A failed save must return the close sheet to its choice
@@ -436,9 +385,11 @@ impl eframe::App for DrillApp {
         );
 
         if self.simple_mode.enabled {
+            self.ensure_simple_chrome(ui.ctx());
             self.simple_ui(ui);
             return;
         }
+        self.restore_full_chrome(ui.ctx());
 
         if !self.focus_field {
             egui::MenuBar::new().ui(ui, |ui| {
@@ -916,6 +867,12 @@ impl eframe::App for DrillApp {
                     super::i18n::registered(self.locale, document_state),
                 );
                 if ui
+                    .button(UiCommand::NewDocument.label(self.locale))
+                    .clicked()
+                {
+                    self.execute_command(UiCommand::NewDocument, ui.ctx());
+                }
+                if ui
                     .button(text(self.locale, Text::Open))
                     .on_hover_text(super::i18n::registered(self.locale, "app-ui.025"))
                     .clicked()
@@ -952,6 +909,7 @@ impl eframe::App for DrillApp {
                 {
                     self.toggle_playback(ui.ctx());
                 }
+                self.core_edit_toolbar(ui);
                 if ui
                     .button(super::i18n::registered(self.locale, "app-ui.027"))
                     .on_hover_text(super::i18n::registered(self.locale, "app-ui.028"))
@@ -973,10 +931,7 @@ impl eframe::App for DrillApp {
                 {
                     self.execute_command(UiCommand::Redo, ui.ctx());
                 }
-                ui.add(
-                    egui::Slider::new(&mut self.speed, 0.25..=4.0)
-                        .text(text(self.locale, Text::Speed)),
-                );
+                self.show_playback_speed_presets(ui);
                 if ui
                     .add(
                         egui::DragValue::new(&mut self.tempo_bpm)
@@ -1577,6 +1532,8 @@ impl eframe::App for DrillApp {
                 });
                 ui.small(super::i18n::registered(self.locale, "app-ui.118"));
             });
+        self.show_timeline_playback_bar(ui);
+        self.show_set_card_strip(ui);
         let current_global = self
             .document
             .global_count(self.current_set, self.count_position);
@@ -1682,19 +1639,7 @@ impl eframe::App for DrillApp {
             self.execute_edit(edit, super::i18n::registered(self.locale, "app-ui.109"));
         }
         if let Some((set_index, local_count)) = timeline_change.seek {
-            self.current_set = set_index;
-            self.count_position = local_count;
-            self.playing = false;
-            self.audio_state.pause();
-            if let Some(track) = &self.document.audio {
-                let global = self.document.global_count(set_index, local_count);
-                self.audio_state
-                    .seek_seconds(drill_core::audio::count_to_audio_time(
-                        track,
-                        &self.document.tempo,
-                        global,
-                    ));
-            }
+            self.scrub_to(set_index, local_count);
             // Performer identity is stable across sets, so seeking the count
             // track keeps the current working group intact.
         }
@@ -1856,10 +1801,8 @@ impl eframe::App for DrillApp {
                         // to a selection should land square on the field, not
                         // overshoot it.
                         self.field_viewport.stop_glide();
-                        self.field_viewport.clamp_center(
-                            &self.document.grid,
-                            response.rect.shrink(18.0).size(),
-                        );
+                        self.field_viewport
+                            .clamp_center(&self.document.grid, response.rect.shrink(18.0).size());
                     }
                 }
                 let nudge = ui.input_mut(|input| {
@@ -1934,15 +1877,9 @@ impl eframe::App for DrillApp {
                     self.field_viewport.end_pan();
                 }
                 if response.hovered() {
-                    let (scroll, modifiers, pointer) = ui.input(|input| {
-                        (
-                            input.smooth_scroll_delta.y,
-                            input.modifiers,
-                            input.pointer.hover_pos(),
-                        )
-                    });
+                    let (scroll, pointer) =
+                        ui.input(|input| (input.smooth_scroll_delta.y, input.pointer.hover_pos()));
                     if scroll != 0.0
-                        && (modifiers.command || modifiers.ctrl)
                         && let Some(pointer) = pointer
                     {
                         // Accumulate into a target; `tick` eases the live zoom
@@ -1967,8 +1904,7 @@ impl eframe::App for DrillApp {
                 // from paired begin/end calls, so a drag abandoned by any of
                 // the several early-outs below can never leave the lift stuck
                 // on.
-                self.field_viewport
-                    .set_dot_drag(self.drag_before.is_some());
+                self.field_viewport.set_dot_drag(self.drag_before.is_some());
                 if self.field_viewport.tick(dt, &self.document.grid, rect) {
                     ui.ctx().request_repaint();
                 }
@@ -2043,7 +1979,7 @@ impl eframe::App for DrillApp {
                                     }
                                 }
                             });
-                            ui.small(super::i18n::registered(self.locale, "app-ui.128"));
+                            ui.small(super::i18n::registered(self.locale, "core-edit.009"));
                         });
                     });
                 let render_options = drill_render::RenderOptions {
@@ -2313,8 +2249,55 @@ impl eframe::App for DrillApp {
                 // at different zoom levels still see the pointer on the same
                 // yard line. `None` while the pointer is off the field, which
                 // is how peers learn to stop drawing it.
-                self.presence
-                    .set_local_cursor(response.hover_pos().map(&from_screen));
+                self.field_pointer = response.hover_pos().map(&from_screen);
+                self.presence.set_local_cursor(self.field_pointer);
+                let hover_on_dot = response.hover_pos().is_some_and(|pos| {
+                    self.frame_positions
+                        .iter()
+                        .enumerate()
+                        .filter(|(index, _)| self.is_selectable_index(*index))
+                        .any(|(_, point)| to_screen(*point).distance(pos) < 18.0)
+                });
+                if response.hovered() {
+                    let editable = self.is_editable_set_start();
+                    ui.ctx().set_cursor_icon(match self.field_tool {
+                        FieldTool::Place if !editable => egui::CursorIcon::NotAllowed,
+                        FieldTool::Place => egui::CursorIcon::Crosshair,
+                        FieldTool::Move if self.drag_before.is_some() => egui::CursorIcon::Grabbing,
+                        FieldTool::Move if !editable && !self.selected.is_empty() => {
+                            egui::CursorIcon::NotAllowed
+                        }
+                        FieldTool::Move if self.selected.is_empty() => egui::CursorIcon::Default,
+                        FieldTool::Move => egui::CursorIcon::Grab,
+                        FieldTool::Select if self.drag_before.is_some() => {
+                            egui::CursorIcon::Grabbing
+                        }
+                        FieldTool::Select if hover_on_dot && editable => egui::CursorIcon::Grab,
+                        FieldTool::Select => egui::CursorIcon::Default,
+                    });
+                }
+                if self.field_tool == FieldTool::Place
+                    && self.is_editable_set_start()
+                    && !self.free_draw_active
+                    && self.formation_preview_spec.is_none()
+                    && self.clipboard_paste_preview.is_none()
+                    && self.drag_before.is_none()
+                    && let Some(raw) = self.field_pointer
+                {
+                    let snap =
+                        self.document.grid.snap_enabled && !ui.input(|input| input.modifiers.shift);
+                    let pos = to_screen(controller::field_point(raw, &self.document, snap));
+                    painter.circle_filled(
+                        pos,
+                        8.0,
+                        Color32::from_rgba_unmultiplied(100, 235, 255, 80),
+                    );
+                    painter.circle_stroke(
+                        pos,
+                        8.0,
+                        Stroke::new(2.0, Color32::from_rgb(100, 235, 255)),
+                    );
+                }
                 if !self.formation_preview_points.is_empty() || self.free_draw_active {
                     for pair in self.formation_preview_points.windows(2) {
                         painter.line_segment(
@@ -2414,12 +2397,53 @@ impl eframe::App for DrillApp {
                     let radius = 7.0 + 1.3 * lift;
                     let shadow = Vec2::new(0.0, 2.6 * lift);
                     let shade = Color32::from_black_alpha((70.0 * lift) as u8);
+                    if let Some(before) = &self.drag_before {
+                        for &point in before {
+                            let pos = to_screen(point);
+                            painter.circle_filled(pos, 9.0, Color32::from_black_alpha(110));
+                        }
+                    }
                     for &point in preview {
                         let pos = to_screen(point);
                         if lift > 0.01 {
                             painter.circle_filled(pos + shadow, radius + 1.6, shade);
                         }
                         painter.circle_filled(pos, radius, Color32::from_rgb(100, 235, 255));
+                        painter.circle_stroke(pos, radius + 3.0, Stroke::new(2.0, Color32::WHITE));
+                    }
+                }
+                if self.selected.len() >= 2 {
+                    let bounds = self.selected.iter().filter_map(|&index| {
+                        let point = self
+                            .drag_preview
+                            .as_ref()
+                            .and_then(|preview| {
+                                self.selected
+                                    .iter()
+                                    .position(|&i| i == index)
+                                    .and_then(|slot| preview.get(slot).copied())
+                            })
+                            .or_else(|| self.frame_positions.get(index).copied())?;
+                        Some(to_screen(point))
+                    });
+                    let mut min = Pos2::new(f32::MAX, f32::MAX);
+                    let mut max = Pos2::new(f32::MIN, f32::MIN);
+                    let mut any = false;
+                    for pos in bounds {
+                        any = true;
+                        min.x = min.x.min(pos.x);
+                        min.y = min.y.min(pos.y);
+                        max.x = max.x.max(pos.x);
+                        max.y = max.y.max(pos.y);
+                    }
+                    if any {
+                        let group = Rect::from_min_max(min, max).expand(14.0);
+                        painter.rect_stroke(
+                            group,
+                            4.0,
+                            Stroke::new(1.0, SELECTION_ACCENT.gamma_multiply(0.55)),
+                            StrokeKind::Outside,
+                        );
                     }
                 }
                 if let Some(preview) = &self.clipboard_paste_preview {
@@ -2528,17 +2552,17 @@ impl eframe::App for DrillApp {
                             Color32::WHITE,
                         );
                     }
-                    if selected {
+                    if selected && self.drag_preview.is_none() {
                         painter.circle_stroke(
                             pos,
                             11.0 + settle_ring,
-                            Stroke::new(2.0, Color32::WHITE),
+                            Stroke::new(2.0, SELECTION_ACCENT),
                         );
                         if self.selected.len() >= 2 {
                             self.paint_selection_rank_badge(&painter, pos, index);
                         }
                     }
-                    // Peer rings sit outside the local white selection ring so
+                    // Peer rings sit outside the local accent selection ring so
                     // the two never merge into one thick smear.
                     if let Some(performer) = self.document.performers.get(index) {
                         self.presence
@@ -2601,21 +2625,35 @@ impl eframe::App for DrillApp {
                     if !pointer_gesture_taken && self.free_draw_active && response.drag_stopped() {
                         self.finish_free_draw_preview();
                     }
-                    let nearest = || {
-                        self.frame_positions
-                            .iter()
-                            .enumerate()
-                            .filter(|(index, _)| self.is_selectable_index(*index))
-                            .min_by(|(_, a), (_, b)| {
-                                to_screen(**a)
-                                    .distance(pointer)
-                                    .total_cmp(&to_screen(**b).distance(pointer))
-                            })
-                            .filter(|(_, p)| to_screen(**p).distance(pointer) < 18.0)
-                            .map(|(i, _)| i)
-                    };
-                    let nearest_index = nearest();
+                    let nearest_index = self
+                        .frame_positions
+                        .iter()
+                        .enumerate()
+                        .filter(|(index, _)| self.is_selectable_index(*index))
+                        .min_by(|(_, a), (_, b)| {
+                            to_screen(**a)
+                                .distance(pointer)
+                                .total_cmp(&to_screen(**b).distance(pointer))
+                        })
+                        .filter(|(_, p)| to_screen(**p).distance(pointer) < 18.0)
+                        .map(|(i, _)| i);
+                    let shift_held = ui.input(|input| input.modifiers.shift);
+                    let snap_now = self.document.grid.snap_enabled && !shift_held;
                     if !pointer_gesture_taken
+                        && !self.free_draw_active
+                        && !interaction_locked
+                        && response.double_clicked()
+                        && nearest_index.is_none()
+                    {
+                        self.field_viewport.reset(&self.document.grid);
+                    } else if !pointer_gesture_taken
+                        && !self.free_draw_active
+                        && !interaction_locked
+                        && self.field_tool == FieldTool::Place
+                        && response.clicked()
+                    {
+                        self.place_performer_at(from_screen(pointer), snap_now);
+                    } else if !pointer_gesture_taken
                         && !self.free_draw_active
                         && !interaction_locked
                         && response.clicked()
@@ -2639,7 +2677,7 @@ impl eframe::App for DrillApp {
                             } else {
                                 self.replace_selection([index].into_iter().collect());
                             }
-                        } else {
+                        } else if self.field_tool != FieldTool::Move {
                             self.clear_selection();
                         }
                     }
@@ -2647,28 +2685,26 @@ impl eframe::App for DrillApp {
                         && !interaction_locked
                         && response.drag_started()
                         && !pointer_gesture_taken
-                        && self.is_editable_set_start()
-                        && let Some(index) = nearest_index
+                        && self.field_tool != FieldTool::Place
                     {
-                        if !self.selected.contains(&index) {
-                            self.replace_selection([index].into_iter().collect());
+                        if let Some(index) = nearest_index {
+                            if self.is_editable_set_start() {
+                                if !self.selected.contains(&index) {
+                                    self.replace_selection([index].into_iter().collect());
+                                }
+                                self.begin_field_drag(pointer);
+                            } else {
+                                self.ensure_editable_set_start();
+                            }
+                        } else if self.field_tool == FieldTool::Move && !self.selected.is_empty() {
+                            if self.is_editable_set_start() {
+                                self.begin_field_drag(pointer);
+                            } else {
+                                self.ensure_editable_set_start();
+                            }
+                        } else if self.field_tool == FieldTool::Select {
+                            self.marquee_origin = Some(pointer);
                         }
-                        self.drag_before = Some(
-                            self.selected
-                                .iter()
-                                .map(|&i| self.document.sets[self.current_set].positions[i])
-                                .collect(),
-                        );
-                        self.drag_preview = self.drag_before.clone();
-                        self.drag_origin = Some(pointer);
-                    }
-                    if !self.free_draw_active
-                        && !interaction_locked
-                        && response.drag_started()
-                        && !pointer_gesture_taken
-                        && nearest_index.is_none()
-                    {
-                        self.marquee_origin = Some(pointer);
                     }
                     if !self.free_draw_active
                         && !interaction_locked
@@ -2694,48 +2730,16 @@ impl eframe::App for DrillApp {
                         && response.dragged()
                         && !pointer_gesture_taken
                         && self.is_editable_set_start()
-                        && let (Some(before), Some(origin)) = (&self.drag_before, self.drag_origin)
+                        && self.drag_before.is_some()
                     {
-                        let preview = self.drag_preview.get_or_insert_with(Vec::new);
-                        preview.clear();
-                        for &start in before {
-                            preview.push(controller::drag_point(
-                                start,
-                                (pointer.x - origin.x, pointer.y - origin.y),
-                                field_map.scale,
-                                &self.document,
-                            ));
-                        }
+                        self.update_field_drag(pointer, field_map.scale, snap_now);
                     }
                     if !self.free_draw_active
                         && !interaction_locked
                         && response.drag_stopped()
                         && !pointer_gesture_taken
-                        && let Some(before) = self.drag_before.take()
                     {
-                        let after = self.drag_preview.take().unwrap_or_else(|| before.clone());
-                        // The dots have left the pointer and snapped to the
-                        // grid; run the one-shot landing settle.
-                        self.field_viewport.dots_landed();
-                        if before != after && self.ensure_editable_set_start() {
-                            let set_id = self.document.sets[self.current_set].id;
-                            let performer_ids = self
-                                .selected
-                                .iter()
-                                .filter_map(|&index| {
-                                    self.document.performers.get(index).map(|p| p.id)
-                                })
-                                .collect();
-                            self.execute_edit(
-                                Edit::MovePerformers {
-                                    set_id,
-                                    performer_ids,
-                                    positions: after,
-                                },
-                                super::i18n::registered(self.locale, "app-ui.063"),
-                            );
-                        }
-                        self.drag_origin = None;
+                        self.commit_field_drag();
                     }
                     if !self.free_draw_active
                         && !interaction_locked
@@ -2782,6 +2786,11 @@ impl eframe::App for DrillApp {
             Some(onboarding::WelcomeAction::OpenProject) => {
                 self.request_open_document(DocumentOpenKind::Project)
             }
+            Some(onboarding::WelcomeAction::NewShow) => self.begin_new_show(),
+            Some(onboarding::WelcomeAction::SimpleMode) => {
+                self.begin_simple_show();
+                self.simple_mode.enabled = true;
+            }
             None => {}
         }
         self.onboarding.persist_if_changed();
@@ -2813,6 +2822,239 @@ impl eframe::App for DrillApp {
 }
 
 impl DrillApp {
+    fn show_playback_speed_presets(&mut self, ui: &mut egui::Ui) {
+        ui.label(text(self.locale, Text::Speed));
+        for speed in PLAYBACK_SPEED_PRESETS {
+            if ui
+                .selectable_label(
+                    (self.speed - speed).abs() < f32::EPSILON,
+                    format!("{speed}×"),
+                )
+                .clicked()
+            {
+                self.speed = speed;
+            }
+        }
+    }
+
+    fn show_timeline_playback_bar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            if ui
+                .button(if self.playing {
+                    text(self.locale, Text::Pause)
+                } else {
+                    text(self.locale, Text::Play)
+                })
+                .clicked()
+            {
+                self.toggle_playback(ui.ctx());
+            }
+            if ui
+                .button(super::i18n::registered(self.locale, "core-edit.033"))
+                .on_hover_text(super::i18n::registered(self.locale, "core-edit.034"))
+                .clicked()
+            {
+                self.jump_to_show_start();
+            }
+            self.show_playback_speed_presets(ui);
+        });
+    }
+
+    fn show_set_card_strip(&mut self, ui: &mut egui::Ui) {
+        let cards: Vec<(usize, String, u16, drill_core::SetId)> = self
+            .document
+            .sets
+            .iter()
+            .enumerate()
+            .map(|(index, set)| (index, set.name.clone(), set.counts, set.id))
+            .collect();
+        let current_set = self.current_set;
+        let mut clicked_set = None;
+        let mut count_edit: Option<(usize, u16, bool)> = None;
+        egui::ScrollArea::horizontal()
+            .id_salt("set-card-strip")
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    for (index, name, counts, set_id) in &cards {
+                        let selected = *index == current_set;
+                        let fill = if selected {
+                            super::app_theme::ACCENT_SOFT
+                        } else {
+                            ui.visuals().extreme_bg_color
+                        };
+                        let stroke = if selected {
+                            egui::Stroke::new(1.0, super::app_theme::ACCENT)
+                        } else {
+                            egui::Stroke::new(1.0, super::app_theme::HAIRLINE)
+                        };
+                        let response = super::app_theme::surface_frame(ui)
+                            .fill(fill)
+                            .stroke(stroke)
+                            .corner_radius(super::app_theme::CORNER_SM)
+                            .inner_margin(egui::Margin::symmetric(10, 6))
+                            .show(ui, |ui| {
+                                ui.label(format!("{}  {name}", index + 1));
+                            })
+                            .response
+                            .interact(Sense::click())
+                            .on_hover_text(super::i18n::registered(self.locale, "core-edit.037"));
+                        if selected
+                            && super::timeline::card_needs_follow_scroll(
+                                ui.clip_rect(),
+                                response.rect,
+                            )
+                        {
+                            response.scroll_to_me(Some(egui::Align::Center));
+                        }
+                        if response.clicked() {
+                            clicked_set = Some(*index);
+                        }
+                        if *index + 1 < cards.len() {
+                            let editing = self
+                                .set_count_draft
+                                .is_some_and(|draft| draft.set_id == *set_id);
+                            let mut value = if editing {
+                                self.set_count_draft.expect("active draft").moves
+                            } else {
+                                *counts
+                            };
+                            let editor = ui
+                                .add(egui::DragValue::new(&mut value).range(1..=512).suffix(" c"))
+                                .on_hover_text(super::i18n::registered(
+                                    self.locale,
+                                    "core-edit.036",
+                                ));
+                            if editor.changed() || editor.lost_focus() {
+                                count_edit = Some((*index, value, editor.lost_focus()));
+                            }
+                        }
+                    }
+                });
+            });
+        if let Some(index) = clicked_set {
+            self.navigate_to_set(index);
+        }
+        if let Some((index, moves, lost_focus)) = count_edit {
+            let set_id = cards[index].3;
+            if let Some(draft) = self.set_count_draft
+                && draft.set_id != set_id
+            {
+                self.apply_set_count_draft();
+            }
+            if !self
+                .set_count_draft
+                .is_some_and(|draft| draft.set_id == set_id)
+            {
+                self.begin_set_count_draft_at(index);
+            }
+            if let Some(draft) = &mut self.set_count_draft {
+                draft.moves = moves.max(1);
+            }
+            if lost_focus {
+                let _ = self.commit_transition_counts(index, moves.max(1));
+            }
+        }
+    }
+
+    fn core_edit_toolbar(&mut self, ui: &mut egui::Ui) {
+        let context = self.command_context();
+        ui.separator();
+        let previous = UiCommand::PreviousSet.enabled(context, self.locale);
+        let previous_response = ui
+            .add_enabled(previous.is_ok(), egui::Button::new("◀"))
+            .on_hover_text(super::i18n::registered(self.locale, "core-edit.001"));
+        let previous_response = match previous {
+            Ok(()) => previous_response,
+            Err(reason) => previous_response.on_disabled_hover_text(reason),
+        };
+        if previous_response.clicked() {
+            self.execute_command(UiCommand::PreviousSet, ui.ctx());
+        }
+        let set_name = self
+            .document
+            .sets
+            .get(self.current_set)
+            .map(|set| set.name.as_str())
+            .unwrap_or("—");
+        ui.strong(format!(
+            "{} {}/{}",
+            set_name,
+            self.current_set + 1,
+            self.document.sets.len().max(1)
+        ));
+        let next = UiCommand::NextSet.enabled(context, self.locale);
+        let next_response = ui
+            .add_enabled(next.is_ok(), egui::Button::new("▶"))
+            .on_hover_text(super::i18n::registered(self.locale, "core-edit.002"));
+        let next_response = match next {
+            Ok(()) => next_response,
+            Err(reason) => next_response.on_disabled_hover_text(reason),
+        };
+        if next_response.clicked() {
+            self.execute_command(UiCommand::NextSet, ui.ctx());
+        }
+        if ui
+            .button(super::i18n::registered(self.locale, "core-edit.003"))
+            .on_hover_text(super::i18n::registered(self.locale, "core-edit.004"))
+            .clicked()
+        {
+            self.execute_command(UiCommand::DuplicateSet, ui.ctx());
+        }
+        let delete_set = UiCommand::DeleteSet.enabled(context, self.locale);
+        let delete_set_response = ui.add_enabled(
+            delete_set.is_ok(),
+            egui::Button::new(super::i18n::registered(self.locale, "core-edit.017")),
+        );
+        let delete_set_response = match delete_set {
+            Ok(()) => delete_set_response,
+            Err(reason) => delete_set_response.on_disabled_hover_text(reason),
+        };
+        if delete_set_response.clicked() {
+            self.execute_command(UiCommand::DeleteSet, ui.ctx());
+        }
+        ui.separator();
+        for tool in [FieldTool::Select, FieldTool::Move, FieldTool::Place] {
+            if ui
+                .selectable_label(self.field_tool == tool, tool.label(self.locale))
+                .on_hover_text(tool.hover(self.locale))
+                .clicked()
+            {
+                self.set_field_tool(tool);
+            }
+        }
+        ui.separator();
+        let add = UiCommand::AddPerformer.enabled(context, self.locale);
+        let add_response = ui
+            .add_enabled(
+                add.is_ok(),
+                egui::Button::new(super::i18n::registered(self.locale, "core-edit.005")),
+            )
+            .on_hover_text(super::i18n::registered(self.locale, "core-edit.006"));
+        let add_response = match add {
+            Ok(()) => add_response,
+            Err(reason) => add_response.on_disabled_hover_text(reason),
+        };
+        if add_response.clicked() {
+            self.execute_command(UiCommand::AddPerformer, ui.ctx());
+        }
+        let remove = UiCommand::RemoveSelectedPerformers.enabled(context, self.locale);
+        let remove_response = ui
+            .add_enabled(
+                remove.is_ok(),
+                egui::Button::new(super::i18n::registered(self.locale, "core-edit.007")),
+            )
+            .on_hover_text(super::i18n::registered(self.locale, "core-edit.008"));
+        let remove_response = match remove {
+            Ok(()) => remove_response,
+            Err(reason) => remove_response.on_disabled_hover_text(reason),
+        };
+        if remove_response.clicked() {
+            self.execute_command(UiCommand::RemoveSelectedPerformers, ui.ctx());
+        }
+    }
+
     /// Drives the field canvas radial marking menu: the same nine selection
     /// commands the field has always offered, chosen by the direction of a
     /// right-drag instead of by picking a row out of a list.
@@ -3170,7 +3412,12 @@ impl DrillApp {
         pos: Pos2,
         index: usize,
     ) {
-        let Some(rank) = self.selected.iter().position(|&i| i == index).map(|p| p + 1) else {
+        let Some(rank) = self
+            .selected
+            .iter()
+            .position(|&i| i == index)
+            .map(|p| p + 1)
+        else {
             return;
         };
         let mut digits: u32 = 1;
@@ -3182,7 +3429,11 @@ impl DrillApp {
         let radius = 7.5 + 2.3 * (digits - 1) as f32;
         let center = pos + Vec2::new(8.0, 9.0);
         painter.circle_filled(center, radius, Color32::from_rgb(245, 197, 66));
-        painter.circle_stroke(center, radius, Stroke::new(1.0, Color32::from_black_alpha(200)));
+        painter.circle_stroke(
+            center,
+            radius,
+            Stroke::new(1.0, Color32::from_black_alpha(200)),
+        );
         painter.text(
             center,
             egui::Align2::CENTER_CENTER,
