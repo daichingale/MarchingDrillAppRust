@@ -1710,7 +1710,11 @@ impl DrillApp {
 
     fn begin_new_show(&mut self) {
         const BLANK_PERFORMERS: usize = 16;
-        let document = Document::blank(BLANK_PERFORMERS);
+        self.install_document(Document::blank(BLANK_PERFORMERS));
+        self.status = i18n::registered(self.locale, "core-edit.010").into();
+    }
+
+    fn install_document(&mut self, document: Document) {
         self.document = document;
         self.tempo_bpm = self.document.tempo.bpm_at(0.0);
         self.camera = Camera::press_box(&self.document.grid);
@@ -1750,7 +1754,6 @@ impl DrillApp {
         self.underlay_state.remove();
         self.field_tool = FieldTool::Select;
         self.field_pointer = None;
-        self.status = i18n::registered(self.locale, "core-edit.010").into();
     }
 
     fn begin_simple_show(&mut self) {
@@ -1804,6 +1807,7 @@ impl DrillApp {
     }
 
     fn begin_field_drag(&mut self, pointer: Pos2) {
+        self.simple_mode.overlap_note = false;
         self.commit_performer_draft();
         let Some(set) = self.document.sets.get(self.current_set) else {
             return;
@@ -2078,12 +2082,17 @@ impl DrillApp {
         };
         let position = controller::field_point(raw, &self.document, snap);
         let overlap = self.positions_overlap(position);
+        let label = if self.simple_mode.enabled {
+            format!("{}", self.document.performers.len() + 1)
+        } else {
+            format!("P{}", id.get())
+        };
         let mut next = self.document.clone();
         if next
             .add_performer(
                 Performer {
                     id,
-                    label: format!("P{}", id.get()),
+                    label,
                     section,
                     symbol: Symbol::Cross,
                     color: None.into(),
@@ -2113,6 +2122,7 @@ impl DrillApp {
         } else {
             i18n::registered(self.locale, "core-edit.011").into()
         };
+        self.simple_mode.overlap_note = self.simple_mode.enabled && overlap;
         if self.simple_mode.enabled && self.document.performers.len() == 1 {
             self.field_tool = FieldTool::Move;
         }
@@ -2663,7 +2673,7 @@ impl DrillApp {
                 self.view_mode = ViewMode::Field2D;
                 self.show_inspector = true;
                 self.show_guidance = true;
-                self.simple_mode.enabled = false;
+                self.set_simple_mode(false);
                 self.heatmap_enabled = false;
                 self.workspace_focus = Some(WorkspaceFocus::Performer);
             }
@@ -2671,7 +2681,7 @@ impl DrillApp {
                 self.view_mode = ViewMode::Field2D;
                 self.show_inspector = true;
                 self.show_guidance = false;
-                self.simple_mode.enabled = false;
+                self.set_simple_mode(false);
                 self.heatmap_enabled = true;
                 self.workspace_focus = Some(WorkspaceFocus::Clinic);
             }
@@ -2679,7 +2689,7 @@ impl DrillApp {
                 self.view_mode = ViewMode::Stadium3D;
                 self.show_inspector = false;
                 self.show_guidance = false;
-                self.simple_mode.enabled = false;
+                self.set_simple_mode(false);
                 self.heatmap_enabled = false;
                 self.camera_program_preview = true;
                 self.workspace_focus = None;
@@ -2843,12 +2853,15 @@ impl DrillApp {
     fn new(creation: &eframe::CreationContext<'_>) -> Self {
         let app_theme = app_theme::AppTheme::load();
         app_theme.apply(&creation.egui_ctx);
-        Self {
+        let mut app = Self {
             onboarding: onboarding::OnboardingState::load(),
             gpu: gpu_bridge::Bridge::install(creation),
             app_theme,
             ..Self::default()
-        }
+        };
+        app.open_into_preferred_editor();
+        app.apply_qa_simple_fixture();
+        app
     }
 
     fn execute_edit(&mut self, edit: Edit, failure: &str) -> bool {
@@ -4113,6 +4126,7 @@ impl DrillApp {
             i18n::registered(self.locale, "app-ui.068"),
             path.display()
         );
+        self.remember_simple_draft();
     }
 
     fn apply_loaded_project(
@@ -4175,6 +4189,7 @@ impl DrillApp {
             self.underlay_state.remove();
             self.status = i18n::registered(self.locale, "app-ui.004").into();
         }
+        self.remember_simple_draft();
     }
 
     /// Read-only 3D stadium visualization of the current frame. Editing stays in 2D.

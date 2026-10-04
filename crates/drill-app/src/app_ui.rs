@@ -387,6 +387,10 @@ impl eframe::App for DrillApp {
         if self.simple_mode.enabled {
             self.ensure_simple_chrome(ui.ctx());
             self.simple_ui(ui);
+            // These sheets live in this module. Simple mode returns before the
+            // full editor, so keep the same close/open guards reachable here.
+            self.show_close_guard(ui.ctx());
+            self.show_document_open_guard(ui.ctx());
             return;
         }
         self.restore_full_chrome(ui.ctx());
@@ -640,6 +644,8 @@ impl eframe::App for DrillApp {
                         .checkbox(&mut self.simple_mode.enabled, simple_mode_label)
                         .changed()
                     {
+                        let enabled = self.simple_mode.enabled;
+                        self.set_simple_mode(enabled);
                         ui.close();
                     }
                     ui.checkbox(&mut self.show_guidance, text(self.locale, Text::Guidance));
@@ -2249,7 +2255,7 @@ impl eframe::App for DrillApp {
                 // at different zoom levels still see the pointer on the same
                 // yard line. `None` while the pointer is off the field, which
                 // is how peers learn to stop drawing it.
-                self.field_pointer = response.hover_pos().map(&from_screen);
+                self.field_pointer = response.hover_pos().map(from_screen);
                 self.presence.set_local_cursor(self.field_pointer);
                 let hover_on_dot = response.hover_pos().is_some_and(|pos| {
                     self.frame_positions
@@ -3512,6 +3518,7 @@ impl DrillApp {
         if !ctx.input(|input| input.viewport().close_requested()) {
             return;
         }
+        self.flush_simple_draft();
         if self.dirty || self.close_guard != CloseGuard::Idle {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             if self.close_guard == CloseGuard::Idle {

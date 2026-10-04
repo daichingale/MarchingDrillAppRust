@@ -18,6 +18,11 @@ pub struct OnboardingState {
     pub coach_step: u8,
     pub simple_drag_tip_seen: bool,
     pub simple_steps_dismissed: bool,
+    /// Existing preference files omit this field. Missing means the person
+    /// already had the full editor, so they stay there. A brand-new install
+    /// uses [`Default`], which opens the simple field.
+    #[serde(default = "existing_user_prefers_full_editor")]
+    pub prefer_simple: bool,
     #[serde(skip)]
     pub show_welcome: bool,
     #[serde(skip)]
@@ -34,6 +39,7 @@ impl Default for OnboardingState {
             coach_step: 0,
             simple_drag_tip_seen: false,
             simple_steps_dismissed: false,
+            prefer_simple: true,
             show_welcome: true,
             show_help: false,
             persisted: String::new(),
@@ -232,6 +238,10 @@ impl OnboardingState {
     }
 }
 
+fn existing_user_prefers_full_editor() -> bool {
+    false
+}
+
 fn preferences_path() -> Option<std::path::PathBuf> {
     #[cfg(target_os = "windows")]
     let base = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from);
@@ -273,5 +283,18 @@ mod tests {
     fn coaching_is_localized() {
         let s = OnboardingState::default();
         assert_ne!(s.coach_message(Locale::Ja), s.coach_message(Locale::En));
+    }
+    #[test]
+    fn fresh_install_opens_the_simple_field() {
+        let state = OnboardingState::default();
+        assert!(state.prefer_simple);
+        assert!(!state.welcome_seen);
+    }
+    #[test]
+    fn saved_preferences_without_the_new_flag_stay_on_the_full_editor() {
+        let json = r#"{"welcome_seen":true,"coach_dismissed":true,"coach_step":3,"simple_drag_tip_seen":true,"simple_steps_dismissed":true}"#;
+        let state: OnboardingState = serde_json::from_str(json).expect("older prefs still parse");
+        assert!(state.welcome_seen);
+        assert!(!state.prefer_simple);
     }
 }
