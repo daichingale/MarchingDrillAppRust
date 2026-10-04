@@ -2034,6 +2034,12 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "simple-mode.085") => "↩ Undo",
         (Locale::Ja, "simple-mode.086") => "場面",
         (Locale::En, "simple-mode.086") => "Scene",
+        (Locale::Ja, "simple-mode.087") => "戻す",
+        (Locale::En, "simple-mode.087") => "Undo",
+        (Locale::Ja, "simple-mode.088") => "再生",
+        (Locale::En, "simple-mode.088") => "Play",
+        (Locale::Ja, "simple-mode.089") => "一時停止",
+        (Locale::En, "simple-mode.089") => "Pause",
         (Locale::Ja, "production-markers.001") => "プロダクションマーカー",
         (Locale::En, "production-markers.001") => "Production Markers",
         (Locale::Ja, "production-markers.002") => {

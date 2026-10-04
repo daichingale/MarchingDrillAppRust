@@ -166,28 +166,6 @@ pub(crate) fn surface_frame(ui: &egui::Ui) -> egui::Frame {
         .inner_margin(egui::Margin::same(10))
 }
 
-pub(crate) fn toolbar_frame(ui: &egui::Ui) -> egui::Frame {
-    egui::Frame::new()
-        .fill(ui.visuals().panel_fill)
-        .stroke(egui::Stroke::new(1.0, HAIRLINE))
-        .corner_radius(0)
-        .inner_margin(egui::Margin::symmetric(10, 4))
-}
-
-pub(crate) fn primary_button<'a>(text: impl Into<egui::WidgetText>) -> egui::Button<'a> {
-    egui::Button::new(text)
-        .fill(ACCENT)
-        .stroke(egui::Stroke::NONE)
-        .corner_radius(CORNER)
-}
-
-pub(crate) fn quiet_button<'a>(text: impl Into<egui::WidgetText>) -> egui::Button<'a> {
-    egui::Button::new(text)
-        .fill(Color32::TRANSPARENT)
-        .stroke(egui::Stroke::new(1.0, HAIRLINE))
-        .corner_radius(CORNER)
-}
-
 /// Softens the Studio/Daylight/Nightline switch from a hard flash into a
 /// dissolve, by washing the outgoing theme's dominant color over the new one
 /// for a moment and fading it out.
