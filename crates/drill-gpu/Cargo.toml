@@ -5,8 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-drill-core = { path = "../drill-core" }
-drill-render = { path = "../drill-render" }
+drill-core = { path = "../drill-core", version = "0.1.0" }
+drill-render = { path = "../drill-render", version = "0.1.0" }
 bytemuck = { version = "1.25.0", features = ["derive"] }
 wgpu = "29.0.0"
 

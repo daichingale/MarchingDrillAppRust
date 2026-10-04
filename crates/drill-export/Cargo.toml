@@ -5,11 +5,11 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-drill-core = { path = "../drill-core" }
-drill-jobs = { path = "../drill-jobs" }
-drill-project = { path = "../drill-project" }
-drill-render = { path = "../drill-render" }
-drill-interop = { path = "../drill-interop" }
+drill-core = { path = "../drill-core", version = "0.1.0" }
+drill-jobs = { path = "../drill-jobs", version = "0.1.0" }
+drill-project = { path = "../drill-project", version = "0.1.0" }
+drill-render = { path = "../drill-render", version = "0.1.0" }
+drill-interop = { path = "../drill-interop", version = "0.1.0" }
 
 [dev-dependencies]
 image = { version = "0.25.10", default-features = false, features = ["png"] }

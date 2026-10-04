@@ -3,8 +3,10 @@ $root = Split-Path -Parent $PSScriptRoot
 $sourceRoot = Join-Path $root "crates/drill-app/src"
 $generatedPath = Join-Path $sourceRoot "i18n_generated.rs"
 $generated = [IO.File]::ReadAllText($generatedPath)
+# ui_qa.rs re-asserts production catalog IDs. Those calls are not new
+# callsites, and the raw-literal scan below already ignores that file.
 $product = (Get-ChildItem $sourceRoot -Filter *.rs |
-    Where-Object Name -NotIn @('i18n.rs', 'i18n_generated.rs') |
+    Where-Object Name -NotIn @('i18n.rs', 'i18n_generated.rs', 'ui_qa.rs') |
     ForEach-Object { [IO.File]::ReadAllText($_.FullName) }) -join "`n"
 
 $calls = [regex]::Matches($product, '(?:super::)?i18n::registered\([^,]+,\s*"([a-z0-9-]+\.\d{3})"\)')

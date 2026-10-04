@@ -5,18 +5,18 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-drill-core = { path = "../drill-core" }
-drill-audio = { path = "../drill-audio" }
-drill-export = { path = "../drill-export" }
-drill-jobs = { path = "../drill-jobs" }
-drill-render = { path = "../drill-render" }
-drill-gpu = { path = "../drill-gpu" }
-drill-project = { path = "../drill-project" }
-drill-updater = { path = "../drill-updater" }
-drill-interop = { path = "../drill-interop" }
-drill-plugin = { path = "../drill-plugin" }
-drill-presence = { path = "../drill-presence" }
-drill-mobile-viewer = { path = "../drill-mobile-viewer" }
+drill-core = { path = "../drill-core", version = "0.1.0" }
+drill-audio = { path = "../drill-audio", version = "0.1.0" }
+drill-export = { path = "../drill-export", version = "0.1.0" }
+drill-jobs = { path = "../drill-jobs", version = "0.1.0" }
+drill-render = { path = "../drill-render", version = "0.1.0" }
+drill-gpu = { path = "../drill-gpu", version = "0.1.0" }
+drill-project = { path = "../drill-project", version = "0.1.0" }
+drill-updater = { path = "../drill-updater", version = "0.1.0" }
+drill-interop = { path = "../drill-interop", version = "0.1.0" }
+drill-plugin = { path = "../drill-plugin", version = "0.1.0" }
+drill-presence = { path = "../drill-presence", version = "0.1.0" }
+drill-mobile-viewer = { path = "../drill-mobile-viewer", version = "0.1.0" }
 eframe = { version = "0.35.0", default-features = false, features = ["accesskit", "wgpu", "glow", "__screenshot", "wayland", "x11"] }
 rfd = "0.17.2"
 blake3 = "1.8.2"

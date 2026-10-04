@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-drill-core = { path = "../drill-core" }
+drill-core = { path = "../drill-core", version = "0.1.0" }
 serde.workspace = true
 serde_json.workspace = true
 # Synchronous WebSocket. `tokio-tungstenite` is deliberately NOT used: this

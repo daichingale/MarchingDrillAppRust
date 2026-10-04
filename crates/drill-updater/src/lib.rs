@@ -296,7 +296,7 @@ pub fn sha256_hex(input: &[u8]) -> String {
         0x1f83d9ab,
         0x5be0cd19,
     ];
-    for block in data.chunks_exact(64) {
+    for block in data.as_chunks::<64>().0 {
         let mut w = [0u32; 64];
         for (i, word) in w[..16].iter_mut().enumerate() {
             *word = u32::from_be_bytes(block[i * 4..i * 4 + 4].try_into().expect("four bytes"));
