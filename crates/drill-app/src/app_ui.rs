@@ -87,6 +87,11 @@ impl eframe::App for DrillApp {
             match event {
                 project_state::ProjectEvent::Saved(path) => {
                     self.apply_saved_path(path);
+                    if self.simple_mode.enabled {
+                        let saved = super::i18n::registered(self.locale, "simple-mode.081");
+                        self.status = saved.into();
+                        self.push_simple_toast(saved);
+                    }
                     if self.close_guard == CloseGuard::Saving {
                         self.close_guard = CloseGuard::Idle;
                         self.status =
@@ -632,14 +637,12 @@ impl eframe::App for DrillApp {
                         }
                     }
                     ui.separator();
-                    let simple_mode_label = match self.locale {
-                        Locale::Ja => "簡単モード",
-                        Locale::En => "Simple Mode",
-                    };
+                    let simple_mode_label = super::i18n::registered(self.locale, "simple-mode.084");
                     if ui
                         .checkbox(&mut self.simple_mode.enabled, simple_mode_label)
                         .changed()
                     {
+                        self.onboarding.prefer_simple = self.simple_mode.enabled;
                         ui.close();
                     }
                     ui.checkbox(&mut self.show_guidance, text(self.locale, Text::Guidance));
@@ -2249,7 +2252,7 @@ impl eframe::App for DrillApp {
                 // at different zoom levels still see the pointer on the same
                 // yard line. `None` while the pointer is off the field, which
                 // is how peers learn to stop drawing it.
-                self.field_pointer = response.hover_pos().map(&from_screen);
+                self.field_pointer = response.hover_pos().map(from_screen);
                 self.presence.set_local_cursor(self.field_pointer);
                 let hover_on_dot = response.hover_pos().is_some_and(|pos| {
                     self.frame_positions
@@ -2786,10 +2789,19 @@ impl eframe::App for DrillApp {
             Some(onboarding::WelcomeAction::OpenProject) => {
                 self.request_open_document(DocumentOpenKind::Project)
             }
-            Some(onboarding::WelcomeAction::NewShow) => self.begin_new_show(),
+            Some(onboarding::WelcomeAction::NewShow) => {
+                self.begin_new_show();
+                self.simple_mode.enabled = false;
+                self.onboarding.prefer_simple = false;
+            }
             Some(onboarding::WelcomeAction::SimpleMode) => {
                 self.begin_simple_show();
                 self.simple_mode.enabled = true;
+                self.onboarding.prefer_simple = true;
+            }
+            Some(onboarding::WelcomeAction::Sample) => {
+                self.simple_mode.enabled = true;
+                self.onboarding.prefer_simple = true;
             }
             None => {}
         }

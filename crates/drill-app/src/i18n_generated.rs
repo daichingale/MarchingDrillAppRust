@@ -1974,40 +1974,102 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "simple-mode.055") => "Place",
         (Locale::Ja, "simple-mode.056") => "動かす",
         (Locale::En, "simple-mode.056") => "Move",
-        (Locale::Ja, "simple-mode.057") => "次のセット",
-        (Locale::En, "simple-mode.057") => "Next Set",
-        (Locale::Ja, "simple-mode.058") => "まず人を置きましょう",
-        (Locale::En, "simple-mode.058") => "Start by placing a person",
-        (Locale::Ja, "simple-mode.059") => "ドラッグで動かせます",
-        (Locale::En, "simple-mode.059") => "Drag to move them",
-        (Locale::Ja, "simple-mode.060") => "次のセットを追加して動きを作りましょう",
-        (Locale::En, "simple-mode.060") => "Add the next set to create movement",
-        (Locale::Ja, "simple-mode.061") => "再生で確認",
-        (Locale::En, "simple-mode.061") => "Play to check the move",
+        (Locale::Ja, "simple-mode.057") => "次の形",
+        (Locale::En, "simple-mode.057") => "Next shape",
+        (Locale::Ja, "simple-mode.058") => "グランドをクリックして、人を置きましょう",
+        (Locale::En, "simple-mode.058") => "Click the field to place a person",
+        (Locale::Ja, "simple-mode.059") => "人をつかんで、好きな場所へ動かせます",
+        (Locale::En, "simple-mode.059") => "Grab a person and drag them",
+        (Locale::Ja, "simple-mode.060") => "「次の形」を押すと、動きが作れます",
+        (Locale::En, "simple-mode.060") => "Press Next shape to create movement",
+        (Locale::Ja, "simple-mode.061") => "「再生」を押すと、動きを見られます",
+        (Locale::En, "simple-mode.061") => "Press Play to watch the move",
         (Locale::Ja, "simple-mode.062") => "かんたん",
         (Locale::En, "simple-mode.062") => "Simple",
-        (Locale::Ja, "simple-mode.063") => "通常",
-        (Locale::En, "simple-mode.063") => "Full",
-        (Locale::Ja, "simple-mode.064") => "戻る",
+        (Locale::Ja, "simple-mode.063") => "詳細",
+        (Locale::En, "simple-mode.063") => "Advanced",
+        (Locale::Ja, "simple-mode.064") => "元に戻す",
         (Locale::En, "simple-mode.064") => "Undo",
         (Locale::Ja, "simple-mode.065") => "わかった",
         (Locale::En, "simple-mode.065") => "Got it",
-        (Locale::Ja, "simple-mode.066") => "ステップを閉じる",
-        (Locale::En, "simple-mode.066") => "Hide steps",
+        (Locale::Ja, "simple-mode.066") => "この案内をしまう",
+        (Locale::En, "simple-mode.066") => "Hide this guide",
         (Locale::Ja, "simple-mode.067") => "番号",
         (Locale::En, "simple-mode.067") => "Number",
         (Locale::Ja, "simple-mode.068") => "名前",
         (Locale::En, "simple-mode.068") => "Name",
-        (Locale::Ja, "simple-mode.069") => "フィールドをクリックして人を置きます",
+        (Locale::Ja, "simple-mode.069") => "グランドをクリックすると人が置かれます",
         (Locale::En, "simple-mode.069") => "Click the field to place a person",
-        (Locale::Ja, "simple-mode.070") => "人をドラッグして動かします",
-        (Locale::En, "simple-mode.070") => "Drag people to move them",
-        (Locale::Ja, "simple-mode.071") => "今の隊形を次のセットにコピーします",
-        (Locale::En, "simple-mode.071") => "Copy this formation into the next set",
-        (Locale::Ja, "simple-mode.072") => "セット",
-        (Locale::En, "simple-mode.072") => "Set",
-        (Locale::Ja, "simple-mode.073") => "演者",
-        (Locale::En, "simple-mode.073") => "Performers",
+        (Locale::Ja, "simple-mode.070") => "人をつかんで動かします",
+        (Locale::En, "simple-mode.070") => "Grab people and drag them",
+        (Locale::Ja, "simple-mode.071") => "いまの並びを次の場面にコピーします",
+        (Locale::En, "simple-mode.071") => "Copy this arrangement into the next shape",
+        (Locale::Ja, "simple-mode.072") => "いまの形",
+        (Locale::En, "simple-mode.072") => "This shape",
+        (Locale::Ja, "simple-mode.073") => "人",
+        (Locale::En, "simple-mode.073") => "People",
+        (Locale::Ja, "simple-mode.074") => {
+            "まだ誰もいません。「置く」を押して、グランドをクリックしてください。"
+        }
+        (Locale::En, "simple-mode.074") => {
+            "Nobody is on the field yet. Choose Place, then click the field."
+        }
+        (Locale::Ja, "simple-mode.075") => "この人を消す",
+        (Locale::En, "simple-mode.075") => "Remove this person",
+        (Locale::Ja, "simple-mode.076") => "この人を消しますか？あとから元に戻せます。",
+        (Locale::En, "simple-mode.076") => "Remove this person? You can undo afterward.",
+        (Locale::Ja, "simple-mode.077") => "消す",
+        (Locale::En, "simple-mode.077") => "Remove",
+        (Locale::Ja, "simple-mode.078") => "やめる",
+        (Locale::En, "simple-mode.078") => "Cancel",
+        (Locale::Ja, "simple-mode.079") => "置けました",
+        (Locale::En, "simple-mode.079") => "Placed",
+        (Locale::Ja, "simple-mode.080") => "次の形を追加しました",
+        (Locale::En, "simple-mode.080") => "Added the next shape",
+        (Locale::Ja, "simple-mode.081") => "保存しました",
+        (Locale::En, "simple-mode.081") => "Saved",
+        (Locale::Ja, "simple-mode.082") => {
+            "いまは動きの途中です。止めてから、形の始まりで編集できます。"
+        }
+        (Locale::En, "simple-mode.082") => {
+            "You're in the middle of the move. Pause, then edit at the start of the shape."
+        }
+        (Locale::Ja, "simple-mode.083") => "くわしい画面に切り替えます（上級者向け）",
+        (Locale::En, "simple-mode.083") => "Switch to the advanced screen",
+        (Locale::Ja, "simple-mode.084") => "かんたんモード（やさしい画面）",
+        (Locale::En, "simple-mode.084") => "Simple Mode (beginner screen)",
+        (Locale::Ja, "simple-mode.085") => "はじめる",
+        (Locale::En, "simple-mode.085") => "Start",
+        (Locale::Ja, "simple-mode.086") => {
+            "グランドに人を置いて、動かして、再生するだけです。むずかしい設定は使いません。"
+        }
+        (Locale::En, "simple-mode.086") => {
+            "Place people, move them, and press Play. No extra settings needed."
+        }
+        (Locale::Ja, "simple-mode.087") => "くわしく開く",
+        (Locale::En, "simple-mode.087") => "More options",
+        (Locale::Ja, "simple-mode.088") => "見本を見る",
+        (Locale::En, "simple-mode.088") => "Look at a sample",
+        (Locale::Ja, "simple-mode.089") => "保存したファイルを開く",
+        (Locale::En, "simple-mode.089") => "Open a saved file",
+        (Locale::Ja, "simple-mode.090") => {
+            "あとから画面右上の「かんたん / 詳細」で切り替えられます。"
+        }
+        (Locale::En, "simple-mode.090") => {
+            "You can switch later with Simple / Advanced at the top right."
+        }
+        (Locale::Ja, "simple-mode.091") => "重なっていますが、置けました",
+        (Locale::En, "simple-mode.091") => "Placed (overlapping someone)",
+        (Locale::Ja, "simple-mode.092") => "ひとつ前の操作を取り消します",
+        (Locale::En, "simple-mode.092") => "Undo the last action",
+        (Locale::Ja, "simple-mode.094") => "空のくわしい画面で始める",
+        (Locale::En, "simple-mode.094") => "Start empty in Advanced",
+        (Locale::Ja, "simple-mode.095") => "プロジェクトを開く",
+        (Locale::En, "simple-mode.095") => "Open a project",
+        (Locale::Ja, "simple-mode.096") => "はじめまして",
+        (Locale::En, "simple-mode.096") => "Welcome",
+        (Locale::Ja, "simple-mode.097") => "1. 置く　2. 動かす　3. 次の形　4. 再生",
+        (Locale::En, "simple-mode.097") => "1. Place   2. Move   3. Next shape   4. Play",
         (Locale::Ja, "production-markers.001") => "プロダクションマーカー",
         (Locale::En, "production-markers.001") => "Production Markers",
         (Locale::Ja, "production-markers.002") => {

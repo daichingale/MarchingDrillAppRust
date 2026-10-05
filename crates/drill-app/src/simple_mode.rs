@@ -8,6 +8,7 @@
 //! directly. See `ui_qa.rs` for the guard test that scans this file too.
 use super::*;
 use drill_jobs::{Job, JobErrorCode, JobFailure, JobKind, JobMsg};
+use std::time::{Duration, Instant};
 
 type PreparedClicks = (
     drill_audio::ClickSettings,
@@ -203,6 +204,17 @@ enum SimpleGuide {
 pub(crate) struct SimpleModeState {
     pub enabled: bool,
     chrome_applied: bool,
+    toast: Option<(Instant, String)>,
+    confirm_remove: bool,
+}
+
+impl SimpleModeState {
+    pub(crate) fn with_enabled(enabled: bool) -> Self {
+        Self {
+            enabled,
+            ..Self::default()
+        }
+    }
 }
 
 impl DrillApp {
@@ -220,6 +232,25 @@ impl DrillApp {
         }
         self.app_theme.apply(ctx);
         self.simple_mode.chrome_applied = false;
+    }
+
+    pub(crate) fn push_simple_toast(&mut self, text: impl Into<String>) {
+        self.simple_mode.toast = Some((Instant::now(), text.into()));
+    }
+
+    fn simple_toast_alive(&mut self) -> Option<String> {
+        let expired = self
+            .simple_mode
+            .toast
+            .as_ref()
+            .is_some_and(|(shown, _)| shown.elapsed().as_secs_f32() > 2.8);
+        if expired {
+            self.simple_mode.toast = None;
+        }
+        self.simple_mode
+            .toast
+            .as_ref()
+            .map(|(_, text)| text.clone())
     }
 
     fn simple_guide(&self) -> SimpleGuide {
@@ -253,6 +284,16 @@ impl DrillApp {
             self.simple_top_bar(ui);
         });
         ui.add_space(8.0);
+        if !self.is_editable_set_start() {
+            super::app_theme::surface_frame(ui).show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new(i18n::registered(self.locale, "simple-mode.082"))
+                        .size(15.0)
+                        .color(super::app_theme::SECONDARY_TEXT),
+                );
+            });
+            ui.add_space(6.0);
+        }
         self.simple_cue_banner(ui);
         ui.add_space(6.0);
         self.simple_tools_ui(ui);
@@ -260,8 +301,15 @@ impl DrillApp {
             ui.add_space(4.0);
             self.simple_step_dots(ui);
         }
-        if self.status != text(self.locale, Text::Ready) {
-            ui.small(&self.status);
+        if let Some(toast) = self.simple_toast_alive() {
+            ui.add_space(6.0);
+            super::app_theme::surface_frame(ui)
+                .fill(super::app_theme::ACCENT_SOFT)
+                .stroke(egui::Stroke::new(1.0, super::app_theme::ACCENT))
+                .show(ui, |ui| {
+                    ui.label(egui::RichText::new(toast).size(15.0).strong());
+                });
+            ui.ctx().request_repaint_after(Duration::from_millis(200));
         }
         ui.add_space(8.0);
         ui.horizontal_top(|ui| {
@@ -279,13 +327,23 @@ impl DrillApp {
             let undo_ok = self.history.can_undo();
             let undo_label = i18n::registered(self.locale, "simple-mode.064");
             if ui
-                .add_enabled(undo_ok, super::app_theme::quiet_button(undo_label))
+                .add_enabled(
+                    undo_ok,
+                    super::app_theme::quiet_button(egui::RichText::new(undo_label).size(15.0)),
+                )
+                .on_hover_text(i18n::registered(self.locale, "simple-mode.092"))
                 .clicked()
             {
                 self.execute_command(UiCommand::Undo, ui.ctx());
             }
             let save_label = i18n::registered(self.locale, "simple-mode.026");
-            if ui.add(super::app_theme::quiet_button(save_label)).clicked() {
+            if ui
+                .add_sized(
+                    [108.0, 36.0],
+                    super::app_theme::quiet_button(egui::RichText::new(save_label).size(15.0)),
+                )
+                .clicked()
+            {
                 self.save_dialog();
             }
             let play_label = if self.playing {
@@ -296,23 +354,36 @@ impl DrillApp {
             let play_filled = self.simple_guide() == SimpleGuide::Play;
             let play_button = if play_filled {
                 super::app_theme::primary_button(
-                    egui::RichText::new(play_label).color(Color32::WHITE),
+                    egui::RichText::new(play_label)
+                        .size(16.0)
+                        .color(Color32::WHITE),
                 )
             } else {
-                super::app_theme::quiet_button(play_label)
+                super::app_theme::quiet_button(egui::RichText::new(play_label).size(16.0))
             };
-            if ui.add(play_button).clicked() {
+            if ui.add_sized([120.0, 36.0], play_button).clicked() {
                 self.toggle_playback(ui.ctx());
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let full = i18n::registered(self.locale, "simple-mode.063");
                 let simple = i18n::registered(self.locale, "simple-mode.062");
-                if ui.add(super::app_theme::quiet_button(full)).clicked() {
+                if ui
+                    .add_sized(
+                        [88.0, 36.0],
+                        super::app_theme::quiet_button(egui::RichText::new(full).size(14.0)),
+                    )
+                    .on_hover_text(i18n::registered(self.locale, "simple-mode.083"))
+                    .clicked()
+                {
                     self.simple_mode.enabled = false;
+                    self.onboarding.prefer_simple = false;
                 }
-                let _ = ui.add(super::app_theme::primary_button(
-                    egui::RichText::new(simple).color(Color32::WHITE),
-                ));
+                let _ = ui.add_sized(
+                    [88.0, 36.0],
+                    super::app_theme::primary_button(
+                        egui::RichText::new(simple).size(14.0).color(Color32::WHITE),
+                    ),
+                );
             });
         });
     }
@@ -465,6 +536,12 @@ impl DrillApp {
                         .enumerate()
                         .map(|(index, performer)| (index, performer.label.clone()))
                         .collect();
+                    if rows.is_empty() {
+                        ui.label(
+                            egui::RichText::new(i18n::registered(self.locale, "simple-mode.074"))
+                                .color(super::app_theme::SECONDARY_TEXT),
+                        );
+                    }
                     egui::ScrollArea::vertical()
                         .id_salt("simple-roster-list")
                         .max_height(ui.available_height() * 0.45)
@@ -500,9 +577,52 @@ impl DrillApp {
                         });
                     ui.add_space(8.0);
                     self.simple_identity_fields(ui);
+                    if !self.selected.is_empty()
+                        && self.document.performers.len() > self.selected.len()
+                    {
+                        ui.add_space(10.0);
+                        let remove = i18n::registered(self.locale, "simple-mode.075");
+                        if ui.add(super::app_theme::quiet_button(remove)).clicked() {
+                            self.simple_mode.confirm_remove = true;
+                        }
+                    }
                 });
             },
         );
+        self.simple_remove_confirm(ui.ctx());
+    }
+
+    fn simple_remove_confirm(&mut self, ctx: &egui::Context) {
+        if !self.simple_mode.confirm_remove {
+            return;
+        }
+        let mut open = true;
+        egui::Modal::new(egui::Id::new("simple-remove-confirm")).show(ctx, |ui| {
+            ui.set_max_width(360.0);
+            ui.label(i18n::registered(self.locale, "simple-mode.076"));
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                let cancel = i18n::registered(self.locale, "simple-mode.078");
+                if ui.add(super::app_theme::quiet_button(cancel)).clicked() {
+                    self.simple_mode.confirm_remove = false;
+                    open = false;
+                }
+                let remove = i18n::registered(self.locale, "simple-mode.077");
+                if ui
+                    .add(super::app_theme::primary_button(
+                        egui::RichText::new(remove).color(Color32::WHITE),
+                    ))
+                    .clicked()
+                {
+                    self.remove_selected_performers();
+                    self.simple_mode.confirm_remove = false;
+                    open = false;
+                }
+            });
+        });
+        if !open {
+            self.simple_mode.confirm_remove = false;
+        }
     }
 
     fn simple_identity_fields(&mut self, ui: &mut egui::Ui) {
@@ -605,7 +725,7 @@ impl DrillApp {
         };
         const SELECTION_ACCENT: Color32 = Color32::from_rgb(76, 163, 255);
         if interactive {
-            self.field_pointer = response.hover_pos().map(&from_screen);
+            self.field_pointer = response.hover_pos().map(from_screen);
             let hover_on_dot = response.hover_pos().is_some_and(|pos| {
                 self.frame_positions
                     .iter()
@@ -920,5 +1040,31 @@ mod tests {
             app.document.sets[0].positions[0].x,
             app.document.grid.max_x()
         );
+    }
+
+    #[test]
+    fn place_and_next_shape_show_a_success_toast() {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 8.0, y: 6.0 }, true);
+        assert_eq!(app.status, "置けました");
+        assert!(app.simple_mode.toast.is_some());
+        app.onboarding.simple_drag_tip_seen = true;
+        app.duplicate_current_set();
+        assert_eq!(app.status, "次の形を追加しました");
+        assert!(app.document.sets[1].name.contains("形"));
+    }
+
+    #[test]
+    fn confirm_flag_does_not_remove_people_by_itself() {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 8.0, y: 6.0 }, true);
+        app.field_tool = FieldTool::Place;
+        app.place_performer_at(Point { x: 10.0, y: 6.0 }, true);
+        app.replace_selection([0].into_iter().collect());
+        let count = app.document.performers.len();
+        app.simple_mode.confirm_remove = true;
+        assert_eq!(app.document.performers.len(), count);
+        app.remove_selected_performers();
+        assert_eq!(app.document.performers.len(), count - 1);
     }
 }

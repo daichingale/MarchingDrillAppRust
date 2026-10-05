@@ -8,6 +8,7 @@ pub enum WelcomeAction {
     OpenProject,
     NewShow,
     SimpleMode,
+    Sample,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -18,6 +19,8 @@ pub struct OnboardingState {
     pub coach_step: u8,
     pub simple_drag_tip_seen: bool,
     pub simple_steps_dismissed: bool,
+    #[serde(default = "default_true")]
+    pub prefer_simple: bool,
     #[serde(skip)]
     pub show_welcome: bool,
     #[serde(skip)]
@@ -34,6 +37,7 @@ impl Default for OnboardingState {
             coach_step: 0,
             simple_drag_tip_seen: false,
             simple_steps_dismissed: false,
+            prefer_simple: true,
             show_welcome: true,
             show_help: false,
             persisted: String::new(),
@@ -123,71 +127,86 @@ impl OnboardingState {
         }
         let mut action = None;
         egui::Modal::new(egui::Id::new("first_run_welcome")).show(context, |ui| {
-            ui.set_max_width(570.0_f32.min(ui.available_width()));
-            ui.heading(super::i18n::registered(locale, "onboarding.001"));
-            ui.label(super::i18n::registered(locale, "onboarding.002"));
-            ui.add_space(8.0);
-            egui::Frame::new()
-                .fill(ui.visuals().faint_bg_color)
-                .inner_margin(12)
-                .corner_radius(6)
-                .show(ui, |ui| {
-                    ui.label(
-                        egui::RichText::new(super::i18n::registered(locale, "onboarding.003"))
-                            .strong(),
-                    );
-                    ui.label(super::i18n::registered(locale, "onboarding.004"));
-                    ui.small(super::i18n::registered(locale, "onboarding.005"));
-                });
+            ui.set_max_width(520.0_f32.min(ui.available_width()));
+            ui.heading(super::i18n::registered(locale, "simple-mode.096"));
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new(super::i18n::registered(locale, "simple-mode.086")).size(15.0),
+            );
             ui.add_space(10.0);
-            ui.horizontal_wrapped(|ui| {
+            super::app_theme::surface_frame(ui).show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new(super::i18n::registered(locale, "simple-mode.097"))
+                        .strong(),
+                );
+            });
+            ui.add_space(14.0);
+            ui.vertical_centered(|ui| {
+                let start = super::i18n::registered(locale, "simple-mode.085");
                 if ui
-                    .button(super::i18n::registered(locale, "onboarding.025"))
-                    .on_hover_text(super::i18n::registered(locale, "onboarding.026"))
+                    .add_sized(
+                        [280.0, 48.0],
+                        super::app_theme::primary_button(
+                            egui::RichText::new(start)
+                                .size(18.0)
+                                .color(egui::Color32::WHITE),
+                        ),
+                    )
                     .clicked()
                 {
                     self.welcome_seen = true;
                     self.show_welcome = false;
-                    action = Some(WelcomeAction::NewShow);
-                }
-                if ui
-                    .button(super::i18n::registered(locale, "onboarding.027"))
-                    .on_hover_text(super::i18n::registered(locale, "onboarding.028"))
-                    .clicked()
-                {
-                    self.welcome_seen = true;
-                    self.show_welcome = false;
+                    self.prefer_simple = true;
                     action = Some(WelcomeAction::SimpleMode);
                 }
-                if ui
-                    .button(super::i18n::registered(locale, "onboarding.006"))
-                    .on_hover_text(super::i18n::registered(locale, "onboarding.007"))
-                    .clicked()
-                {
-                    self.welcome_seen = true;
-                    self.show_welcome = false;
-                }
-                if ui
-                    .button(super::i18n::registered(locale, "onboarding.008"))
-                    .on_hover_text(super::i18n::registered(locale, "onboarding.009"))
-                    .clicked()
-                {
-                    self.welcome_seen = true;
-                    self.show_welcome = false;
-                    action = Some(WelcomeAction::OpenJson);
-                }
-                if ui
-                    .button(super::i18n::registered(locale, "onboarding.010"))
-                    .on_hover_text(super::i18n::registered(locale, "onboarding.011"))
-                    .clicked()
-                {
-                    self.welcome_seen = true;
-                    self.show_welcome = false;
-                    action = Some(WelcomeAction::OpenProject);
-                }
             });
-            ui.separator();
-            ui.small(super::i18n::registered(locale, "onboarding.012"));
+            ui.add_space(8.0);
+            egui::CollapsingHeader::new(super::i18n::registered(locale, "simple-mode.087")).show(
+                ui,
+                |ui| {
+                    let sample = super::i18n::registered(locale, "simple-mode.088");
+                    let full_empty = super::i18n::registered(locale, "simple-mode.094");
+                    let open_file = super::i18n::registered(locale, "simple-mode.089");
+                    let open_project = super::i18n::registered(locale, "simple-mode.095");
+                    let wide = egui::Vec2::new(ui.available_width(), 36.0);
+                    if ui
+                        .add_sized(wide, super::app_theme::quiet_button(sample))
+                        .clicked()
+                    {
+                        self.welcome_seen = true;
+                        self.show_welcome = false;
+                        self.prefer_simple = true;
+                        action = Some(WelcomeAction::Sample);
+                    }
+                    if ui
+                        .add_sized(wide, super::app_theme::quiet_button(full_empty))
+                        .clicked()
+                    {
+                        self.welcome_seen = true;
+                        self.show_welcome = false;
+                        self.prefer_simple = false;
+                        action = Some(WelcomeAction::NewShow);
+                    }
+                    if ui
+                        .add_sized(wide, super::app_theme::quiet_button(open_file))
+                        .clicked()
+                    {
+                        self.welcome_seen = true;
+                        self.show_welcome = false;
+                        action = Some(WelcomeAction::OpenJson);
+                    }
+                    if ui
+                        .add_sized(wide, super::app_theme::quiet_button(open_project))
+                        .clicked()
+                    {
+                        self.welcome_seen = true;
+                        self.show_welcome = false;
+                        action = Some(WelcomeAction::OpenProject);
+                    }
+                },
+            );
+            ui.add_space(8.0);
+            ui.small(super::i18n::registered(locale, "simple-mode.090"));
         });
         action
     }
@@ -232,6 +251,10 @@ impl OnboardingState {
     }
 }
 
+fn default_true() -> bool {
+    true
+}
+
 fn preferences_path() -> Option<std::path::PathBuf> {
     #[cfg(target_os = "windows")]
     let base = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from);
@@ -273,5 +296,12 @@ mod tests {
     fn coaching_is_localized() {
         let s = OnboardingState::default();
         assert_ne!(s.coach_message(Locale::Ja), s.coach_message(Locale::En));
+    }
+    #[test]
+    fn prefer_simple_defaults_on() {
+        let s = OnboardingState::default();
+        assert!(s.prefer_simple);
+        let parsed: OnboardingState = serde_json::from_str("{}").unwrap();
+        assert!(parsed.prefer_simple);
     }
 }

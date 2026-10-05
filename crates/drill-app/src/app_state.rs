@@ -1670,9 +1670,13 @@ impl DrillApp {
             insert_at,
             Set {
                 id: new_id,
-                name: match self.locale {
-                    Locale::Ja => format!("セット {}", insert_at + 1),
-                    Locale::En => format!("Set {}", insert_at + 1),
+                name: if self.simple_mode.enabled {
+                    format!("{}つ目の形", insert_at + 1)
+                } else {
+                    match self.locale {
+                        Locale::Ja => format!("セット {}", insert_at + 1),
+                        Locale::En => format!("Set {}", insert_at + 1),
+                    }
                 },
                 generated_by: None,
                 ..source
@@ -1691,6 +1695,11 @@ impl DrillApp {
         self.count_position = 0.0;
         self.dirty = true;
         self.sync_playback_range_to_timeline(previous_total);
+        if self.simple_mode.enabled {
+            let added = i18n::registered(self.locale, "simple-mode.080");
+            self.status = added.into();
+            self.push_simple_toast(added);
+        }
     }
 
     fn sync_playback_range_to_timeline(&mut self, previous_total: u32) {
@@ -2113,6 +2122,15 @@ impl DrillApp {
         } else {
             i18n::registered(self.locale, "core-edit.011").into()
         };
+        if self.simple_mode.enabled {
+            let placed = if overlap {
+                i18n::registered(self.locale, "simple-mode.091")
+            } else {
+                i18n::registered(self.locale, "simple-mode.079")
+            };
+            self.status = placed.into();
+            self.push_simple_toast(placed);
+        }
         if self.simple_mode.enabled && self.document.performers.len() == 1 {
             self.field_tool = FieldTool::Move;
         }
@@ -2664,6 +2682,7 @@ impl DrillApp {
                 self.show_inspector = true;
                 self.show_guidance = true;
                 self.simple_mode.enabled = false;
+                self.onboarding.prefer_simple = false;
                 self.heatmap_enabled = false;
                 self.workspace_focus = Some(WorkspaceFocus::Performer);
             }
@@ -2672,6 +2691,7 @@ impl DrillApp {
                 self.show_inspector = true;
                 self.show_guidance = false;
                 self.simple_mode.enabled = false;
+                self.onboarding.prefer_simple = false;
                 self.heatmap_enabled = true;
                 self.workspace_focus = Some(WorkspaceFocus::Clinic);
             }
@@ -2680,6 +2700,7 @@ impl DrillApp {
                 self.show_inspector = false;
                 self.show_guidance = false;
                 self.simple_mode.enabled = false;
+                self.onboarding.prefer_simple = false;
                 self.heatmap_enabled = false;
                 self.camera_program_preview = true;
                 self.workspace_focus = None;
@@ -2843,10 +2864,13 @@ impl DrillApp {
     fn new(creation: &eframe::CreationContext<'_>) -> Self {
         let app_theme = app_theme::AppTheme::load();
         app_theme.apply(&creation.egui_ctx);
+        let onboarding = onboarding::OnboardingState::load();
+        let prefer_simple = onboarding.prefer_simple;
         Self {
-            onboarding: onboarding::OnboardingState::load(),
+            onboarding,
             gpu: gpu_bridge::Bridge::install(creation),
             app_theme,
+            simple_mode: simple_mode::SimpleModeState::with_enabled(prefer_simple),
             ..Self::default()
         }
     }
