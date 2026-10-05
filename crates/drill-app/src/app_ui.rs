@@ -406,14 +406,12 @@ impl eframe::App for DrillApp {
                         super::i18n::registered(self.locale, "recent-projects.007"),
                         |ui| {
                             let paths = self.recent_projects.paths().to_vec();
-                            if paths.is_empty() {
-                                ui.add_enabled(
-                                    false,
-                                    egui::Button::new(super::i18n::registered(
-                                        self.locale,
-                                        "recent-projects.008",
-                                    )),
-                                );
+                            if paths.is_empty() && ui.button(self.simple_new_work_label()).clicked()
+                            {
+                                self.begin_simple_show();
+                                self.simple_mode.enabled = true;
+                                self.onboarding.prefer_simple = true;
+                                ui.close();
                             }
                             for path in paths {
                                 let name = path
@@ -3462,6 +3460,7 @@ impl DrillApp {
         self.recent_projects.prune_missing();
         let mut open = true;
         let mut chosen = None;
+        let mut start_new = false;
         egui::Window::new(super::i18n::registered(self.locale, "recent-projects.010"))
             .id(egui::Id::new("recent-projects"))
             .open(&mut open)
@@ -3469,12 +3468,25 @@ impl DrillApp {
             .resizable(false)
             .default_width(560.0)
             .show(ctx, |ui| {
-                ui.label(super::i18n::registered(self.locale, "recent-projects.004"));
-                ui.add_space(8.0);
                 let paths = self.recent_projects.paths().to_vec();
                 if paths.is_empty() {
-                    ui.label(super::i18n::registered(self.locale, "recent-projects.011"));
+                    if ui
+                        .add_sized(
+                            [220.0, 44.0],
+                            super::app_theme::primary_button(
+                                egui::RichText::new(self.simple_new_work_label())
+                                    .size(16.0)
+                                    .color(Color32::WHITE),
+                            ),
+                        )
+                        .clicked()
+                    {
+                        start_new = true;
+                    }
+                    return;
                 }
+                ui.label(super::i18n::registered(self.locale, "recent-projects.004"));
+                ui.add_space(8.0);
                 for path in paths {
                     ui.horizontal(|ui| {
                         let label = path
@@ -3512,6 +3524,12 @@ impl DrillApp {
                 }
             });
         self.show_recent_projects = open;
+        if start_new {
+            self.show_recent_projects = false;
+            self.begin_simple_show();
+            self.simple_mode.enabled = true;
+            self.onboarding.prefer_simple = true;
+        }
         if let Some(path) = chosen {
             self.show_recent_projects = false;
             self.request_open_recent(path);

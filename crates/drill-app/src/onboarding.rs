@@ -131,15 +131,10 @@ impl OnboardingState {
             ui.heading(super::i18n::registered(locale, "simple-mode.096"));
             ui.add_space(6.0);
             ui.label(
-                egui::RichText::new(super::i18n::registered(locale, "simple-mode.086")).size(15.0),
+                egui::RichText::new(super::i18n::registered(locale, "simple-mode.097"))
+                    .size(15.0)
+                    .color(super::app_theme::SECONDARY_TEXT),
             );
-            ui.add_space(10.0);
-            super::app_theme::surface_frame(ui).show(ui, |ui| {
-                ui.label(
-                    egui::RichText::new(super::i18n::registered(locale, "simple-mode.097"))
-                        .strong(),
-                );
-            });
             ui.add_space(14.0);
             ui.vertical_centered(|ui| {
                 let start = super::i18n::registered(locale, "simple-mode.085");
@@ -161,23 +156,23 @@ impl OnboardingState {
                 }
             });
             ui.add_space(8.0);
+            ui.vertical_centered(|ui| {
+                let sample = super::i18n::registered(locale, "simple-mode.088");
+                if ui.add(super::app_theme::quiet_button(sample)).clicked() {
+                    self.welcome_seen = true;
+                    self.show_welcome = false;
+                    self.prefer_simple = true;
+                    action = Some(WelcomeAction::Sample);
+                }
+            });
+            ui.add_space(6.0);
             egui::CollapsingHeader::new(super::i18n::registered(locale, "simple-mode.087")).show(
                 ui,
                 |ui| {
-                    let sample = super::i18n::registered(locale, "simple-mode.088");
                     let full_empty = super::i18n::registered(locale, "simple-mode.094");
                     let open_file = super::i18n::registered(locale, "simple-mode.089");
                     let open_project = super::i18n::registered(locale, "simple-mode.095");
                     let wide = egui::Vec2::new(ui.available_width(), 36.0);
-                    if ui
-                        .add_sized(wide, super::app_theme::quiet_button(sample))
-                        .clicked()
-                    {
-                        self.welcome_seen = true;
-                        self.show_welcome = false;
-                        self.prefer_simple = true;
-                        action = Some(WelcomeAction::Sample);
-                    }
                     if ui
                         .add_sized(wide, super::app_theme::quiet_button(full_empty))
                         .clicked()
@@ -205,8 +200,6 @@ impl OnboardingState {
                     }
                 },
             );
-            ui.add_space(8.0);
-            ui.small(super::i18n::registered(locale, "simple-mode.090"));
         });
         action
     }

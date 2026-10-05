@@ -1671,7 +1671,7 @@ impl DrillApp {
             Set {
                 id: new_id,
                 name: if self.simple_mode.enabled {
-                    format!("{}つ目の形", insert_at + 1)
+                    format!("{}つ目のセット", insert_at + 1)
                 } else {
                     match self.locale {
                         Locale::Ja => format!("セット {}", insert_at + 1),
