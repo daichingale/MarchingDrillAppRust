@@ -20,6 +20,8 @@ mod egui_backend;
 mod export_state;
 #[path = "field_view.rs"]
 mod field_view;
+#[path = "glossary.rs"]
+mod glossary;
 #[path = "go_to_count.rs"]
 mod go_to_count;
 #[path = "gpu_bridge.rs"]
@@ -681,6 +683,7 @@ pub(crate) struct DrillApp {
     /// Runs the brief dissolve between color themes; idle otherwise.
     theme_fade: app_theme::ThemeFade,
     simple_mode: simple_mode::SimpleModeState,
+    glossary: glossary::GlossaryState,
     ever_played: bool,
     locale: Locale,
     crash_notice_dismissed: bool,
@@ -865,6 +868,7 @@ impl Default for DrillApp {
             app_theme: app_theme::AppTheme::default(),
             theme_fade: app_theme::ThemeFade::default(),
             simple_mode: simple_mode::SimpleModeState::default(),
+            glossary: glossary::GlossaryState::default(),
             ever_played: false,
             locale: Locale::Ja,
             crash_notice_dismissed: false,
@@ -2668,6 +2672,7 @@ impl DrillApp {
             UiCommand::TogglePerfHud => self.perf_hud.toggle(),
             UiCommand::ToggleCollaborators => self.presence.open = !self.presence.open,
             UiCommand::GettingStarted => self.onboarding.show_help = true,
+            UiCommand::Glossary => self.glossary.open(),
             UiCommand::LegalNotices => self.show_legal_notices = true,
         }
     }

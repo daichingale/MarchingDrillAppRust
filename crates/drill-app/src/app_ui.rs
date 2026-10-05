@@ -733,6 +733,10 @@ impl eframe::App for DrillApp {
                         self.onboarding.show_help = true;
                         ui.close();
                     }
+                    if ui.button(UiCommand::Glossary.label(self.locale)).clicked() {
+                        self.execute_command(UiCommand::Glossary, ui.ctx());
+                        ui.close();
+                    }
                     if ui
                         .button(super::i18n::registered(self.locale, "app-ui.065"))
                         .clicked()
@@ -2778,6 +2782,7 @@ impl eframe::App for DrillApp {
         self.show_subset_snapshot_workspace(ui.ctx());
         self.show_print_workspace(ui.ctx());
         legal_notices::show(ui.ctx(), &mut self.show_legal_notices, self.locale);
+        self.glossary.show(ui.ctx(), self.locale);
         self.show_update_notice(ui.ctx());
         self.onboarding.help_ui(ui.ctx(), self.locale);
         match self.onboarding.welcome_ui(ui.ctx(), self.locale) {
@@ -3461,6 +3466,7 @@ impl DrillApp {
         let mut open = true;
         let mut chosen = None;
         let mut start_new = false;
+        let mut open_glossary = false;
         egui::Window::new(super::i18n::registered(self.locale, "recent-projects.010"))
             .id(egui::Id::new("recent-projects"))
             .open(&mut open)
@@ -3482,6 +3488,10 @@ impl DrillApp {
                         .clicked()
                     {
                         start_new = true;
+                    }
+                    ui.add_space(8.0);
+                    if ui.button(UiCommand::Glossary.label(self.locale)).clicked() {
+                        open_glossary = true;
                     }
                     return;
                 }
@@ -3522,8 +3532,15 @@ impl DrillApp {
                         self.recent_projects.clear();
                     }
                 }
+                ui.add_space(8.0);
+                if ui.button(UiCommand::Glossary.label(self.locale)).clicked() {
+                    open_glossary = true;
+                }
             });
         self.show_recent_projects = open;
+        if open_glossary {
+            self.glossary.open();
+        }
         if start_new {
             self.show_recent_projects = false;
             self.begin_simple_show();

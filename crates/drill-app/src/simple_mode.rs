@@ -335,6 +335,7 @@ impl DrillApp {
         });
         self.show_update_notice(ui.ctx());
         self.onboarding.help_ui(ui.ctx(), self.locale);
+        self.glossary.show(ui.ctx(), self.locale);
         self.onboarding.persist_if_changed();
     }
 
@@ -400,6 +401,15 @@ impl DrillApp {
                         egui::RichText::new(simple).size(14.0).color(Color32::WHITE),
                     ),
                 );
+                let terms = UiCommand::Glossary.label(self.locale);
+                if ui
+                    .add(super::app_theme::quiet_button(
+                        egui::RichText::new(terms).size(14.0),
+                    ))
+                    .clicked()
+                {
+                    self.execute_command(UiCommand::Glossary, ui.ctx());
+                }
             });
         });
     }

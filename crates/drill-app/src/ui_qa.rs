@@ -487,6 +487,8 @@ mod tests {
         assert_eq!(app.workspace_focus, Some(WorkspaceFocus::ProductionSheet));
         app.execute_command(Command::GettingStarted, &context);
         assert!(app.onboarding.show_help);
+        app.execute_command(Command::Glossary, &context);
+        assert!(app.glossary.open);
     }
 
     #[test]

@@ -75,6 +75,7 @@ pub(crate) enum Command {
     TogglePerfHud,
     ToggleCollaborators,
     GettingStarted,
+    Glossary,
     LegalNotices,
 }
 
@@ -547,6 +548,11 @@ pub(crate) const SPECS: &[Spec] = &[
         shortcut: Some(Shortcut::Plain(egui::Key::F1)),
     },
     Spec {
+        command: Command::Glossary,
+        menu: Menu::Help,
+        shortcut: None,
+    },
+    Spec {
         command: Command::LegalNotices,
         menu: Menu::Help,
         shortcut: None,
@@ -641,6 +647,7 @@ impl Command {
             (_, ToggleCollaborators) => super::i18n::registered(locale, "presence.019"),
             (Locale::Ja, GettingStarted) => "はじめかた・全ショートカット…",
             (Locale::En, GettingStarted) => "Getting Started & Shortcuts…",
+            (_, Glossary) => super::i18n::registered(locale, "glossary.001"),
             (Locale::Ja, LegalNotices) => "ライセンス・第三者通知…",
             (Locale::En, LegalNotices) => "Licenses & Third-party Notices…",
         }
