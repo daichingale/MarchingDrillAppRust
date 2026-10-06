@@ -153,31 +153,102 @@ impl AnalyticsState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc::{self, Sender};
+
+    /// Unblocks a parked analytics worker when the test finishes, including
+    /// on assertion failure, so the worker cannot outlive the test.
+    struct Release(Option<Sender<()>>);
+
+    impl Release {
+        fn signal(&mut self) {
+            if let Some(sender) = self.0.take() {
+                let _ = sender.send(());
+            }
+        }
+    }
+
+    impl Drop for Release {
+        fn drop(&mut self) {
+            self.signal();
+        }
+    }
+
+    fn poll_until_idle(state: &mut AnalyticsState, current: AnalyticsKey) {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while state.job.is_some() {
+            assert!(Instant::now() < deadline, "analytics job did not finish");
+            state.last_poll = Instant::now() - POLL_INTERVAL;
+            state.poll(current);
+            std::thread::yield_now();
+        }
+    }
 
     #[test]
     fn stale_result_never_replaces_current_revision_and_poll_is_bounded() {
-        let document = Document::demo(10, 10);
-        let mut state = AnalyticsState::default();
         let old = AnalyticsKey {
             revision: Revision(0),
             set_index: 0,
             beats_per_measure: 4,
             heatmap: true,
         };
-        state.ensure(&document, old);
         let current = AnalyticsKey {
             revision: Revision(1),
             ..old
         };
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while state.job.is_some() && Instant::now() < deadline {
+
+        // The worker stays parked until `release` is signaled, so a poll that
+        // joined it or ran the analysis inline could not return. No wall-clock
+        // budget: a 2ms limit flakes when the shared runner is preempted.
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let mut release = Release(Some(release_tx));
+        let mut state = AnalyticsState {
+            running_key: Some(old),
+            job: Some(Job::spawn_typed(JobKind::Analytics, move |_| {
+                let _ = entered_tx.send(());
+                let _ = release_rx.recv();
+                Ok(AnalyticsResult {
+                    key: old,
+                    rhythm: RhythmSyncReport {
+                        events: Vec::new(),
+                        on_beat_ratio: 0.0,
+                        show_score: 0.0,
+                    },
+                    aesthetics: None,
+                    heatmap: None,
+                })
+            })),
+            ..AnalyticsState::default()
+        };
+        entered_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("analytics worker did not start");
+
+        for _ in 0..16 {
             state.last_poll = Instant::now() - POLL_INTERVAL;
-            let started = Instant::now();
             state.poll(current);
-            assert!(started.elapsed() < Duration::from_millis(2));
-            std::thread::yield_now();
+            assert!(
+                state.job.is_some(),
+                "poll must return while the analytics worker is still parked"
+            );
+            assert!(state.rhythm(current).is_none());
+            assert_eq!(state.stale_discards, 0);
         }
+
+        release.signal();
+        poll_until_idle(&mut state, current);
         assert!(state.rhythm(current).is_none());
+        assert!(state.cache_key.is_none());
+        assert_eq!(state.stale_discards, 1);
+
+        // A real analysis result for the previous revision is discarded the
+        // same way, and still does not become the current revision's report.
+        let document = Document::demo(10, 10);
+        let mut state = AnalyticsState::default();
+        state.ensure(&document, old);
+        poll_until_idle(&mut state, current);
+        assert!(state.rhythm(current).is_none());
+        assert!(state.cache_key.is_none());
         assert_eq!(state.stale_discards, 1);
     }
 
