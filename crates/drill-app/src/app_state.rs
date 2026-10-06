@@ -4169,6 +4169,7 @@ impl DrillApp {
             path.display()
         );
         self.remember_simple_draft();
+        self.note_simple_save_finished(&path);
     }
 
     fn apply_loaded_project(

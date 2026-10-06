@@ -227,6 +227,21 @@ pub(crate) struct SimpleModeState {
     motion: Option<SimpleChromeMotion>,
     /// Shown once after leaving simple mode, so the full editor is not a trap.
     pub(crate) return_hint: bool,
+    /// Left-drag on empty ground pans the field instead of moving people.
+    empty_pan: bool,
+    /// Playback reached the end, so the next play watches from the start.
+    finished_playback: bool,
+    /// In-app name sheet. The file dialog stays on the full editor.
+    naming: bool,
+    name_draft: String,
+    /// A named save is in flight. Failure reopens the sheet.
+    naming_pending: bool,
+    saved_note_until: Option<Instant>,
+    /// Name field for the single selected person.
+    person_name: String,
+    person_name_for: Option<usize>,
+    /// Tests redirect the shows folder away from real app data.
+    shows_dir_override: Option<std::path::PathBuf>,
 }
 
 /// One short chrome animation. Cleared as soon as it settles so the window
@@ -451,7 +466,53 @@ impl DrillApp {
         {
             return false;
         }
-        drill_project::atomic_write(&path, json.as_bytes(), None).is_ok()
+        if drill_project::atomic_write(&path, json.as_bytes(), None).is_err() {
+            return false;
+        }
+        self.mirror_named_show(json.as_bytes());
+        self.write_simple_path_sidecar();
+        true
+    }
+
+    fn simple_path_sidecar(&self) -> std::path::PathBuf {
+        let mut sidecar = self.simple_draft_path();
+        sidecar.set_extension("path");
+        sidecar
+    }
+
+    /// The draft is the crash copy. Once a show has a name, the same bytes
+    /// also stay in that file so opening it later is not an older picture.
+    fn mirror_named_show(&self, json: &[u8]) {
+        let Some(path) = &self.current_path else {
+            return;
+        };
+        if path == &self.simple_draft_path() || !path.extension().is_some_and(|ext| ext == "json") {
+            return;
+        }
+        let backup = path.with_extension("backup.drill.json");
+        let _ = drill_project::atomic_write(path, json, path.exists().then_some(backup.as_path()));
+    }
+
+    fn write_simple_path_sidecar(&self) {
+        let sidecar = self.simple_path_sidecar();
+        match &self.current_path {
+            Some(path) => {
+                let _ = std::fs::write(&sidecar, path.to_string_lossy().as_bytes());
+            }
+            None => {
+                let _ = std::fs::remove_file(&sidecar);
+            }
+        }
+    }
+
+    fn restore_simple_named_path(&mut self) {
+        let Ok(text) = std::fs::read_to_string(self.simple_path_sidecar()) else {
+            return;
+        };
+        let path = std::path::PathBuf::from(text.trim());
+        if path.is_file() {
+            self.current_path = Some(path);
+        }
     }
 
     fn restore_simple_draft(&mut self) -> bool {
@@ -465,6 +526,7 @@ impl DrillApp {
             return false;
         }
         self.install_document(document);
+        self.restore_simple_named_path();
         self.field_tool = FieldTool::Move;
         self.simple_mode.draft_saved = true;
         true
@@ -506,7 +568,8 @@ impl DrillApp {
     }
 
     /// Screenshot harness only. Seeds a frame when `DRILLFORGE_QA_SIMPLE` is
-    /// `empty`, `placed`, `play`, `glossary`, `selected`, `recent`, or `full`.
+    /// `empty`, `placed`, `play`, `glossary`, `selected`, `recent`, `full`,
+    /// `move`, `save`, or `done`.
     pub(crate) fn apply_qa_simple_fixture(&mut self) {
         let Ok(stage) = std::env::var("DRILLFORGE_QA_SIMPLE") else {
             return;
@@ -532,8 +595,10 @@ impl DrillApp {
         if stage == "full" {
             self.set_simple_mode(false);
         }
-        if stage == "play" {
+        if stage == "move" || stage == "play" || stage == "done" {
             self.duplicate_current_set();
+        }
+        if stage == "play" || stage == "done" {
             let set_id = self.document.sets[self.current_set].id;
             let performer_id = self.document.performers[0].id;
             let moved = self.document.sets[self.current_set].positions[0];
@@ -549,11 +614,22 @@ impl DrillApp {
                 },
                 "qa",
             );
+        }
+        if stage == "play" {
             // Hold a mid-move count so the screenshot shows the readout
             // instead of racing through the transition on the first frames.
             self.playing = true;
             self.speed = 0.0;
             self.count_position = 6.0;
+        }
+        if stage == "done" {
+            self.playing = false;
+            self.count_position = 0.0;
+            self.simple_mode.finished_playback = true;
+        }
+        if stage == "save" {
+            self.simple_mode.naming = true;
+            self.simple_mode.name_draft = "文化祭".to_string();
         }
         // The harness grabs pass 2, before a 260ms ease would finish.
         // Show the settled chrome instead of a half-played ring.
@@ -582,6 +658,7 @@ impl DrillApp {
         // move. There is no tool to switch.
         self.field_tool = FieldTool::Move;
         self.autosave_simple_draft(ui.ctx());
+        self.expire_simple_saved_note(ui.ctx());
         self.note_simple_chrome_motion(ui.ctx());
         ui.scope(|ui| {
             ui.style_mut().spacing.item_spacing = egui::Vec2::new(12.0, 10.0);
@@ -623,6 +700,7 @@ impl DrillApp {
         });
         self.show_update_notice(ui.ctx());
         self.show_recent_projects(ui.ctx());
+        self.simple_name_sheet(ui.ctx());
         self.glossary.show(ui.ctx(), self.locale);
         self.onboarding.help_ui(ui.ctx(), self.locale);
         self.onboarding.persist_if_changed();
@@ -744,6 +822,9 @@ impl DrillApp {
         if self.document.sets.len() >= 2 {
             height += 14.0;
         }
+        if self.simple_name_row_visible() {
+            height += 48.0;
+        }
         if self.simple_can_remove() {
             height += 52.0;
         }
@@ -792,12 +873,13 @@ impl DrillApp {
                         .color(SIMPLE_INK),
                     );
                 }
-                if self.simple_mode.draft_saved {
-                    ui.label(
-                        egui::RichText::new(i18n::registered(self.locale, "simple-mode.096"))
-                            .size(13.0)
-                            .color(super::app_theme::SECONDARY_TEXT),
-                    );
+                if let Some((status, saved)) = self.simple_status_label() {
+                    let color = if saved {
+                        SIMPLE_BLUE
+                    } else {
+                        super::app_theme::SECONDARY_TEXT
+                    };
+                    ui.label(egui::RichText::new(status).size(13.0).color(color));
                 }
                 if ui
                     .button(i18n::registered(self.locale, "glossary.001"))
@@ -839,6 +921,7 @@ impl DrillApp {
         );
         if response.clicked() && !current {
             self.simple_mode.overlap_note = false;
+            self.simple_mode.finished_playback = false;
             self.navigate_to_set(index);
         }
     }
@@ -878,11 +961,15 @@ impl DrillApp {
             );
             return;
         }
-        let message = match self.simple_guide() {
-            SimpleGuide::Place => i18n::registered(self.locale, "simple-mode.074"),
-            SimpleGuide::NextSet => i18n::registered(self.locale, "simple-mode.075"),
-            SimpleGuide::Move => i18n::registered(self.locale, "simple-mode.076"),
-            SimpleGuide::Play => i18n::registered(self.locale, "simple-mode.077"),
+        let message = if self.simple_offers_replay() {
+            i18n::registered(self.locale, "simple-mode.123")
+        } else {
+            match self.simple_guide() {
+                SimpleGuide::Place => i18n::registered(self.locale, "simple-mode.074"),
+                SimpleGuide::NextSet => i18n::registered(self.locale, "simple-mode.075"),
+                SimpleGuide::Move => i18n::registered(self.locale, "simple-mode.076"),
+                SimpleGuide::Play => i18n::registered(self.locale, "simple-mode.077"),
+            }
         };
         ui.label(
             egui::RichText::new(message)
@@ -953,6 +1040,14 @@ impl DrillApp {
                 .clicked()
             {
                 self.simple_zoom_by(1.25);
+            }
+            if !self.playing
+                && !self.simple_places_on_empty_tap()
+                && ui
+                    .small_button(i18n::registered(self.locale, "simple-mode.116"))
+                    .clicked()
+            {
+                self.simple_add_person();
             }
             if !self.simple_view_fitted()
                 && ui
@@ -1031,6 +1126,10 @@ impl DrillApp {
             .new_child(egui::UiBuilder::new().max_rect(dock.shrink2(egui::Vec2::new(16.0, 12.0))));
         if self.document.sets.len() >= 2 {
             self.simple_progress(&mut child);
+            child.add_space(8.0);
+        }
+        if self.simple_name_row_visible() {
+            self.simple_name_row(&mut child);
             child.add_space(8.0);
         }
         if self.simple_can_remove() {
@@ -1150,14 +1249,8 @@ impl DrillApp {
                 self.simple_mode.overlap_note = false;
                 self.execute_command(UiCommand::Redo, ui.ctx());
             }
-            DockAction::Save => self.save_dialog(),
-            DockAction::Open => {
-                if self.dirty && self.write_simple_draft() {
-                    self.dirty = false;
-                    self.simple_mode.draft_saved = true;
-                }
-                self.request_open_document(DocumentOpenKind::LegacyJson);
-            }
+            DockAction::Save => self.simple_begin_save(),
+            DockAction::Open => self.simple_open_shows(),
             DockAction::More => self.set_simple_mode(false),
         }
     }
@@ -1222,6 +1315,10 @@ impl DrillApp {
                 PhoneIcon::Pause,
                 i18n::registered(self.locale, "simple-mode.089"),
             ),
+            SimplePrimary::Play if self.simple_offers_replay() => (
+                PhoneIcon::Play,
+                i18n::registered(self.locale, "simple-mode.124"),
+            ),
             SimplePrimary::Play => (
                 PhoneIcon::Play,
                 i18n::registered(self.locale, "simple-mode.088"),
@@ -1257,8 +1354,12 @@ impl DrillApp {
         if response.clicked() {
             self.simple_mode.overlap_note = false;
             match action {
-                SimplePrimary::Next => self.duplicate_current_set(),
-                SimplePrimary::Play | SimplePrimary::Pause => self.toggle_playback(ui.ctx()),
+                SimplePrimary::Next => {
+                    self.simple_mode.finished_playback = false;
+                    self.duplicate_current_set();
+                }
+                SimplePrimary::Pause => self.toggle_playback(ui.ctx()),
+                SimplePrimary::Play => self.simple_start_play(ui.ctx()),
             }
         }
     }
@@ -1286,8 +1387,314 @@ impl DrillApp {
         }
     }
 
-    /// Tap on empty ground places. Tap on a person selects. Dragging is handled
-    /// by the field painter, which already moves the current selection.
+    fn simple_places_on_empty_tap(&self) -> bool {
+        matches!(
+            self.simple_guide(),
+            SimpleGuide::Place | SimpleGuide::NextSet
+        )
+    }
+
+    fn simple_offers_replay(&self) -> bool {
+        self.simple_mode.finished_playback
+            && !self.playing
+            && self.simple_guide() == SimpleGuide::Play
+    }
+
+    fn simple_name_row_visible(&self) -> bool {
+        !self.playing
+            && !self.simple_offers_replay()
+            && self.selected.len() == 1
+            && self.is_editable_set_start()
+    }
+
+    fn simple_show_title(&self) -> Option<String> {
+        let name = self.current_path.as_ref()?.file_name()?.to_str()?;
+        let title = name
+            .strip_suffix(".drill.json")
+            .or_else(|| name.strip_suffix(".json"))
+            .unwrap_or(name);
+        (!title.is_empty()).then(|| title.to_string())
+    }
+
+    fn simple_status_label(&self) -> Option<(String, bool)> {
+        let saved = self
+            .simple_mode
+            .saved_note_until
+            .is_some_and(|until| Instant::now() < until);
+        if saved {
+            return Some((
+                i18n::registered(self.locale, "simple-mode.121").to_string(),
+                true,
+            ));
+        }
+        let draft = i18n::registered(self.locale, "simple-mode.096");
+        match self.simple_show_title() {
+            Some(title) if !self.dirty => Some((title, false)),
+            Some(title) => Some((format!("{title} · {draft}"), false)),
+            None if self.simple_mode.draft_saved => Some((draft.to_string(), false)),
+            None => None,
+        }
+    }
+
+    fn expire_simple_saved_note(&mut self, ctx: &egui::Context) {
+        let Some(until) = self.simple_mode.saved_note_until else {
+            return;
+        };
+        if Instant::now() >= until {
+            self.simple_mode.saved_note_until = None;
+        } else {
+            ctx.request_repaint_after(until.saturating_duration_since(Instant::now()));
+        }
+    }
+
+    fn simple_shows_dir(&self) -> std::path::PathBuf {
+        self.simple_mode
+            .shows_dir_override
+            .clone()
+            .unwrap_or_else(|| super::project_state::app_data_dir().join("shows"))
+    }
+
+    fn simple_default_show_name(&self) -> String {
+        i18n::registered(self.locale, "simple-mode.122").to_string()
+    }
+
+    fn simple_named_save_path(&self, raw: &str) -> std::path::PathBuf {
+        let dir = self.simple_shows_dir();
+        let stem = simple_show_file_stem(raw);
+        let candidate = dir.join(format!("{stem}.drill.json"));
+        if self.current_path.as_ref() == Some(&candidate) || !candidate.exists() {
+            return candidate;
+        }
+        for n in 2..50 {
+            let next = dir.join(format!("{stem} {n}.drill.json"));
+            if self.current_path.as_ref() == Some(&next) || !next.exists() {
+                return next;
+            }
+        }
+        candidate
+    }
+
+    fn simple_open_shows(&mut self) {
+        if self.dirty && self.write_simple_draft() {
+            self.dirty = false;
+            self.simple_mode.draft_saved = true;
+        }
+        self.show_recent_projects = true;
+    }
+
+    fn simple_begin_save(&mut self) {
+        if let Some(path) = self.current_path.clone().filter(|path| path.is_file()) {
+            self.simple_mode.naming_pending = true;
+            self.project_state
+                .save_legacy_json(path, self.document.clone());
+            return;
+        }
+        if self.simple_mode.name_draft.trim().is_empty() {
+            self.simple_mode.name_draft = self.simple_default_show_name();
+        }
+        self.simple_mode.naming = true;
+    }
+
+    fn simple_commit_named_save(&mut self) {
+        let typed = self.simple_mode.name_draft.trim().to_string();
+        let raw = if typed.is_empty() {
+            self.simple_default_show_name()
+        } else {
+            typed
+        };
+        let path = self.simple_named_save_path(&raw);
+        if let Some(parent) = path.parent()
+            && std::fs::create_dir_all(parent).is_err()
+        {
+            return;
+        }
+        self.simple_mode.name_draft = simple_show_file_stem(&raw);
+        self.simple_mode.naming = false;
+        self.simple_mode.naming_pending = true;
+        self.project_state
+            .save_legacy_json(path, self.document.clone());
+    }
+
+    fn simple_name_sheet(&mut self, ctx: &egui::Context) {
+        if !self.simple_mode.naming {
+            return;
+        }
+        let mut save = false;
+        let mut cancel = false;
+        egui::Window::new(i18n::registered(self.locale, "simple-mode.119"))
+            .id(egui::Id::new("simple-name-sheet"))
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.set_min_width(320.0);
+                ui.add_space(4.0);
+                let edit = ui.add(
+                    egui::TextEdit::singleline(&mut self.simple_mode.name_draft)
+                        .desired_width(f32::INFINITY),
+                );
+                if edit.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+                    save = true;
+                }
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    let save_button = egui::Button::new(
+                        egui::RichText::new(i18n::registered(self.locale, "simple-mode.120"))
+                            .size(16.0)
+                            .color(Color32::WHITE),
+                    )
+                    .fill(SIMPLE_BLUE)
+                    .corner_radius(18.0);
+                    if ui.add_sized([140.0, 40.0], save_button).clicked() {
+                        save = true;
+                    }
+                    if ui
+                        .add_sized(
+                            [100.0, 40.0],
+                            egui::Button::new(i18n::registered(self.locale, "simple-mode.128"))
+                                .corner_radius(18.0),
+                        )
+                        .clicked()
+                    {
+                        cancel = true;
+                    }
+                });
+            });
+        if cancel {
+            self.simple_mode.naming = false;
+        }
+        if save {
+            self.simple_commit_named_save();
+        }
+    }
+
+    pub(crate) fn note_simple_save_finished(&mut self, path: &std::path::Path) {
+        if !self.simple_mode.enabled {
+            return;
+        }
+        self.simple_mode.naming_pending = false;
+        self.simple_mode.naming = false;
+        self.simple_mode.saved_note_until = Some(Instant::now() + Duration::from_secs(3));
+        self.recent_projects.remember(path.to_path_buf());
+    }
+
+    pub(crate) fn note_simple_save_failed(&mut self) {
+        if !self.simple_mode.enabled || !self.simple_mode.naming_pending {
+            return;
+        }
+        self.simple_mode.naming_pending = false;
+        if self.simple_mode.name_draft.trim().is_empty() {
+            self.simple_mode.name_draft = self
+                .simple_show_title()
+                .unwrap_or_else(|| self.simple_default_show_name());
+        }
+        self.simple_mode.naming = true;
+    }
+
+    pub(crate) fn note_simple_playback_finished(&mut self) {
+        if self.simple_mode.enabled {
+            self.simple_mode.finished_playback = true;
+        }
+    }
+
+    fn simple_start_play(&mut self, ctx: &egui::Context) {
+        if self.simple_mode.finished_playback {
+            self.simple_mode.finished_playback = false;
+            self.jump_to_show_start();
+        }
+        self.toggle_playback(ctx);
+    }
+
+    fn simple_add_person(&mut self) {
+        let grid = &self.document.grid;
+        let step = grid.horizontal_units / f32::from(grid.horizontal_steps.max(1));
+        let n = self.document.performers.len() as f32;
+        let raw = Point {
+            x: grid.width * 0.5 + (n - 3.0) * step * 2.0,
+            y: grid.height * 0.5,
+        };
+        self.place_performer_at(raw, true);
+    }
+
+    fn simple_rename_selected(&mut self, name: &str) {
+        if self.selected.len() != 1 || !self.is_editable_set_start() {
+            return;
+        }
+        self.ensure_performer_draft();
+        let Some(draft) = self.performer_draft.as_mut() else {
+            return;
+        };
+        if draft.name == name {
+            return;
+        }
+        draft.name = name.to_string();
+        draft.label_dirty = true;
+        self.commit_performer_draft();
+    }
+
+    fn simple_name_row(&mut self, ui: &mut egui::Ui) {
+        if !self.simple_name_row_visible() {
+            self.simple_mode.person_name_for = None;
+            return;
+        }
+        let index = *self.selected.iter().next().expect("one person");
+        let existing = self
+            .document
+            .performers
+            .get(index)
+            .map(|performer| split_performer_label(&performer.label).1)
+            .unwrap_or_default();
+        if self.simple_mode.person_name_for != Some(index) {
+            self.simple_mode.person_name = existing;
+            self.simple_mode.person_name_for = Some(index);
+        }
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(i18n::registered(self.locale, "simple-mode.117"))
+                    .size(15.0)
+                    .color(SIMPLE_INK),
+            );
+            let width = (ui.available_width() - 4.0).max(80.0);
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut self.simple_mode.person_name)
+                    .hint_text(i18n::registered(self.locale, "simple-mode.118"))
+                    .desired_width(width),
+            );
+            let submit = response.lost_focus()
+                || (response.has_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)));
+            if submit {
+                let name = self.simple_mode.person_name.clone();
+                self.simple_rename_selected(&name);
+            }
+            if !response.has_focus()
+                && let Some(performer) = self.document.performers.get(index)
+            {
+                self.simple_mode.person_name = split_performer_label(&performer.label).1;
+            }
+        });
+    }
+
+    /// Dragging a person moves them. Dragging empty ground pans the field.
+    fn simple_start_drag(&mut self, nearest: Option<usize>, pointer: Pos2) {
+        if let Some(index) = nearest.filter(|&index| self.is_selectable_index(index)) {
+            self.simple_mode.empty_pan = false;
+            if self.is_editable_set_start() {
+                if !self.selected.contains(&index) {
+                    self.replace_selection(std::iter::once(index).collect());
+                }
+                self.begin_field_drag(pointer);
+            } else {
+                self.ensure_editable_set_start();
+            }
+        } else {
+            self.field_viewport.begin_pan(Some(pointer));
+            self.simple_mode.empty_pan = true;
+        }
+    }
+
+    /// Tap on empty ground places while the first picture is being built.
+    /// After that, an empty tap only clears the selection. Dragging is handled
+    /// by the field painter.
     fn simple_click(
         &mut self,
         field_point: Point,
@@ -1296,7 +1703,11 @@ impl DrillApp {
         additive: bool,
     ) {
         match nearest {
-            None => self.place_performer_at(field_point, snap),
+            None if self.simple_places_on_empty_tap() => self.place_performer_at(field_point, snap),
+            None => {
+                self.simple_mode.overlap_note = false;
+                self.replace_selection(BTreeSet::new());
+            }
             Some(index) if additive => {
                 let mut next = self.selected.clone();
                 if !next.insert(index) {
@@ -1344,8 +1755,9 @@ impl DrillApp {
                 }
             }
             let middle = ui.input(|input| input.pointer.button_down(egui::PointerButton::Middle));
-            if middle {
-                if response.drag_started() {
+            let empty_pan = self.simple_mode.empty_pan;
+            if middle || empty_pan {
+                if middle && response.drag_started() {
                     self.field_viewport
                         .begin_pan(response.interact_pointer_pos());
                 }
@@ -1361,13 +1773,19 @@ impl DrillApp {
                     );
                     self.field_viewport.pan_last_pointer = Some(pointer);
                 }
+                if empty_pan && response.drag_stopped() {
+                    self.field_viewport.end_pan();
+                    self.simple_mode.empty_pan = false;
+                }
             } else if self.field_viewport.pan_last_pointer.is_some() {
                 self.field_viewport.end_pan();
             }
             if self.field_viewport.tick(dt, &self.document.grid, rect) {
                 ui.ctx().request_repaint();
             }
-            block_pointer = middle || self.field_viewport.pan_last_pointer.is_some();
+            block_pointer = middle
+                || self.simple_mode.empty_pan
+                || self.field_viewport.pan_last_pointer.is_some();
         }
         let render_options = drill_render::RenderOptions {
             margin: 0.0,
@@ -1461,13 +1879,14 @@ impl DrillApp {
                     egui::CursorIcon::Grab
                 } else if hover_on_dot {
                     egui::CursorIcon::NotAllowed
-                } else if editable {
+                } else if self.simple_places_on_empty_tap() && editable {
                     egui::CursorIcon::Crosshair
                 } else {
-                    egui::CursorIcon::Default
+                    egui::CursorIcon::Grab
                 });
             }
             if !block_pointer
+                && self.simple_places_on_empty_tap()
                 && self.is_editable_set_start()
                 && self.drag_before.is_none()
                 && !hover_on_dot
@@ -1561,31 +1980,39 @@ impl DrillApp {
                 self.simple_click(from_screen(pointer), nearest, snap_now, additive);
             }
             if response.drag_started() {
-                if let Some(index) = nearest {
-                    if self.is_editable_set_start() {
-                        if !self.selected.contains(&index) {
-                            self.replace_selection(std::iter::once(index).collect());
-                        }
-                        self.begin_field_drag(pointer);
-                    } else {
-                        self.ensure_editable_set_start();
-                    }
-                } else if self.field_tool == FieldTool::Move && !self.selected.is_empty() {
-                    if self.is_editable_set_start() {
-                        self.begin_field_drag(pointer);
-                    } else {
-                        self.ensure_editable_set_start();
-                    }
-                }
+                self.simple_start_drag(nearest, pointer);
             }
             if response.dragged() && self.is_editable_set_start() && self.drag_before.is_some() {
                 self.update_field_drag(pointer, field_map.scale, snap_now);
             }
-            if response.drag_stopped() {
+            if response.drag_stopped() && self.drag_before.is_some() {
                 self.commit_field_drag();
                 self.bump_simple_motion(ChromeMotion::Move);
             }
         }
+    }
+}
+
+fn simple_show_file_stem(raw: &str) -> String {
+    let raw = raw.trim();
+    let raw = raw
+        .strip_suffix(".drill.json")
+        .or_else(|| raw.strip_suffix(".json"))
+        .unwrap_or(raw);
+    let mut cleaned = String::new();
+    for c in raw.chars() {
+        if c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') {
+            cleaned.push(' ');
+        } else {
+            cleaned.push(c);
+        }
+    }
+    let collapsed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed = collapsed.trim_matches(|c: char| c == '.' || c.is_whitespace());
+    if trimmed.is_empty() {
+        "show".to_string()
+    } else {
+        trimmed.chars().take(40).collect()
     }
 }
 
@@ -1971,5 +2398,152 @@ mod tests {
         assert!(app.history.can_redo());
         assert!(app.history.redo(&mut app.document));
         assert_eq!(app.document.performers.len(), 1);
+    }
+
+    #[test]
+    fn empty_tap_adds_people_only_on_the_first_picture() {
+        let mut app = empty_simple_app();
+        app.simple_click(Point { x: 8.0, y: 6.0 }, None, true, false);
+        app.simple_click(Point { x: 14.0, y: 6.0 }, None, true, false);
+        assert_eq!(app.document.performers.len(), 2);
+        app.duplicate_current_set();
+        assert!(!app.simple_places_on_empty_tap());
+        app.replace_selection([0].into_iter().collect());
+        app.simple_click(Point { x: 1.0, y: 1.0 }, None, true, false);
+        assert_eq!(app.document.performers.len(), 2);
+        assert!(app.selected.is_empty());
+    }
+
+    #[test]
+    fn empty_drag_pans_and_a_person_drag_still_moves() {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 8.0, y: 6.0 }, true);
+        let before = app.document.sets[0].positions[0];
+        app.simple_start_drag(None, Pos2::new(10.0, 10.0));
+        assert!(app.simple_mode.empty_pan);
+        assert!(app.drag_before.is_none());
+        assert_eq!(app.document.sets[0].positions[0], before);
+        app.simple_mode.empty_pan = false;
+        app.simple_start_drag(Some(0), Pos2::new(0.0, 0.0));
+        assert!(!app.simple_mode.empty_pan);
+        assert!(app.drag_before.is_some());
+    }
+
+    #[test]
+    fn a_selected_person_can_be_named_and_the_json_keeps_the_label() {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 8.0, y: 6.0 }, true);
+        app.replace_selection([0].into_iter().collect());
+        app.simple_rename_selected("山田");
+        assert_eq!(app.document.performers[0].label, "1 山田");
+        let json = app.document.to_json().expect("json");
+        let loaded = drill_core::Document::from_json(&json).expect("reload");
+        assert_eq!(loaded.performers[0].label, "1 山田");
+        assert!(app.history.undo(&mut app.document));
+        assert_eq!(app.document.performers[0].label, "1");
+    }
+
+    #[test]
+    fn an_extra_person_can_be_added_after_the_first_picture() {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 8.0, y: 6.0 }, true);
+        app.duplicate_current_set();
+        app.simple_add_person();
+        assert_eq!(app.document.performers.len(), 2);
+        assert_eq!(app.document.sets[0].positions.len(), 2);
+        assert_eq!(app.document.sets[1].positions.len(), 2);
+    }
+
+    #[test]
+    fn named_save_path_stays_inside_the_shows_folder() {
+        let dir = std::env::temp_dir().join(format!(
+            "drillforge-shows-{}-{}",
+            std::process::id(),
+            "path"
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("shows dir");
+        let mut app = empty_simple_app();
+        app.simple_mode.shows_dir_override = Some(dir.clone());
+        assert_eq!(simple_show_file_stem(".."), "show");
+        assert_eq!(simple_show_file_stem("文化祭.drill.json"), "文化祭");
+        let path = app.simple_named_save_path("../../etc/passwd");
+        assert_eq!(path.parent(), Some(dir.as_path()));
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("name");
+        assert!(name.ends_with(".drill.json"));
+        assert!(!name.contains(".."));
+        assert!(!name.contains('/'));
+        std::fs::write(&path, b"taken").expect("occupy");
+        let second = app.simple_named_save_path("../../etc/passwd");
+        assert_ne!(path, second);
+        assert_eq!(second.parent(), Some(dir.as_path()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_named_show_reopens_with_the_same_name() {
+        let dir = std::env::temp_dir().join(format!(
+            "drillforge-named-{}-{}",
+            std::process::id(),
+            "keep"
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let draft = dir.join("simple-draft.drill.json");
+        let named = dir.join("文化祭.drill.json");
+        let mut app = empty_simple_app();
+        app.simple_mode.draft_path_override = Some(draft.clone());
+        app.current_path = Some(named.clone());
+        app.place_performer_at(Point { x: 8.0, y: 6.0 }, true);
+        assert!(app.write_simple_draft());
+        let saved = std::fs::read_to_string(&named).expect("named file");
+        assert!(drill_core::Document::from_json(&saved).is_ok());
+        let mut reopened = DrillApp::default();
+        reopened.onboarding.welcome_seen = true;
+        reopened.onboarding.prefer_simple = true;
+        reopened.onboarding.show_welcome = false;
+        reopened.simple_mode.draft_path_override = Some(draft);
+        reopened.open_into_preferred_editor();
+        assert_eq!(reopened.current_path.as_deref(), Some(named.as_path()));
+        assert_eq!(reopened.simple_show_title().as_deref(), Some("文化祭"));
+        assert_eq!(reopened.document.performers.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn opening_in_simple_mode_shows_the_work_list() {
+        let mut app = empty_simple_app();
+        app.simple_open_shows();
+        assert!(app.show_recent_projects);
+        assert_eq!(app.document_open_guard, DocumentOpenGuard::Idle);
+    }
+
+    #[test]
+    fn finishing_playback_offers_another_look_from_the_start() {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 8.0, y: 6.0 }, true);
+        app.duplicate_current_set();
+        let set_id = app.document.sets[1].id;
+        let performer_id = app.document.performers[0].id;
+        assert!(app.execute_edit(
+            Edit::MovePerformers {
+                set_id,
+                performer_ids: vec![performer_id],
+                positions: vec![Point { x: 20.0, y: 10.0 }],
+            },
+            "move",
+        ));
+        app.navigate_to_set(1);
+        app.note_simple_playback_finished();
+        assert!(app.simple_offers_replay());
+        let ctx = egui::Context::default();
+        app.simple_start_play(&ctx);
+        assert!(!app.simple_mode.finished_playback);
+        assert!(app.playing);
+        assert_eq!(app.current_set, 0);
+        assert!(app.count_position.abs() < f32::EPSILON);
     }
 }

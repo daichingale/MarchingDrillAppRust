@@ -118,6 +118,7 @@ impl eframe::App for DrillApp {
                         "{}: {error}",
                         super::i18n::registered(self.locale, "app-ui.070")
                     );
+                    self.note_simple_save_failed();
                 }
             }
         }
@@ -272,6 +273,7 @@ impl eframe::App for DrillApp {
                     self.seek_global(count);
                     self.playing = false;
                     self.audio_state.pause();
+                    self.note_simple_playback_finished();
                 }
             }
             // See app_state.rs's `toggle_playback` for why this is a bare
@@ -3465,7 +3467,14 @@ impl DrillApp {
         let mut open = true;
         let mut chosen = None;
         let mut create_new = false;
-        egui::Window::new(super::i18n::registered(self.locale, "recent-projects.010"))
+        let mut pick_file = false;
+        let simple = self.simple_mode.enabled;
+        let title = if simple {
+            super::i18n::registered(self.locale, "simple-mode.127")
+        } else {
+            super::i18n::registered(self.locale, "recent-projects.010")
+        };
+        egui::Window::new(title)
             .id(egui::Id::new("recent-projects"))
             .open(&mut open)
             .collapsible(false)
@@ -3495,24 +3504,39 @@ impl DrillApp {
                     {
                         create_new = true;
                     }
+                } else if simple {
+                    ui.label(super::i18n::registered(self.locale, "simple-mode.126"));
+                    ui.add_space(8.0);
                 } else {
                     ui.label(super::i18n::registered(self.locale, "recent-projects.004"));
                     ui.add_space(8.0);
-                    if ui
+                }
+                if !paths.is_empty()
+                    && ui
                         .button(super::i18n::registered(self.locale, "glossary.012"))
                         .clicked()
-                    {
-                        self.glossary.open();
-                    }
+                {
+                    self.glossary.open();
+                }
+                if !paths.is_empty() {
                     ui.add_space(8.0);
                 }
                 for path in paths {
                     ui.horizontal(|ui| {
-                        let label = path
+                        let raw = path
                             .file_name()
                             .and_then(|name| name.to_str())
                             .map(str::to_owned)
                             .unwrap_or_else(|| path.to_string_lossy().into_owned());
+                        let label = if simple {
+                            raw.strip_suffix(".drill.json")
+                                .or_else(|| raw.strip_suffix(".json"))
+                                .or_else(|| raw.strip_suffix(".drillproj"))
+                                .unwrap_or(&raw)
+                                .to_string()
+                        } else {
+                            raw
+                        };
                         if ui
                             .button(label)
                             .on_hover_text(path.display().to_string())
@@ -3541,6 +3565,15 @@ impl DrillApp {
                         self.recent_projects.clear();
                     }
                 }
+                if simple {
+                    ui.add_space(12.0);
+                    if ui
+                        .button(super::i18n::registered(self.locale, "simple-mode.125"))
+                        .clicked()
+                    {
+                        pick_file = true;
+                    }
+                }
             });
         self.show_recent_projects = open;
         if create_new {
@@ -3550,6 +3583,10 @@ impl DrillApp {
         if let Some(path) = chosen {
             self.show_recent_projects = false;
             self.request_open_recent(path);
+        }
+        if pick_file {
+            self.show_recent_projects = false;
+            self.request_open_document(DocumentOpenKind::LegacyJson);
         }
     }
 
