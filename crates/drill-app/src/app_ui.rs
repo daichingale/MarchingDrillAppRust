@@ -394,6 +394,7 @@ impl eframe::App for DrillApp {
             return;
         }
         self.restore_full_chrome(ui.ctx());
+        self.show_simple_return_hint(ui);
 
         if !self.focus_field {
             egui::MenuBar::new().ui(ui, |ui| {
@@ -405,14 +406,16 @@ impl eframe::App for DrillApp {
                         super::i18n::registered(self.locale, "recent-projects.007"),
                         |ui| {
                             let paths = self.recent_projects.paths().to_vec();
-                            if paths.is_empty() {
-                                ui.add_enabled(
-                                    false,
-                                    egui::Button::new(super::i18n::registered(
+                            if paths.is_empty()
+                                && ui
+                                    .button(super::i18n::registered(
                                         self.locale,
-                                        "recent-projects.008",
-                                    )),
-                                );
+                                        "recent-projects.014",
+                                    ))
+                                    .clicked()
+                            {
+                                self.request_new_show();
+                                ui.close();
                             }
                             for path in paths {
                                 let name = path
@@ -636,10 +639,7 @@ impl eframe::App for DrillApp {
                         }
                     }
                     ui.separator();
-                    let simple_mode_label = match self.locale {
-                        Locale::Ja => "簡単モード",
-                        Locale::En => "Simple Mode",
-                    };
+                    let simple_mode_label = super::i18n::registered(self.locale, "simple-mode.107");
                     if ui
                         .checkbox(&mut self.simple_mode.enabled, simple_mode_label)
                         .changed()
@@ -736,6 +736,13 @@ impl eframe::App for DrillApp {
                     ui.separator();
                     if ui.button(text(self.locale, Text::GettingStarted)).clicked() {
                         self.onboarding.show_help = true;
+                        ui.close();
+                    }
+                    if ui
+                        .button(super::i18n::registered(self.locale, "glossary.011"))
+                        .clicked()
+                    {
+                        self.glossary.open();
                         ui.close();
                     }
                     if ui
@@ -2785,6 +2792,7 @@ impl eframe::App for DrillApp {
         legal_notices::show(ui.ctx(), &mut self.show_legal_notices, self.locale);
         self.show_update_notice(ui.ctx());
         self.onboarding.help_ui(ui.ctx(), self.locale);
+        self.glossary.show(ui.ctx(), self.locale);
         match self.onboarding.welcome_ui(ui.ctx(), self.locale) {
             Some(onboarding::WelcomeAction::OpenJson) => {
                 self.request_open_document(DocumentOpenKind::LegacyJson)
@@ -3449,13 +3457,14 @@ impl DrillApp {
         );
     }
 
-    fn show_recent_projects(&mut self, ctx: &egui::Context) {
+    pub(crate) fn show_recent_projects(&mut self, ctx: &egui::Context) {
         if !self.show_recent_projects {
             return;
         }
         self.recent_projects.prune_missing();
         let mut open = true;
         let mut chosen = None;
+        let mut create_new = false;
         egui::Window::new(super::i18n::registered(self.locale, "recent-projects.010"))
             .id(egui::Id::new("recent-projects"))
             .open(&mut open)
@@ -3463,11 +3472,39 @@ impl DrillApp {
             .resizable(false)
             .default_width(560.0)
             .show(ctx, |ui| {
-                ui.label(super::i18n::registered(self.locale, "recent-projects.004"));
-                ui.add_space(8.0);
                 let paths = self.recent_projects.paths().to_vec();
                 if paths.is_empty() {
-                    ui.label(super::i18n::registered(self.locale, "recent-projects.011"));
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new(super::i18n::registered(
+                            self.locale,
+                            "recent-projects.015",
+                        ))
+                        .size(16.0),
+                    );
+                    ui.add_space(12.0);
+                    if ui
+                        .add_sized(
+                            [220.0, 40.0],
+                            egui::Button::new(super::i18n::registered(
+                                self.locale,
+                                "recent-projects.016",
+                            )),
+                        )
+                        .clicked()
+                    {
+                        create_new = true;
+                    }
+                } else {
+                    ui.label(super::i18n::registered(self.locale, "recent-projects.004"));
+                    ui.add_space(8.0);
+                    if ui
+                        .button(super::i18n::registered(self.locale, "glossary.012"))
+                        .clicked()
+                    {
+                        self.glossary.open();
+                    }
+                    ui.add_space(8.0);
                 }
                 for path in paths {
                     ui.horizontal(|ui| {
@@ -3506,6 +3543,10 @@ impl DrillApp {
                 }
             });
         self.show_recent_projects = open;
+        if create_new {
+            self.show_recent_projects = false;
+            self.request_new_show();
+        }
         if let Some(path) = chosen {
             self.show_recent_projects = false;
             self.request_open_recent(path);
