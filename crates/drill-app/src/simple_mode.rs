@@ -255,6 +255,9 @@ pub(crate) struct SimpleModeState {
     /// Readable walk list for the current scene. Nothing is written.
     memo_open: bool,
     memo_copied: bool,
+    /// Draft for the current scene's name. A stock "セット 1" shows as empty.
+    scene_name: String,
+    scene_name_for: Option<usize>,
 }
 
 /// One short chrome animation. Cleared as soon as it settles so the window
@@ -612,7 +615,7 @@ impl DrillApp {
     /// Screenshot harness only. Seeds a frame when `DRILLFORGE_QA_SIMPLE` is
     /// `empty`, `placed`, `play`, `glossary`, `selected`, `recent`, `full`,
     /// `move`, `save`, `done`, `line`, `step`, `circle`, `nudge`, `walk`,
-    /// `shows`, `hints`, `memo`, or `numbers`.
+    /// `shows`, `hints`, `memo`, `numbers`, or `shape`.
     pub(crate) fn apply_qa_simple_fixture(&mut self) {
         let Ok(stage) = std::env::var("DRILLFORGE_QA_SIMPLE") else {
             return;
@@ -755,6 +758,13 @@ impl DrillApp {
             self.simple_renumber();
             self.simple_sync_history_notes();
         }
+        if stage == "shape" {
+            self.place_performer_at(Point { x: 8.0, y: 28.0 }, true);
+            self.place_performer_at(Point { x: 30.0, y: 8.0 }, true);
+            self.place_performer_at(Point { x: 18.0, y: 22.0 }, true);
+            self.simple_arc_up();
+            self.simple_rename_scene("サビ");
+        }
         // The harness grabs pass 2, before a 260ms ease would finish.
         // Show the settled chrome instead of a half-played ring.
         self.simple_mode.seen_people = self.document.performers.len();
@@ -801,6 +811,7 @@ impl DrillApp {
                 .inner_margin(egui::Margin::symmetric(20, 0))
                 .show(ui, |ui| {
                     self.simple_header(ui);
+                    self.simple_scene_name_row(ui);
                     ui.add_space(8.0);
                     self.simple_cue(ui);
                     ui.add_space(6.0);
@@ -1060,6 +1071,86 @@ impl DrillApp {
                 }
             });
         });
+    }
+
+    fn simple_scene_name_row(&mut self, ui: &mut egui::Ui) {
+        if self.playing || self.document.performers.is_empty() || !self.is_editable_set_start() {
+            return;
+        }
+        let Some(stored) = self
+            .document
+            .sets
+            .get(self.current_set)
+            .map(|set| set.name.clone())
+        else {
+            return;
+        };
+        if self.simple_mode.scene_name_for != Some(self.current_set) {
+            self.simple_mode.scene_name = simple_scene_name_draft(&stored);
+            self.simple_mode.scene_name_for = Some(self.current_set);
+        }
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            ui.label(
+                egui::RichText::new(i18n::registered(self.locale, "simple-mode.203"))
+                    .size(15.0)
+                    .color(SIMPLE_INK),
+            );
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut self.simple_mode.scene_name)
+                    .hint_text(i18n::registered(self.locale, "simple-mode.204"))
+                    .desired_width(220.0),
+            );
+            let submit = response.lost_focus()
+                || (response.has_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)));
+            if submit {
+                let name = self.simple_mode.scene_name.clone();
+                self.simple_rename_scene(&name);
+            }
+            if !response.has_focus()
+                && let Some(set) = self.document.sets.get(self.current_set)
+            {
+                self.simple_mode.scene_name = simple_scene_name_draft(&set.name);
+            }
+        });
+    }
+
+    fn simple_default_scene_name(&self, index: usize) -> String {
+        match self.locale {
+            Locale::Ja => format!("セット {}", index + 1),
+            Locale::En => format!("Set {}", index + 1),
+        }
+    }
+
+    /// Keeps a typed name, or the usual "セット N" when the field is cleared.
+    /// One undo. The JSON shape does not change.
+    fn simple_rename_scene(&mut self, raw: &str) {
+        if self.playing || !self.is_editable_set_start() {
+            return;
+        }
+        let Some(current) = self.document.sets.get(self.current_set) else {
+            return;
+        };
+        let cleaned = simple_scene_name_text(raw);
+        let next_name = if cleaned.is_empty() {
+            self.simple_default_scene_name(self.current_set)
+        } else {
+            cleaned
+        };
+        if current.name == next_name {
+            return;
+        }
+        let mut next = self.document.clone();
+        next.sets[self.current_set].name = next_name;
+        let revision = self.history.revision();
+        self.execute_edit(
+            Edit::ReplaceDocument {
+                document: Box::new(next),
+            },
+            i18n::registered(self.locale, "simple-mode.205"),
+        );
+        self.simple_mark(revision, "simple-mode.203");
     }
 
     fn simple_scene_chip(&mut self, ui: &mut egui::Ui, index: usize) {
@@ -1391,6 +1482,51 @@ impl DrillApp {
         self.simple_commit_arrangement(points, "simple-mode.152");
     }
 
+    /// Swaps front and back around the group's own center.
+    fn simple_swap_ends(&mut self) {
+        if !self.simple_arrange_targets() {
+            return;
+        }
+        let points = drill_core::editing::flip_vertical(&self.selected_points());
+        self.simple_commit_arrangement(points, "simple-mode.193");
+    }
+
+    /// A quarter turn to the right, as the audience sees the field.
+    fn simple_turn_right(&mut self) {
+        if !self.simple_arrange_targets() {
+            return;
+        }
+        let turned = drill_core::editing::rotate_about_centroid(
+            &self.selected_points(),
+            -std::f32::consts::FRAC_PI_2,
+        );
+        let points = simple_fit_points(&self.document.grid, &turned);
+        self.simple_commit_arrangement(points, "simple-mode.195");
+    }
+
+    /// A curve with the middle of the group toward the audience.
+    fn simple_arc_up(&mut self) {
+        if !self.simple_arrange_targets() {
+            return;
+        }
+        let points = simple_arc_points(&self.document.grid, &self.selected_points());
+        self.simple_commit_arrangement(points, "simple-mode.197");
+    }
+
+    /// Opens or closes the gaps by about one step, around the group's center.
+    fn simple_change_spacing(&mut self, outward: bool) {
+        if !self.simple_arrange_targets() {
+            return;
+        }
+        let points = simple_spacing_points(&self.document.grid, &self.selected_points(), outward);
+        let note = if outward {
+            "simple-mode.199"
+        } else {
+            "simple-mode.201"
+        };
+        self.simple_commit_arrangement(points, note);
+    }
+
     fn simple_add_scene(&mut self) {
         if !self.is_editable_set_start()
             || self.document.performers.is_empty()
@@ -1551,6 +1687,61 @@ impl DrillApp {
             .clicked()
             {
                 self.simple_swap_sides();
+            }
+            if simple_choice_button(
+                ui,
+                i18n::registered(self.locale, "simple-mode.193"),
+                editable,
+                false,
+            )
+            .on_hover_text(i18n::registered(self.locale, "simple-mode.194"))
+            .clicked()
+            {
+                self.simple_swap_ends();
+            }
+            if simple_choice_button(
+                ui,
+                i18n::registered(self.locale, "simple-mode.195"),
+                editable,
+                false,
+            )
+            .on_hover_text(i18n::registered(self.locale, "simple-mode.196"))
+            .clicked()
+            {
+                self.simple_turn_right();
+            }
+            if simple_choice_button(
+                ui,
+                i18n::registered(self.locale, "simple-mode.197"),
+                editable,
+                false,
+            )
+            .on_hover_text(i18n::registered(self.locale, "simple-mode.198"))
+            .clicked()
+            {
+                self.simple_arc_up();
+            }
+            if simple_choice_button(
+                ui,
+                i18n::registered(self.locale, "simple-mode.199"),
+                editable,
+                false,
+            )
+            .on_hover_text(i18n::registered(self.locale, "simple-mode.200"))
+            .clicked()
+            {
+                self.simple_change_spacing(true);
+            }
+            if simple_choice_button(
+                ui,
+                i18n::registered(self.locale, "simple-mode.201"),
+                editable,
+                false,
+            )
+            .on_hover_text(i18n::registered(self.locale, "simple-mode.202"))
+            .clicked()
+            {
+                self.simple_change_spacing(false);
             }
             if self.document.sets.len() >= 2
                 && simple_choice_button(
@@ -2598,6 +2789,8 @@ impl DrillApp {
         self.simple_mode.naming_pending = false;
         self.simple_mode.person_name.clear();
         self.simple_mode.person_name_for = None;
+        self.simple_mode.scene_name.clear();
+        self.simple_mode.scene_name_for = None;
         self.simple_mode.empty_pan = false;
         self.simple_mode.saved_note_until = None;
         if !self.write_simple_draft() {
@@ -3416,6 +3609,163 @@ fn simple_circle_points(grid: &drill_core::GridConfig, points: &[Point]) -> Vec<
     drill_core::shapes::circle(center, radius, count)
 }
 
+fn simple_bounds(points: &[Point]) -> (f32, f32, f32, f32) {
+    let mut min_x = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for point in points {
+        min_x = min_x.min(point.x);
+        max_x = max_x.max(point.x);
+        min_y = min_y.min(point.y);
+        max_y = max_y.max(point.y);
+    }
+    (min_x, max_x, min_y, max_y)
+}
+
+/// Slides a group onto the field. If it is larger than the field, shrinks it
+/// about its center first so people are not piled on the sideline.
+fn simple_fit_points(grid: &drill_core::GridConfig, points: &[Point]) -> Vec<Point> {
+    if points.is_empty() {
+        return Vec::new();
+    }
+    let limit_x = grid.max_x().max(0.0);
+    let limit_y = grid.max_y().max(0.0);
+    let mut fitted = points.to_vec();
+    let (min_x, max_x, min_y, max_y) = simple_bounds(&fitted);
+    let width = (max_x - min_x).max(0.0);
+    let height = (max_y - min_y).max(0.0);
+    let shrink_x = if width > limit_x && width > 0.0 {
+        limit_x / width
+    } else {
+        1.0
+    };
+    let shrink_y = if height > limit_y && height > 0.0 {
+        limit_y / height
+    } else {
+        1.0
+    };
+    let shrink = shrink_x.min(shrink_y).min(1.0);
+    if shrink < 1.0 {
+        let pivot = drill_core::editing::centroid(&fitted);
+        fitted = drill_core::editing::scale(&fitted, shrink, shrink, pivot);
+    }
+    let (min_x, max_x, min_y, max_y) = simple_bounds(&fitted);
+    let dx = if min_x < 0.0 {
+        -min_x
+    } else if max_x > limit_x {
+        limit_x - max_x
+    } else {
+        0.0
+    };
+    let dy = if min_y < 0.0 {
+        -min_y
+    } else if max_y > limit_y {
+        limit_y - max_y
+    } else {
+        0.0
+    };
+    if dx != 0.0 || dy != 0.0 {
+        for point in &mut fitted {
+            point.x += dx;
+            point.y += dy;
+        }
+    }
+    fitted
+}
+
+/// Left to right, with the middle of the curve toward the audience.
+fn simple_arc_points(grid: &drill_core::GridConfig, points: &[Point]) -> Vec<Point> {
+    let count = points.len();
+    if count < 2 {
+        return points.to_vec();
+    }
+    let mid = drill_core::editing::centroid(points);
+    let step = grid.horizontal_units / f32::from(grid.horizontal_steps.max(1));
+    let spacing = (step * 2.0).max(0.5);
+    let sweep = std::f32::consts::FRAC_PI_2 * 4.0 / 3.0;
+    let chord = spacing * (count - 1) as f32;
+    let min_radius = (grid.width.min(grid.height) * 0.18).max(spacing);
+    let max_radius = (grid.width.min(grid.height) * 0.7).max(min_radius);
+    let radius = (chord / sweep).clamp(min_radius, max_radius);
+    let center = Point {
+        x: mid.x,
+        y: mid.y + radius,
+    };
+    let start = -std::f32::consts::FRAC_PI_2 - sweep * 0.5;
+    let end = -std::f32::consts::FRAC_PI_2 + sweep * 0.5;
+    let arc = drill_core::evenly_spaced_arc(center, radius, start, end, count);
+    simple_fit_points(grid, &arc)
+}
+
+/// One step farther from, or closer to, the group's center. Already-tight
+/// groups stay at about one step so people are not stacked by the button.
+fn simple_spacing_points(
+    grid: &drill_core::GridConfig,
+    points: &[Point],
+    outward: bool,
+) -> Vec<Point> {
+    if points.len() < 2 {
+        return points.to_vec();
+    }
+    let center = drill_core::editing::centroid(points);
+    let step = grid.horizontal_units / f32::from(grid.horizontal_steps.max(1));
+    let farthest = points
+        .iter()
+        .map(|point| (point.x - center.x).hypot(point.y - center.y))
+        .fold(0.0_f32, f32::max);
+    if farthest < step * 0.25 {
+        return points.to_vec();
+    }
+    let next = if outward {
+        farthest + step
+    } else {
+        (farthest - step).max(step)
+    };
+    let factor = (next / farthest).clamp(0.2, 4.0);
+    if (factor - 1.0).abs() < 0.02 {
+        return points.to_vec();
+    }
+    let scaled = drill_core::editing::scale(points, factor, factor, center);
+    simple_fit_points(grid, &scaled)
+}
+
+/// "セット 1" and "Set 2" are the names a new scene already has.
+fn simple_stock_scene_name(name: &str) -> bool {
+    let name = name.trim();
+    let rest = name
+        .strip_prefix("セット")
+        .or_else(|| name.strip_prefix("Set"))
+        .map(str::trim);
+    rest.is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()))
+}
+
+fn simple_scene_name_draft(name: &str) -> String {
+    if simple_stock_scene_name(name) {
+        String::new()
+    } else {
+        name.to_string()
+    }
+}
+
+fn simple_scene_name_text(raw: &str) -> String {
+    let mut cleaned = String::new();
+    for c in raw.chars() {
+        if c.is_control() {
+            cleaned.push(' ');
+        } else {
+            cleaned.push(c);
+        }
+    }
+    cleaned
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(20)
+        .collect()
+}
+
 /// Screen arrows. Up moves away from the audience, because the audience
 /// label sits on the bottom edge of the field.
 fn simple_arrow_step(key: egui::Key) -> Option<(i32, i32)> {
@@ -3572,6 +3922,11 @@ fn simple_scene_memo(
         .replace("{0}", &which)
         .replace("{1}", &counts.to_string());
     let mut lines = vec![header];
+    if let Some(set) = document.sets.get(set_index)
+        && !simple_stock_scene_name(&set.name)
+    {
+        lines.push(set.name.clone());
+    }
     for index in simple_roster_order(document) {
         let label = document
             .performers
@@ -4416,12 +4771,20 @@ mod tests {
         app.nav_glide.settle();
         assert!(app.simple_holding_a_count());
         let positions = app.document.sets[0].positions.clone();
+        let name = app.document.sets[0].name.clone();
         let revision = app.history.revision();
         app.simple_file_up();
         app.simple_circle_up();
         app.simple_swap_sides();
+        app.simple_swap_ends();
+        app.simple_turn_right();
+        app.simple_arc_up();
+        app.simple_change_spacing(true);
+        app.simple_change_spacing(false);
         app.simple_line_up();
+        app.simple_rename_scene("サビ");
         assert_eq!(app.document.sets[0].positions, positions);
+        assert_eq!(app.document.sets[0].name, name);
         assert_eq!(app.history.revision(), revision);
     }
 
@@ -4799,5 +5162,228 @@ mod tests {
             !again.iter().any(|line| line.contains("やり直す")),
             "{again:?}"
         );
+    }
+
+    fn on_field(app: &DrillApp, points: &[Point]) -> bool {
+        let grid = &app.document.grid;
+        points.iter().all(|point| {
+            (0.0..=grid.max_x() + 0.05).contains(&point.x)
+                && (0.0..=grid.max_y() + 0.05).contains(&point.y)
+        })
+    }
+
+    fn span(points: &[Point]) -> (f32, f32) {
+        let (min_x, max_x, min_y, max_y) = simple_bounds(points);
+        (max_x - min_x, max_y - min_y)
+    }
+
+    #[test]
+    fn swapping_ends_flips_front_and_back_in_one_undo() {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 16.0, y: 8.0 }, true);
+        app.place_performer_at(Point { x: 16.0, y: 24.0 }, true);
+        app.place_performer_at(Point { x: 28.0, y: 16.0 }, true);
+        let parked = app.document.sets[0].positions[2];
+        let before = app.document.sets[0].positions.clone();
+        app.replace_selection([0_usize, 1].into_iter().collect());
+        app.simple_sync_history_notes();
+        app.simple_swap_ends();
+        let after = app.document.sets[0].positions.clone();
+        let front_before = before
+            .iter()
+            .take(2)
+            .enumerate()
+            .min_by(|(_, a), (_, b)| a.y.total_cmp(&b.y))
+            .map(|(index, _)| index)
+            .expect("front");
+        let back_after = after
+            .iter()
+            .take(2)
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.y.total_cmp(&b.y))
+            .map(|(index, _)| index)
+            .expect("back");
+        assert_eq!(front_before, back_after);
+        for (from, to) in before.iter().take(2).zip(after.iter().take(2)) {
+            assert!((from.x - to.x).abs() < 0.05);
+        }
+        assert_eq!(after[2], parked);
+        assert!(on_field(&app, &after));
+        assert!(app.document.sets[0].shape.is_none());
+        app.simple_sync_history_notes();
+        let lines = app.simple_history_lines();
+        assert!(lines.iter().any(|line| line.contains("前後")), "{lines:?}");
+        let json = app.document.to_json().expect("json");
+        let loaded = drill_core::Document::from_json(&json).expect("reload");
+        assert_eq!(loaded.sets[0].positions, after);
+        assert!(app.history.undo(&mut app.document));
+        assert_eq!(app.document.sets[0].positions, before);
+    }
+
+    #[test]
+    fn a_quarter_turn_makes_a_line_into_a_file_and_stays_on_the_field() {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 14.0, y: 20.0 }, true);
+        app.place_performer_at(Point { x: 20.0, y: 20.0 }, true);
+        app.place_performer_at(Point { x: 26.0, y: 20.0 }, true);
+        app.place_performer_at(Point { x: 32.0, y: 20.0 }, true);
+        let before = app.document.sets[0].positions.clone();
+        let (wide, flat) = span(&before);
+        assert!(wide > flat + 4.0);
+        app.simple_turn_right();
+        let once = app.document.sets[0].positions.clone();
+        let (narrow, tall) = span(&once);
+        assert!(tall > narrow + 4.0, "a right turn stands the line up");
+        assert!(on_field(&app, &once));
+        assert!(app.document.sets[0].shape.is_none());
+        app.simple_turn_right();
+        let (wide_again, flat_again) = span(&app.document.sets[0].positions);
+        assert!(
+            wide_again > flat_again + 4.0,
+            "the next turn lays them down"
+        );
+        assert!(app.history.undo(&mut app.document));
+        assert_eq!(app.document.sets[0].positions, once);
+
+        let mut front = empty_simple_app();
+        front.place_performer_at(Point { x: 8.0, y: 4.0 }, true);
+        front.place_performer_at(Point { x: 16.0, y: 4.0 }, true);
+        front.place_performer_at(Point { x: 24.0, y: 4.0 }, true);
+        front.place_performer_at(Point { x: 32.0, y: 4.0 }, true);
+        front.simple_turn_right();
+        assert!(on_field(&front, &front.document.sets[0].positions));
+        let (_, tall_front) = span(&front.document.sets[0].positions);
+        assert!(tall_front > 4.0);
+    }
+
+    #[test]
+    fn an_arc_puts_the_middle_toward_the_audience() {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 8.0, y: 28.0 }, true);
+        app.place_performer_at(Point { x: 16.0, y: 10.0 }, true);
+        app.place_performer_at(Point { x: 28.0, y: 22.0 }, true);
+        app.place_performer_at(Point { x: 36.0, y: 14.0 }, true);
+        app.place_performer_at(Point { x: 22.0, y: 30.0 }, true);
+        let before = app.document.sets[0].positions.clone();
+        app.replace_selection([0_usize, 1, 2, 3].into_iter().collect());
+        app.simple_arc_up();
+        let positions = &app.document.sets[0].positions;
+        assert_eq!(positions[4], before[4]);
+        assert!(positions[0].x + 1.0 < positions[3].x);
+        let middle = positions[1].y.min(positions[2].y);
+        assert!(positions[0].y > middle + 1.0);
+        assert!(positions[3].y > middle + 1.0);
+        assert!(on_field(&app, positions));
+        assert!(app.document.sets[0].shape.is_none());
+        let json = app.document.to_json().expect("json");
+        let loaded = drill_core::Document::from_json(&json).expect("reload");
+        assert_eq!(loaded.sets[0].positions, *positions);
+        assert_eq!(loaded.performers.len(), 5);
+        assert!(app.history.undo(&mut app.document));
+        assert_eq!(app.document.sets[0].positions, before);
+    }
+
+    #[test]
+    fn spacing_opens_and_closes_by_about_one_step() {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 12.0, y: 18.0 }, true);
+        app.place_performer_at(Point { x: 18.0, y: 18.0 }, true);
+        app.place_performer_at(Point { x: 24.0, y: 18.0 }, true);
+        let before = app.document.sets[0].positions.clone();
+        let (start_w, _) = span(&before);
+        let step = grid_step(&app).0;
+        app.simple_sync_history_notes();
+        app.simple_change_spacing(true);
+        let wider = app.document.sets[0].positions.clone();
+        let (wide, _) = span(&wider);
+        assert!(wide > start_w + step * 0.6, "{start_w} -> {wide}");
+        assert!(on_field(&app, &wider));
+        app.simple_sync_history_notes();
+        let lines = app.simple_history_lines();
+        assert!(
+            lines.iter().any(|line| line.contains("ひろげる")),
+            "{lines:?}"
+        );
+        app.simple_change_spacing(false);
+        let closed = &app.document.sets[0].positions;
+        let (back, _) = span(closed);
+        assert!(back + step * 0.4 < wide, "{wide} -> {back}");
+        assert!(on_field(&app, closed));
+        for _ in 0..6 {
+            app.simple_change_spacing(false);
+        }
+        let tight = &app.document.sets[0].positions;
+        let (tight_w, _) = span(tight);
+        assert!(tight_w + 0.05 >= step, "tightening stops before a pile");
+        assert!(on_field(&app, tight));
+        let mut edge = empty_simple_app();
+        edge.place_performer_at(Point { x: 2.0, y: 20.0 }, true);
+        edge.place_performer_at(
+            Point {
+                x: edge.document.grid.max_x() - 1.0,
+                y: 20.0,
+            },
+            true,
+        );
+        edge.simple_change_spacing(true);
+        assert!(on_field(&edge, &edge.document.sets[0].positions));
+    }
+
+    #[test]
+    fn renaming_a_scene_is_one_undo_and_the_json_keeps_the_name() {
+        assert!(simple_stock_scene_name("セット 1"));
+        assert!(simple_stock_scene_name("Set 2"));
+        assert!(!simple_stock_scene_name("サビ"));
+        assert_eq!(simple_scene_name_draft("セット 1"), "");
+        assert_eq!(simple_scene_name_text("  オープニング  "), "オープニング");
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 12.0, y: 16.0 }, true);
+        app.place_performer_at(Point { x: 20.0, y: 16.0 }, true);
+        assert_eq!(app.document.sets[0].name, "セット 1");
+        let positions = app.document.sets[0].positions.clone();
+        let labels: Vec<_> = app
+            .document
+            .performers
+            .iter()
+            .map(|performer| performer.label.clone())
+            .collect();
+        app.simple_sync_history_notes();
+        app.simple_rename_scene("  サビ  ");
+        assert_eq!(app.document.sets[0].name, "サビ");
+        assert_eq!(app.document.sets[0].positions, positions);
+        assert_eq!(
+            app.document
+                .performers
+                .iter()
+                .map(|performer| performer.label.as_str())
+                .collect::<Vec<_>>(),
+            labels.iter().map(String::as_str).collect::<Vec<_>>()
+        );
+        app.simple_sync_history_notes();
+        let lines = app.simple_history_lines();
+        assert!(
+            lines.iter().any(|line| line.contains("場面の名前")),
+            "{lines:?}"
+        );
+        let memo = simple_scene_memo(&app.document, 0, app.locale);
+        assert!(memo.contains("サビ"), "{memo}");
+        let json = app.document.to_json().expect("json");
+        let loaded = drill_core::Document::from_json(&json).expect("reload");
+        assert_eq!(loaded.sets[0].name, "サビ");
+        assert_eq!(loaded.sets[0].positions, positions);
+        assert_eq!(loaded.schema_version, app.document.schema_version);
+        assert!(app.history.undo(&mut app.document));
+        assert_eq!(app.document.sets[0].name, "セット 1");
+        app.duplicate_current_set();
+        app.simple_rename_scene("サビ");
+        assert_eq!(app.document.sets[1].name, "サビ");
+        assert_ne!(app.document.sets[0].name, "サビ");
+        app.navigate_to_set(1);
+        app.nav_glide.settle();
+        app.simple_rename_scene("");
+        assert_eq!(app.document.sets[1].name, "セット 2");
+        let long = "あ".repeat(30);
+        app.simple_rename_scene(&long);
+        assert_eq!(app.document.sets[1].name.chars().count(), 20);
     }
 }
