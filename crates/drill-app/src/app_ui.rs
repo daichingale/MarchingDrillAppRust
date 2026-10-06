@@ -3482,6 +3482,7 @@ impl DrillApp {
             .default_width(560.0)
             .show(ctx, |ui| {
                 let paths = self.recent_projects.paths().to_vec();
+                let has_shows = !paths.is_empty();
                 if paths.is_empty() {
                     ui.add_space(8.0);
                     ui.label(
@@ -3567,6 +3568,14 @@ impl DrillApp {
                 }
                 if simple {
                     ui.add_space(12.0);
+                    if has_shows
+                        && ui
+                            .button(super::i18n::registered(self.locale, "simple-mode.166"))
+                            .on_hover_text(super::i18n::registered(self.locale, "simple-mode.167"))
+                            .clicked()
+                    {
+                        create_new = true;
+                    }
                     if ui
                         .button(super::i18n::registered(self.locale, "simple-mode.125"))
                         .clicked()
@@ -3577,8 +3586,14 @@ impl DrillApp {
             });
         self.show_recent_projects = open;
         if create_new {
-            self.show_recent_projects = false;
-            self.request_new_show();
+            if self.simple_mode.enabled {
+                if self.simple_start_fresh() {
+                    self.show_recent_projects = false;
+                }
+            } else {
+                self.show_recent_projects = false;
+                self.request_new_show();
+            }
         }
         if let Some(path) = chosen {
             self.show_recent_projects = false;

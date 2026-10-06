@@ -592,7 +592,8 @@ impl DrillApp {
 
     /// Screenshot harness only. Seeds a frame when `DRILLFORGE_QA_SIMPLE` is
     /// `empty`, `placed`, `play`, `glossary`, `selected`, `recent`, `full`,
-    /// `move`, `save`, `done`, `line`, `step`, or `circle`.
+    /// `move`, `save`, `done`, `line`, `step`, `circle`, `nudge`, `walk`, or
+    /// `shows`.
     pub(crate) fn apply_qa_simple_fixture(&mut self) {
         let Ok(stage) = std::env::var("DRILLFORGE_QA_SIMPLE") else {
             return;
@@ -689,6 +690,42 @@ impl DrillApp {
             self.simple_step_beat(6);
             self.nav_glide.settle();
         }
+        if stage == "nudge" {
+            self.replace_selection(std::iter::once(0).collect());
+        }
+        if stage == "walk" {
+            self.duplicate_current_set();
+            let step = self.document.grid.horizontal_units
+                / f32::from(self.document.grid.horizontal_steps.max(1));
+            let set_id = self.document.sets[self.current_set].id;
+            let performer_id = self.document.performers[0].id;
+            let origin = self.document.sets[self.current_set].positions[0];
+            let _ = self.execute_edit(
+                Edit::MovePerformers {
+                    set_id,
+                    performer_ids: vec![performer_id],
+                    positions: vec![Point {
+                        x: origin.x + step * 8.0,
+                        y: origin.y,
+                    }],
+                },
+                "qa",
+            );
+            self.navigate_to_set(self.current_set);
+            self.nav_glide.settle();
+            self.replace_selection(std::iter::once(0).collect());
+        }
+        if stage == "shows" {
+            let dir = std::env::temp_dir().join("drillforge-qa-shows");
+            let _ = std::fs::create_dir_all(&dir);
+            let path = dir.join("文化祭.drill.json");
+            if let Ok(json) = self.document.to_json() {
+                let _ = std::fs::write(&path, json);
+            }
+            self.recent_projects
+                .preview_paths_for_screenshot(vec![path]);
+            self.show_recent_projects = true;
+        }
         // The harness grabs pass 2, before a 260ms ease would finish.
         // Show the settled chrome instead of a half-played ring.
         self.simple_mode.seen_people = self.document.performers.len();
@@ -736,6 +773,7 @@ impl DrillApp {
                     self.simple_beat_row(ui);
                     self.simple_rehearsal_row(ui);
                     self.simple_arrange_row(ui);
+                    self.simple_touch_row(ui);
                     if !self.playing
                         && !simple_move_paths(&self.document, self.current_set).is_empty()
                     {
@@ -745,6 +783,14 @@ impl DrillApp {
                                 .size(14.0)
                                 .color(super::app_theme::SECONDARY_TEXT),
                         );
+                        if let Some(caption) = self.simple_travel_caption() {
+                            ui.label(
+                                egui::RichText::new(caption)
+                                    .size(16.0)
+                                    .strong()
+                                    .color(SIMPLE_BLUE),
+                            );
+                        }
                     }
                     if self.simple_mode.overlap_note {
                         ui.add_space(6.0);
@@ -1468,6 +1514,185 @@ impl DrillApp {
         }
     }
 
+    /// One grid step. Forward is toward the audience (decreasing field y).
+    fn simple_nudge(&mut self, horizontal: i32, vertical: i32) {
+        if self.playing
+            || !self.is_editable_set_start()
+            || self.selected.is_empty()
+            || (horizontal == 0 && vertical == 0)
+        {
+            return;
+        }
+        let revision = self.history.revision();
+        self.nudge_selected(horizontal, vertical);
+        if self.history.revision() != revision {
+            self.bump_simple_motion(ChromeMotion::Move);
+        }
+    }
+
+    /// Puts another person two steps to the right of the rightmost chosen
+    /// person, or of the last person when nobody is chosen. Falls back to the
+    /// other sides when that spot is off the field or already taken.
+    fn simple_add_beside(&mut self) {
+        if self.playing || !self.is_editable_set_start() || self.document.performers.is_empty() {
+            return;
+        }
+        let Some(positions) = self
+            .document
+            .sets
+            .get(self.current_set)
+            .map(|set| set.positions.clone())
+        else {
+            return;
+        };
+        if positions.is_empty() {
+            return;
+        }
+        let index = self
+            .selected
+            .iter()
+            .copied()
+            .filter_map(|index| positions.get(index).map(|point| (index, point.x)))
+            .max_by(|(_, left), (_, right)| left.total_cmp(right))
+            .map(|(index, _)| index)
+            .unwrap_or(positions.len() - 1);
+        let origin = positions[index];
+        let grid = self.document.grid.clone();
+        let dx = grid.horizontal_units / f32::from(grid.horizontal_steps.max(1));
+        let dy = grid.vertical_units / f32::from(grid.vertical_steps.max(1));
+        let candidates = [
+            Point {
+                x: origin.x + dx * 2.0,
+                y: origin.y,
+            },
+            Point {
+                x: origin.x - dx * 2.0,
+                y: origin.y,
+            },
+            Point {
+                x: origin.x,
+                y: origin.y + dy * 2.0,
+            },
+            Point {
+                x: origin.x,
+                y: origin.y - dy * 2.0,
+            },
+        ];
+        let spot = candidates
+            .into_iter()
+            .find(|point| {
+                (0.0..=grid.max_x()).contains(&point.x)
+                    && (0.0..=grid.max_y()).contains(&point.y)
+                    && !self.positions_overlap(*point)
+            })
+            .unwrap_or(candidates[0]);
+        let before = self.document.performers.len();
+        self.place_performer_at(spot, true);
+        if self.document.performers.len() > before {
+            self.bump_simple_motion(ChromeMotion::Place);
+        }
+    }
+
+    fn simple_can_clear_move(&self) -> bool {
+        let Some(previous_index) = self.current_set.checked_sub(1) else {
+            return false;
+        };
+        let Some(current) = self.document.sets.get(self.current_set) else {
+            return false;
+        };
+        let Some(previous) = self.document.sets.get(previous_index) else {
+            return false;
+        };
+        !self.document.performers.is_empty() && current.positions != previous.positions
+    }
+
+    /// Puts this scene back on the previous picture, as one undo.
+    fn simple_clear_move(&mut self) {
+        if self.playing || !self.is_editable_set_start() || !self.simple_can_clear_move() {
+            return;
+        }
+        let Some(previous) = self
+            .document
+            .sets
+            .get(self.current_set - 1)
+            .map(|set| set.positions.clone())
+        else {
+            return;
+        };
+        if previous.len() != self.document.performers.len() {
+            return;
+        }
+        self.replace_selection((0..previous.len()).collect());
+        let revision = self.history.revision();
+        self.commit_layout(previous);
+        if self.history.revision() != revision {
+            self.bump_simple_motion(ChromeMotion::Move);
+        }
+    }
+
+    fn simple_touch_row(&mut self, ui: &mut egui::Ui) {
+        if self.playing {
+            return;
+        }
+        let editable = self.is_editable_set_start();
+        let nudge = editable && !self.selected.is_empty();
+        let beside = editable && !self.document.performers.is_empty();
+        let clear = editable && self.simple_can_clear_move();
+        if !nudge && !beside && !clear {
+            return;
+        }
+        ui.add_space(4.0);
+        if nudge {
+            ui.label(
+                egui::RichText::new(i18n::registered(self.locale, "simple-mode.158"))
+                    .size(14.0)
+                    .color(super::app_theme::SECONDARY_TEXT),
+            );
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::Vec2::new(8.0, 8.0);
+            if nudge {
+                let steps = [
+                    ("simple-mode.154", 0, -1),
+                    ("simple-mode.155", 0, 1),
+                    ("simple-mode.156", -1, 0),
+                    ("simple-mode.157", 1, 0),
+                ];
+                for (id, horizontal, vertical) in steps {
+                    if simple_choice_button(ui, i18n::registered(self.locale, id), true, false)
+                        .clicked()
+                    {
+                        self.simple_nudge(horizontal, vertical);
+                    }
+                }
+            }
+            if beside
+                && simple_choice_button(
+                    ui,
+                    i18n::registered(self.locale, "simple-mode.159"),
+                    true,
+                    false,
+                )
+                .on_hover_text(i18n::registered(self.locale, "simple-mode.160"))
+                .clicked()
+            {
+                self.simple_add_beside();
+            }
+            if clear
+                && simple_choice_button(
+                    ui,
+                    i18n::registered(self.locale, "simple-mode.164"),
+                    true,
+                    false,
+                )
+                .on_hover_text(i18n::registered(self.locale, "simple-mode.165"))
+                .clicked()
+            {
+                self.simple_clear_move();
+            }
+        });
+    }
+
     fn simple_refresh_held_picture(&mut self) {
         if self.playing || self.nav_glide.position().is_some() || !self.simple_holding_a_count() {
             return;
@@ -1818,6 +2043,31 @@ impl DrillApp {
             && self.is_editable_set_start()
     }
 
+    fn simple_travel_caption(&self) -> Option<String> {
+        let chosen: Vec<usize> = self.selected.iter().copied().collect();
+        let note = simple_travel_note(&self.document, self.current_set, &chosen)?;
+        if note.kind == drill_core::continuity::TravelDirection::Hold {
+            return Some(i18n::registered(self.locale, "simple-mode.163").to_string());
+        }
+        let template = if self.selected.len() == 1 {
+            i18n::registered(self.locale, "simple-mode.161")
+        } else {
+            i18n::registered(self.locale, "simple-mode.162")
+        };
+        let label = self
+            .document
+            .performers
+            .get(note.index)
+            .map(|performer| performer.label.as_str())
+            .unwrap_or("");
+        Some(
+            template
+                .replace("{0}", note.kind.text(self.locale))
+                .replace("{1}", &format_step_count(note.steps))
+                .replace("{2}", label),
+        )
+    }
+
     fn simple_show_title(&self) -> Option<String> {
         let name = self.current_path.as_ref()?.file_name()?.to_str()?;
         let title = name
@@ -1883,6 +2133,59 @@ impl DrillApp {
             }
         }
         candidate
+    }
+
+    /// Keeps an unnamed picture in the shows list, then opens an empty field.
+    /// A named show is left as it is. The draft becomes the empty field so the
+    /// next launch does not bring the previous picture back.
+    pub(crate) fn simple_start_fresh(&mut self) -> bool {
+        if self.dirty && !self.write_simple_draft() {
+            return false;
+        }
+        self.dirty = false;
+        let keep_unnamed = self.current_path.is_none() && !self.document.performers.is_empty();
+        if keep_unnamed && !self.simple_archive_unnamed_show() {
+            return false;
+        }
+        self.begin_simple_show();
+        self.simple_mode.overlap_note = false;
+        self.simple_mode.finished_playback = false;
+        self.simple_mode.hold_count = false;
+        self.simple_mode.naming = false;
+        self.simple_mode.naming_pending = false;
+        self.simple_mode.person_name.clear();
+        self.simple_mode.person_name_for = None;
+        self.simple_mode.empty_pan = false;
+        self.simple_mode.saved_note_until = None;
+        if !self.write_simple_draft() {
+            return false;
+        }
+        self.simple_mode.draft_saved = true;
+        self.simple_mode.draft_retry_after = None;
+        if keep_unnamed {
+            self.simple_mode.saved_note_until = Some(Instant::now() + Duration::from_secs(3));
+        }
+        true
+    }
+
+    fn simple_archive_unnamed_show(&mut self) -> bool {
+        if self.current_path.is_some() || self.document.performers.is_empty() {
+            return true;
+        }
+        let Ok(json) = self.document.to_json() else {
+            return false;
+        };
+        let path = self.simple_named_save_path(i18n::registered(self.locale, "simple-mode.168"));
+        if let Some(parent) = path.parent()
+            && std::fs::create_dir_all(parent).is_err()
+        {
+            return false;
+        }
+        if drill_project::atomic_write(&path, json.as_bytes(), None).is_err() {
+            return false;
+        }
+        self.recent_projects.remember(path);
+        true
     }
 
     fn simple_open_shows(&mut self) {
@@ -2452,6 +2755,144 @@ fn simple_audience_point(grid: &drill_core::GridConfig) -> Point {
     Point {
         x: grid.width * 0.5,
         y: 0.0,
+    }
+}
+
+/// A quarter step or less is a hold, matching drill-core continuity.
+const SIMPLE_HOLD_STEPS: f32 = 0.25;
+
+struct SimpleTravel {
+    index: usize,
+    kind: drill_core::continuity::TravelDirection,
+    steps: f32,
+}
+
+fn simple_round_quarter(value: f32) -> f32 {
+    (value * 4.0).round() / 4.0
+}
+
+fn format_step_count(steps: f32) -> String {
+    let quarter = simple_round_quarter(steps);
+    if (quarter - quarter.round()).abs() < 0.01 {
+        format!("{}", quarter.round() as i32)
+    } else if (quarter * 2.0 - (quarter * 2.0).round()).abs() < 0.01 {
+        format!("{quarter:.1}")
+    } else {
+        format!("{quarter:.2}")
+    }
+}
+
+/// Same 8-way names as `drill_core::continuity`: y decreases toward the audience.
+fn simple_travel_direction(steps_x: f32, steps_y: f32) -> drill_core::continuity::TravelDirection {
+    use drill_core::continuity::TravelDirection::{
+        Backward, Forward, Hold, Left, LeftBackward, LeftForward, Right, RightBackward,
+        RightForward,
+    };
+    let horizontal = steps_x.abs() >= SIMPLE_HOLD_STEPS;
+    let vertical = steps_y.abs() >= SIMPLE_HOLD_STEPS;
+    match (
+        horizontal,
+        vertical,
+        steps_x.is_sign_positive(),
+        steps_y.is_sign_positive(),
+    ) {
+        (false, false, _, _) => Hold,
+        (true, false, true, _) => Right,
+        (true, false, false, _) => Left,
+        (false, true, _, false) => Forward,
+        (false, true, _, true) => Backward,
+        (true, true, true, false) => RightForward,
+        (true, true, true, true) => RightBackward,
+        (true, true, false, false) => LeftForward,
+        (true, true, false, true) => LeftBackward,
+    }
+}
+
+fn simple_transition_ends(
+    document: &drill_core::Document,
+    set_index: usize,
+) -> Option<(usize, usize)> {
+    let sets = document.sets.len();
+    if sets < 2 || set_index >= sets {
+        return None;
+    }
+    if set_index + 1 < sets {
+        Some((set_index, set_index + 1))
+    } else {
+        Some((set_index - 1, set_index))
+    }
+}
+
+fn simple_person_travel(
+    document: &drill_core::Document,
+    index: usize,
+    from: usize,
+    to: usize,
+) -> Option<SimpleTravel> {
+    let start = document.sets.get(from)?.positions.get(index).copied()?;
+    let end = document.sets.get(to)?.positions.get(index).copied()?;
+    let grid = &document.grid;
+    let hstep = grid.horizontal_units / f32::from(grid.horizontal_steps.max(1));
+    if hstep <= f32::EPSILON {
+        return None;
+    }
+    let vstep = grid.vertical_units / f32::from(grid.vertical_steps.max(1));
+    let steps_x = simple_round_quarter((end.x - start.x) / hstep);
+    let steps_y = if vstep <= f32::EPSILON {
+        0.0
+    } else {
+        simple_round_quarter((end.y - start.y) / vstep)
+    };
+    let raw = (end.x - start.x).hypot(end.y - start.y) / hstep;
+    let kind = if raw < SIMPLE_HOLD_STEPS {
+        drill_core::continuity::TravelDirection::Hold
+    } else {
+        simple_travel_direction(steps_x, steps_y)
+    };
+    Some(SimpleTravel {
+        index,
+        kind,
+        steps: simple_round_quarter(raw),
+    })
+}
+
+/// The farthest walk on the move this scene shows. One chosen person who
+/// stays put is reported as a hold. Reading this never writes the document.
+fn simple_travel_note(
+    document: &drill_core::Document,
+    set_index: usize,
+    chosen: &[usize],
+) -> Option<SimpleTravel> {
+    let (from, to) = simple_transition_ends(document, set_index)?;
+    let indices: Vec<usize> = if chosen.is_empty() {
+        (0..document.performers.len()).collect()
+    } else {
+        chosen
+            .iter()
+            .copied()
+            .filter(|index| *index < document.performers.len())
+            .collect()
+    };
+    if indices.is_empty() {
+        return None;
+    }
+    let mut best: Option<SimpleTravel> = None;
+    for index in indices {
+        let Some(travel) = simple_person_travel(document, index, from, to) else {
+            continue;
+        };
+        let replace = best
+            .as_ref()
+            .is_none_or(|current| travel.steps > current.steps);
+        if replace {
+            best = Some(travel);
+        }
+    }
+    let best = best?;
+    if best.kind == drill_core::continuity::TravelDirection::Hold && chosen.len() != 1 {
+        None
+    } else {
+        Some(best)
     }
 }
 
@@ -3348,5 +3789,239 @@ mod tests {
         app.simple_line_up();
         assert_eq!(app.document.sets[0].positions, positions);
         assert_eq!(app.history.revision(), revision);
+    }
+
+    fn grid_step(app: &DrillApp) -> (f32, f32) {
+        let grid = &app.document.grid;
+        (
+            grid.horizontal_units / f32::from(grid.horizontal_steps.max(1)),
+            grid.vertical_units / f32::from(grid.vertical_steps.max(1)),
+        )
+    }
+
+    #[test]
+    fn nudge_moves_one_step_and_one_undo_restores_it() {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 12.0, y: 16.0 }, true);
+        app.place_performer_at(Point { x: 20.0, y: 16.0 }, true);
+        app.replace_selection([0_usize, 1].into_iter().collect());
+        let before = app.document.sets[0].positions.clone();
+        let (dx, dy) = grid_step(&app);
+        app.simple_nudge(1, 0);
+        for (from, to) in before.iter().zip(&app.document.sets[0].positions) {
+            assert!((to.x - from.x - dx).abs() < 0.02);
+            assert!((to.y - from.y).abs() < 0.02);
+        }
+        app.simple_nudge(0, -1);
+        assert!(app.document.sets[0].positions[0].y < before[0].y - dy * 0.5);
+        let json = app.document.to_json().expect("json");
+        let loaded = drill_core::Document::from_json(&json).expect("reload");
+        assert_eq!(loaded.sets[0].positions, app.document.sets[0].positions);
+        assert!(app.history.undo(&mut app.document));
+        assert!(app.history.undo(&mut app.document));
+        assert_eq!(app.document.sets[0].positions, before);
+    }
+
+    #[test]
+    fn a_held_count_does_not_nudge_or_add_or_clear() {
+        let mut app = moved_pair();
+        app.navigate_to_set(0);
+        app.nav_glide.settle();
+        app.simple_step_beat(2);
+        app.nav_glide.settle();
+        assert!(app.simple_holding_a_count());
+        let positions = app.document.clone();
+        let revision = app.history.revision();
+        let people = app.document.performers.len();
+        app.replace_selection(std::iter::once(0).collect());
+        app.simple_nudge(1, 0);
+        app.simple_add_beside();
+        app.simple_clear_move();
+        assert_eq!(app.document.sets, positions.sets);
+        assert_eq!(app.document.performers.len(), people);
+        assert_eq!(app.history.revision(), revision);
+    }
+
+    #[test]
+    fn add_beside_places_two_steps_to_the_right_and_undoes() {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 12.0, y: 16.0 }, true);
+        let first = app.document.sets[0].positions[0];
+        app.replace_selection(std::iter::once(0).collect());
+        app.simple_add_beside();
+        assert_eq!(app.document.performers.len(), 2);
+        let second = app.document.sets[0].positions[1];
+        let (dx, _) = grid_step(&app);
+        assert!((second.x - first.x - dx * 2.0).abs() < 0.05);
+        assert!((second.y - first.y).abs() < 0.05);
+        let json = app.document.to_json().expect("json");
+        let loaded = drill_core::Document::from_json(&json).expect("reload");
+        assert_eq!(loaded.performers.len(), 2);
+        assert_eq!(loaded.sets[0].positions, app.document.sets[0].positions);
+        assert!(app.history.undo(&mut app.document));
+        assert_eq!(app.document.performers.len(), 1);
+        assert_eq!(app.document.sets[0].positions[0], first);
+    }
+
+    #[test]
+    fn add_beside_steps_the_other_way_at_the_right_edge() {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 12.0, y: 16.0 }, true);
+        let y = app.document.sets[0].positions[0].y;
+        let set_id = app.document.sets[0].id;
+        let performer_id = app.document.performers[0].id;
+        let edge = app.document.grid.max_x();
+        assert!(app.execute_edit(
+            Edit::MovePerformers {
+                set_id,
+                performer_ids: vec![performer_id],
+                positions: vec![Point { x: edge, y }],
+            },
+            "edge",
+        ));
+        app.replace_selection(std::iter::once(0).collect());
+        app.simple_add_beside();
+        assert_eq!(app.document.performers.len(), 2);
+        let second = app.document.sets[0].positions[1];
+        assert!(second.x < edge);
+        assert!(second.x >= 0.0);
+        assert!(second.y >= 0.0 && second.y <= app.document.grid.max_y());
+    }
+
+    #[test]
+    fn travel_note_reports_eight_steps_right_and_a_hold() {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 10.0, y: 16.0 }, true);
+        app.place_performer_at(Point { x: 18.0, y: 16.0 }, true);
+        app.duplicate_current_set();
+        let (dx, _) = grid_step(&app);
+        let origin = app.document.sets[1].positions[0];
+        let set_id = app.document.sets[1].id;
+        let performer_id = app.document.performers[0].id;
+        assert!(app.execute_edit(
+            Edit::MovePerformers {
+                set_id,
+                performer_ids: vec![performer_id],
+                positions: vec![Point {
+                    x: origin.x + dx * 8.0,
+                    y: origin.y,
+                }],
+            },
+            "walk",
+        ));
+        let document = app.document.clone();
+        let revision = app.history.revision();
+        let note = simple_travel_note(&app.document, 1, &[]).expect("walk");
+        assert_eq!(note.index, 0);
+        assert_eq!(note.kind, drill_core::continuity::TravelDirection::Right);
+        assert!((note.steps - 8.0).abs() < 0.01);
+        app.replace_selection(BTreeSet::new());
+        let group = app.simple_travel_caption().expect("group");
+        assert!(group.contains('8'), "{group}");
+        assert!(group.contains("右"), "{group}");
+        assert!(group.contains('1'), "{group}");
+        let from_core = drill_core::continuity::performer_continuity(&app.document, 0);
+        let segment = from_core
+            .iter()
+            .find(|segment| segment.from_set == 0)
+            .expect("segment");
+        assert_eq!(segment.direction_kind, note.kind);
+        assert!((segment.distance_steps - note.steps).abs() < 0.01);
+        app.replace_selection(std::iter::once(0).collect());
+        let caption = app.simple_travel_caption().expect("caption");
+        assert!(caption.contains('8'));
+        assert!(caption.contains("右"));
+        app.replace_selection(std::iter::once(1).collect());
+        let hold = simple_travel_note(&app.document, 1, &[1]).expect("hold");
+        assert_eq!(hold.kind, drill_core::continuity::TravelDirection::Hold);
+        let still = app.simple_travel_caption().expect("still");
+        assert!(still.contains("動きません"));
+        assert_eq!(app.document, document);
+        assert_eq!(app.history.revision(), revision);
+    }
+
+    #[test]
+    fn clear_move_matches_the_previous_scene_in_one_undo() {
+        let mut app = moved_pair();
+        app.navigate_to_set(1);
+        app.nav_glide.settle();
+        let previous = app.document.sets[0].positions.clone();
+        let moved = app.document.sets[1].positions.clone();
+        assert_ne!(previous, moved);
+        assert!(app.simple_can_clear_move());
+        app.simple_clear_move();
+        assert_eq!(app.document.sets[1].positions, previous);
+        assert!(!app.simple_can_clear_move());
+        let json = app.document.to_json().expect("json");
+        let loaded = drill_core::Document::from_json(&json).expect("reload");
+        assert_eq!(loaded.sets[1].positions, previous);
+        assert!(app.history.undo(&mut app.document));
+        assert_eq!(app.document.sets[1].positions, moved);
+        app.navigate_to_set(0);
+        app.nav_glide.settle();
+        let stayed = app.document.sets[0].positions.clone();
+        app.simple_clear_move();
+        assert_eq!(app.document.sets[0].positions, stayed);
+    }
+
+    #[test]
+    fn starting_fresh_keeps_a_named_show_and_empties_the_draft() {
+        let dir = std::env::temp_dir().join(format!(
+            "drillforge-fresh-named-{}-{}",
+            std::process::id(),
+            "keep"
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let draft = dir.join("simple-draft.drill.json");
+        let named = dir.join("文化祭.drill.json");
+        let mut app = empty_simple_app();
+        app.simple_mode.draft_path_override = Some(draft.clone());
+        app.simple_mode.shows_dir_override = Some(dir.join("shows"));
+        app.place_performer_at(Point { x: 8.0, y: 6.0 }, true);
+        app.current_path = Some(named.clone());
+        app.dirty = true;
+        assert!(app.simple_start_fresh());
+        assert!(app.document.performers.is_empty());
+        assert!(app.current_path.is_none());
+        let saved = std::fs::read_to_string(&named).expect("named file");
+        let named_doc = drill_core::Document::from_json(&saved).expect("named json");
+        assert_eq!(named_doc.performers.len(), 1);
+        let draft_text = std::fs::read_to_string(&draft).expect("draft");
+        let draft_doc = drill_core::Document::from_json(&draft_text).expect("draft json");
+        assert!(draft_doc.performers.is_empty());
+        assert!(!app.simple_path_sidecar().exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn starting_fresh_keeps_an_unnamed_show_in_the_list() {
+        let dir = std::env::temp_dir().join(format!(
+            "drillforge-fresh-draft-{}-{}",
+            std::process::id(),
+            "keep"
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let draft = dir.join("simple-draft.drill.json");
+        let shows = dir.join("shows");
+        let mut app = empty_simple_app();
+        app.simple_mode.draft_path_override = Some(draft.clone());
+        app.simple_mode.shows_dir_override = Some(shows.clone());
+        app.place_performer_at(Point { x: 8.0, y: 6.0 }, true);
+        app.dirty = true;
+        assert!(app.current_path.is_none());
+        assert!(app.simple_start_fresh());
+        assert!(app.document.performers.is_empty());
+        let kept = shows.join("下書き.drill.json");
+        let saved = std::fs::read_to_string(&kept).expect("archived show");
+        let archived = drill_core::Document::from_json(&saved).expect("archived json");
+        assert_eq!(archived.performers.len(), 1);
+        assert_eq!(app.recent_projects.paths().first(), Some(&kept));
+        let draft_text = std::fs::read_to_string(&draft).expect("draft");
+        let draft_doc = drill_core::Document::from_json(&draft_text).expect("draft json");
+        assert!(draft_doc.performers.is_empty());
+        assert!(app.simple_mode.saved_note_until.is_some());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
