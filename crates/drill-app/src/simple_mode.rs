@@ -255,6 +255,11 @@ pub(crate) struct SimpleModeState {
     /// Readable walk list for the current scene. Nothing is written.
     memo_open: bool,
     memo_copied: bool,
+    /// Where everyone stands in this scene. Nothing is written.
+    place_sheet_open: bool,
+    place_sheet_copied: bool,
+    /// Watch only the move of the current scene, then start that move again.
+    scene_loop: bool,
     /// Draft for the current scene's name. A stock "セット 1" shows as empty.
     scene_name: String,
     scene_name_for: Option<usize>,
@@ -283,6 +288,11 @@ const SIMPLE_BLUE: Color32 = Color32::from_rgb(20, 96, 200);
 const SIMPLE_INK: Color32 = Color32::from_rgb(28, 32, 40);
 const SIMPLE_CARD: Color32 = Color32::WHITE;
 const SIMPLE_MOTION_SECS: f32 = 0.26;
+/// School-band 4/4. One count is one beat.
+const SIMPLE_BEATS_PER_MEASURE: u16 = 4;
+const SIMPLE_TEMPO_STEP: i32 = 4;
+const SIMPLE_TEMPO_MIN: i32 = 40;
+const SIMPLE_TEMPO_MAX: i32 = 208;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum DockAction {
@@ -462,6 +472,12 @@ impl DrillApp {
         self.onboarding.show_welcome = false;
         if was_enabled && !enabled {
             self.simple_mode.return_hint = true;
+            if self.simple_mode.scene_loop {
+                self.simple_mode.scene_loop = false;
+                self.playback_start = 0;
+                self.playback_end = self.document.timeline_counts();
+                self.loop_playback = false;
+            }
         }
         if enabled {
             self.simple_mode.return_hint = false;
@@ -474,6 +490,8 @@ impl DrillApp {
             self.simple_mode.seen_redo = None;
             self.simple_mode.memo_open = false;
             self.simple_mode.memo_copied = false;
+            self.simple_mode.place_sheet_open = false;
+            self.simple_mode.place_sheet_copied = false;
         }
     }
 
@@ -615,7 +633,8 @@ impl DrillApp {
     /// Screenshot harness only. Seeds a frame when `DRILLFORGE_QA_SIMPLE` is
     /// `empty`, `placed`, `play`, `glossary`, `selected`, `recent`, `full`,
     /// `move`, `save`, `done`, `line`, `step`, `circle`, `nudge`, `walk`,
-    /// `shows`, `hints`, `memo`, `numbers`, `shape`, or `block`.
+    /// `shows`, `hints`, `memo`, `numbers`, `shape`, `block`, `count`, or
+    /// `places`.
     pub(crate) fn apply_qa_simple_fixture(&mut self) {
         let Ok(stage) = std::env::var("DRILLFORGE_QA_SIMPLE") else {
             return;
@@ -792,6 +811,33 @@ impl DrillApp {
             self.nav_glide.settle();
             self.replace_selection(std::iter::once(0).collect());
         }
+        if stage == "count" || stage == "places" {
+            self.duplicate_current_set();
+            let step = self.document.grid.horizontal_units
+                / f32::from(self.document.grid.horizontal_steps.max(1));
+            let origin = self.document.sets[self.current_set].positions[0];
+            let set_id = self.document.sets[self.current_set].id;
+            let performer_id = self.document.performers[0].id;
+            let _ = self.execute_edit(
+                Edit::MovePerformers {
+                    set_id,
+                    performer_ids: vec![performer_id],
+                    positions: vec![Point {
+                        x: origin.x + step * 4.0,
+                        y: origin.y,
+                    }],
+                },
+                "qa",
+            );
+            self.navigate_to_set(self.current_set);
+            self.nav_glide.settle();
+            self.simple_rename_scene("サビ");
+            self.replace_selection(std::iter::once(0).collect());
+            self.simple_toggle_scene_loop();
+        }
+        if stage == "places" {
+            self.simple_mode.place_sheet_open = true;
+        }
         // The harness grabs pass 2, before a 260ms ease would finish.
         // Show the settled chrome instead of a half-played ring.
         self.simple_mode.seen_people = self.document.performers.len();
@@ -826,6 +872,9 @@ impl DrillApp {
             self.simple_mode.seen_cursor = Some(self.history.cursor());
             self.simple_mode.seen_redo = Some(self.history.redo_len());
         }
+        if !self.playing && self.simple_mode.scene_loop {
+            self.simple_apply_watch_range();
+        }
         self.simple_try_arrow_nudge(ui);
         self.autosave_simple_draft(ui.ctx());
         self.expire_simple_saved_note(ui.ctx());
@@ -843,6 +892,7 @@ impl DrillApp {
                     self.simple_cue(ui);
                     ui.add_space(6.0);
                     self.simple_beat_row(ui);
+                    self.simple_music_row(ui);
                     self.simple_rehearsal_row(ui);
                     self.simple_arrange_row(ui);
                     self.simple_touch_row(ui);
@@ -899,6 +949,7 @@ impl DrillApp {
         self.show_recent_projects(ui.ctx());
         self.simple_name_sheet(ui.ctx());
         self.simple_memo_sheet(ui.ctx());
+        self.simple_place_sheet(ui.ctx());
         self.glossary.show(ui.ctx(), self.locale);
         self.onboarding.help_ui(ui.ctx(), self.locale);
         self.onboarding.persist_if_changed();
@@ -1206,6 +1257,9 @@ impl DrillApp {
             self.simple_mode.finished_playback = false;
             self.simple_mode.hold_count = false;
             self.navigate_to_set(index);
+            if self.simple_mode.scene_loop {
+                self.simple_apply_watch_range();
+            }
         }
     }
 
@@ -1367,6 +1421,177 @@ impl DrillApp {
                 });
             }
         });
+    }
+
+    fn simple_music_row(&mut self, ui: &mut egui::Ui) {
+        let editable = self.is_editable_set_start();
+        let bpm = simple_opening_bpm(&self.document.tempo);
+        ui.add_space(4.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::Vec2::new(8.0, 8.0);
+            if ui
+                .add_enabled(
+                    editable && bpm > SIMPLE_TEMPO_MIN,
+                    egui::Button::new("−").small(),
+                )
+                .on_hover_text(i18n::registered(self.locale, "simple-mode.220"))
+                .clicked()
+            {
+                self.simple_step_tempo(-SIMPLE_TEMPO_STEP);
+            }
+            ui.label(
+                egui::RichText::new(self.simple_tempo_label())
+                    .size(15.0)
+                    .strong()
+                    .color(SIMPLE_INK),
+            );
+            if ui
+                .add_enabled(
+                    editable && bpm < SIMPLE_TEMPO_MAX,
+                    egui::Button::new("＋").small(),
+                )
+                .on_hover_text(i18n::registered(self.locale, "simple-mode.221"))
+                .clicked()
+            {
+                self.simple_step_tempo(SIMPLE_TEMPO_STEP);
+            }
+            if let Some(seconds) = self.simple_scene_seconds_label() {
+                ui.label(
+                    egui::RichText::new(seconds)
+                        .size(15.0)
+                        .color(super::app_theme::SECONDARY_TEXT),
+                );
+            }
+            ui.label(
+                egui::RichText::new(self.simple_music_caption())
+                    .size(15.0)
+                    .strong()
+                    .color(SIMPLE_BLUE),
+            );
+        });
+    }
+
+    fn simple_tempo_label(&self) -> String {
+        let bpm = simple_opening_bpm(&self.document.tempo);
+        i18n::registered(self.locale, "simple-mode.219").replace("{0}", &bpm.to_string())
+    }
+
+    fn simple_scene_seconds_label(&self) -> Option<String> {
+        let seconds = simple_transition_seconds(&self.document, self.current_set)?;
+        Some(i18n::registered(self.locale, "simple-mode.225").replace("{0}", &seconds.to_string()))
+    }
+
+    fn simple_music_caption(&self) -> String {
+        let global = self
+            .document
+            .global_count(self.current_set, self.count_position);
+        simple_music_text(
+            self.locale,
+            &self.document.tempo,
+            global,
+            self.count_position,
+        )
+    }
+
+    /// Four beats per minute at a time, from the opening tempo. A later tempo
+    /// change made in the full editor stays. One undo. Positions stay put.
+    fn simple_step_tempo(&mut self, delta: i32) {
+        if delta == 0 || self.playing || !self.is_editable_set_start() {
+            return;
+        }
+        let current = simple_opening_bpm(&self.document.tempo);
+        let next = (current + delta).clamp(SIMPLE_TEMPO_MIN, SIMPLE_TEMPO_MAX);
+        if next == current {
+            return;
+        }
+        let tempo = if self.document.tempo.events().len() <= 1 {
+            drill_core::tempo::TempoMap::constant(next as f32)
+        } else {
+            let mut tempo = self.document.tempo.clone();
+            tempo.set(0.0, next as f32);
+            tempo
+        };
+        let revision = self.history.revision();
+        let changed = self.execute_edit(
+            Edit::SetTempoMap { tempo },
+            i18n::registered(self.locale, "simple-mode.238"),
+        );
+        if changed {
+            self.tempo_bpm = self.document.tempo.bpm_at(0.0);
+            self.simple_mark(revision, "simple-mode.222");
+        }
+    }
+
+    /// The move this scene shows, played again from its start.
+    fn simple_apply_watch_range(&mut self) {
+        if self.simple_mode.scene_loop
+            && self.show_has_motion()
+            && let Some((start, end)) = simple_watch_bounds(&self.document, self.current_set)
+        {
+            self.playback_start = start;
+            self.playback_end = end;
+            self.loop_playback = true;
+            return;
+        }
+        self.playback_start = 0;
+        self.playback_end = self.document.timeline_counts();
+        self.loop_playback = false;
+    }
+
+    fn simple_toggle_scene_loop(&mut self) {
+        self.simple_mode.scene_loop = !self.simple_mode.scene_loop;
+        self.simple_apply_watch_range();
+    }
+
+    /// The picture on screen, so the next person is the next one they can see.
+    fn simple_cycle_points(&mut self) -> Vec<Point> {
+        if self.simple_holding_a_count() {
+            let counts = self
+                .document
+                .sets
+                .get(self.current_set)
+                .map(|set| set.counts.max(1))
+                .unwrap_or(1);
+            let progress = (self.count_position / f32::from(counts)).clamp(0.0, 1.0);
+            self.document
+                .positions_at(self.current_set, progress, &mut self.frame_positions);
+            if self.frame_positions.len() == self.document.performers.len() {
+                return self.frame_positions.clone();
+            }
+        }
+        self.document
+            .sets
+            .get(self.current_set)
+            .map(|set| set.positions.clone())
+            .unwrap_or_default()
+    }
+
+    /// One person, from the audience's left. Does not move anyone.
+    fn simple_cycle_person(&mut self, forward: bool) {
+        if self.playing || self.document.performers.len() < 2 {
+            return;
+        }
+        let points = self.simple_cycle_points();
+        if points.len() != self.document.performers.len() {
+            return;
+        }
+        let order = simple_renumber_order(&points);
+        if order.is_empty() {
+            return;
+        }
+        let current = if self.selected.len() == 1 {
+            self.selected.iter().next().copied()
+        } else {
+            None
+        };
+        let next = match current.and_then(|index| order.iter().position(|&item| item == index)) {
+            Some(pos) if forward => order[(pos + 1) % order.len()],
+            Some(pos) => order[(pos + order.len() - 1) % order.len()],
+            None if forward => order[0],
+            None => order[order.len() - 1],
+        };
+        self.replace_selection(std::iter::once(next).collect());
+        self.bump_simple_motion(ChromeMotion::Select);
     }
 
     fn simple_holding_a_count(&self) -> bool {
@@ -1650,6 +1875,17 @@ impl DrillApp {
             {
                 self.simple_toggle_slow();
             }
+            if simple_choice_button(
+                ui,
+                i18n::registered(self.locale, "simple-mode.236"),
+                true,
+                self.simple_mode.scene_loop,
+            )
+            .on_hover_text(i18n::registered(self.locale, "simple-mode.237"))
+            .clicked()
+            {
+                self.simple_toggle_scene_loop();
+            }
         });
     }
 
@@ -1664,6 +1900,7 @@ impl DrillApp {
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = egui::Vec2::new(8.0, 8.0);
                 self.simple_memo_button(ui);
+                self.simple_place_button(ui);
             });
             return;
         }
@@ -1815,6 +2052,7 @@ impl DrillApp {
                 self.simple_renumber();
             }
             self.simple_memo_button(ui);
+            self.simple_place_button(ui);
         });
         if self.selected.len() >= 2 && editable {
             ui.label(
@@ -1955,7 +2193,8 @@ impl DrillApp {
         let clear = editable && self.simple_can_clear_move();
         let swap = editable && self.selected.len() == 2;
         let restore = self.simple_can_restore_selected();
-        if !nudge && !beside && !clear && !swap && !restore {
+        let cycle = self.document.performers.len() >= 2;
+        if !nudge && !beside && !clear && !swap && !restore && !cycle {
             return;
         }
         ui.add_space(4.0);
@@ -1984,6 +2223,30 @@ impl DrillApp {
         }
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::Vec2::new(8.0, 8.0);
+            if cycle
+                && simple_choice_button(
+                    ui,
+                    i18n::registered(self.locale, "simple-mode.234"),
+                    true,
+                    false,
+                )
+                .on_hover_text(i18n::registered(self.locale, "simple-mode.235"))
+                .clicked()
+            {
+                self.simple_cycle_person(false);
+            }
+            if cycle
+                && simple_choice_button(
+                    ui,
+                    i18n::registered(self.locale, "simple-mode.232"),
+                    true,
+                    false,
+                )
+                .on_hover_text(i18n::registered(self.locale, "simple-mode.233"))
+                .clicked()
+            {
+                self.simple_cycle_person(true);
+            }
             if nudge {
                 let steps = [
                     ("simple-mode.154", 0, -1),
@@ -2220,6 +2483,7 @@ impl DrillApp {
         if self.playing
             || self.simple_mode.naming
             || self.simple_mode.memo_open
+            || self.simple_mode.place_sheet_open
             || self.show_recent_projects
             || self.selected.is_empty()
             || !self.is_editable_set_start()
@@ -2313,9 +2577,81 @@ impl DrillApp {
         .clicked()
         {
             self.simple_mode.memo_open = !self.simple_mode.memo_open;
-            if !self.simple_mode.memo_open {
+            if self.simple_mode.memo_open {
+                self.simple_mode.place_sheet_open = false;
+                self.simple_mode.place_sheet_copied = false;
+            } else {
                 self.simple_mode.memo_copied = false;
             }
+        }
+    }
+
+    fn simple_place_button(&mut self, ui: &mut egui::Ui) {
+        if simple_choice_button(
+            ui,
+            i18n::registered(self.locale, "simple-mode.226"),
+            true,
+            self.simple_mode.place_sheet_open,
+        )
+        .on_hover_text(i18n::registered(self.locale, "simple-mode.227"))
+        .clicked()
+        {
+            self.simple_mode.place_sheet_open = !self.simple_mode.place_sheet_open;
+            if self.simple_mode.place_sheet_open {
+                self.simple_mode.memo_open = false;
+                self.simple_mode.memo_copied = false;
+            } else {
+                self.simple_mode.place_sheet_copied = false;
+            }
+        }
+    }
+
+    fn simple_place_sheet(&mut self, ctx: &egui::Context) {
+        if !self.simple_mode.place_sheet_open {
+            return;
+        }
+        let sheet = simple_position_sheet(&self.document, self.current_set, self.locale);
+        let mut open = true;
+        let mut copy = false;
+        let copied = self.simple_mode.place_sheet_copied;
+        egui::Window::new(i18n::registered(self.locale, "simple-mode.228"))
+            .id(egui::Id::new("simple-place-sheet"))
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.set_min_width(300.0);
+                ui.set_max_width(440.0);
+                egui::ScrollArea::vertical()
+                    .max_height(360.0)
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new(&sheet).size(16.0).color(SIMPLE_INK));
+                    });
+                ui.add_space(12.0);
+                let copy_id = if copied {
+                    "simple-mode.180"
+                } else {
+                    "simple-mode.179"
+                };
+                let button = egui::Button::new(
+                    egui::RichText::new(i18n::registered(self.locale, copy_id))
+                        .size(16.0)
+                        .color(Color32::WHITE),
+                )
+                .fill(SIMPLE_BLUE)
+                .corner_radius(18.0);
+                if ui.add_sized([160.0, 40.0], button).clicked() {
+                    copy = true;
+                }
+            });
+        if copy {
+            ctx.copy_text(sheet);
+            self.simple_mode.place_sheet_copied = true;
+        }
+        if !open {
+            self.simple_mode.place_sheet_open = false;
+            self.simple_mode.place_sheet_copied = false;
         }
     }
 
@@ -2968,6 +3304,11 @@ impl DrillApp {
         self.simple_mode.person_name_for = None;
         self.simple_mode.scene_name.clear();
         self.simple_mode.scene_name_for = None;
+        self.simple_mode.memo_open = false;
+        self.simple_mode.memo_copied = false;
+        self.simple_mode.place_sheet_open = false;
+        self.simple_mode.place_sheet_copied = false;
+        self.simple_mode.scene_loop = false;
         self.simple_mode.empty_pan = false;
         self.simple_mode.saved_note_until = None;
         if !self.write_simple_draft() {
@@ -3125,7 +3466,10 @@ impl DrillApp {
     }
 
     fn simple_start_play(&mut self, ctx: &egui::Context) {
-        if self.simple_mode.finished_playback {
+        if self.simple_mode.scene_loop {
+            self.simple_apply_watch_range();
+            self.simple_mode.finished_playback = false;
+        } else if self.simple_mode.finished_playback {
             self.simple_mode.finished_playback = false;
             self.jump_to_show_start();
         }
@@ -3617,8 +3961,8 @@ fn simple_side_anchors(grid: &drill_core::GridConfig) -> (Point, Point) {
 }
 
 /// Steps from the 50 and from the front sideline. Zero on an axis is the
-/// center, or the front itself.
-fn simple_place_line(
+/// center, or the front itself. No "where they stand" prefix.
+fn simple_place_detail(
     grid: &drill_core::GridConfig,
     point: Point,
     locale: drill_core::Locale,
@@ -3645,6 +3989,15 @@ fn simple_place_line(
             .replace("{0}", &across)
             .replace("{1}", &front)
     };
+    Some(detail)
+}
+
+fn simple_place_line(
+    grid: &drill_core::GridConfig,
+    point: Point,
+    locale: drill_core::Locale,
+) -> Option<String> {
+    let detail = simple_place_detail(grid, point, locale)?;
     Some(i18n::registered(locale, "simple-mode.218").replace("{0}", &detail))
 }
 
@@ -4259,6 +4612,134 @@ fn simple_scene_memo(
             lines.push(label.to_string());
         } else {
             lines.push(format!("{label}  {detail}"));
+        }
+    }
+    lines.join("\n")
+}
+
+fn finite_count_steps(count: f32) -> u32 {
+    if count.is_finite() {
+        count.round().max(0.0) as u32
+    } else {
+        0
+    }
+}
+
+/// At a picture, the measure that is about to start. After a step, the beat
+/// just reached. Four beats to a measure, counted from the top of the show.
+fn simple_music_place(
+    tempo: &drill_core::tempo::TempoMap,
+    global_count: f32,
+    local_count: f32,
+) -> (u32, Option<u32>) {
+    let local_steps = finite_count_steps(local_count);
+    let global_steps = finite_count_steps(global_count);
+    let anchor = if local_steps == 0 {
+        global_steps
+    } else {
+        global_steps.saturating_sub(1)
+    };
+    let (measure, beat) = tempo.measure_beat(anchor as f32, SIMPLE_BEATS_PER_MEASURE);
+    if local_steps == 0 {
+        (measure, None)
+    } else {
+        let per = f32::from(SIMPLE_BEATS_PER_MEASURE.max(1));
+        (measure, Some(beat.round().clamp(1.0, per) as u32))
+    }
+}
+
+fn simple_music_text(
+    locale: drill_core::Locale,
+    tempo: &drill_core::tempo::TempoMap,
+    global_count: f32,
+    local_count: f32,
+) -> String {
+    let (measure, beat) = simple_music_place(tempo, global_count, local_count);
+    match beat {
+        Some(beat) => i18n::registered(locale, "simple-mode.223")
+            .replace("{0}", &measure.to_string())
+            .replace("{1}", &beat.to_string()),
+        None => i18n::registered(locale, "simple-mode.224").replace("{0}", &measure.to_string()),
+    }
+}
+
+fn simple_opening_bpm(tempo: &drill_core::tempo::TempoMap) -> i32 {
+    let bpm = tempo.bpm_at(0.0).round();
+    if !bpm.is_finite() {
+        return 120;
+    }
+    bpm.clamp(1.0, 999.0) as i32
+}
+
+/// The move this scene is showing: the one that leaves it, or the one that
+/// arrives when this is the last picture.
+fn simple_watch_bounds(document: &drill_core::Document, set_index: usize) -> Option<(u32, u32)> {
+    let (from, _) = simple_transition_ends(document, set_index)?;
+    let set = document.sets.get(from)?;
+    let start = finite_count_steps(document.global_count(from, 0.0));
+    let span = u32::from(set.counts) + u32::from(set.hold);
+    if span == 0 {
+        return None;
+    }
+    let end = (start + span).min(document.timeline_counts());
+    (end > start).then_some((start, end))
+}
+
+fn simple_transition_seconds(document: &drill_core::Document, set_index: usize) -> Option<u32> {
+    let (start, end) = simple_watch_bounds(document, set_index)?;
+    let seconds = document.tempo.seconds_at(end as f32) - document.tempo.seconds_at(start as f32);
+    if !seconds.is_finite() || seconds < 0.0 {
+        return None;
+    }
+    let whole = if seconds < 0.5 {
+        1
+    } else {
+        seconds.round() as u32
+    };
+    Some(whole)
+}
+
+/// Plain text of where everyone stands, to paste into a message. Nothing is written.
+fn simple_position_sheet(
+    document: &drill_core::Document,
+    set_index: usize,
+    locale: drill_core::Locale,
+) -> String {
+    let mut lines = vec![
+        i18n::registered(locale, "simple-mode.229").replace("{0}", &(set_index + 1).to_string()),
+    ];
+    if let Some(set) = document.sets.get(set_index) {
+        if !simple_stock_scene_name(&set.name) {
+            lines.push(set.name.clone());
+        }
+        let global = document.global_count(set_index, 0.0);
+        lines.push(simple_music_text(locale, &document.tempo, global, 0.0));
+    }
+    if let Some((from, _)) = simple_transition_ends(document, set_index)
+        && let Some(seconds) = simple_transition_seconds(document, set_index)
+        && let Some(set) = document.sets.get(from)
+    {
+        lines.push(
+            i18n::registered(locale, "simple-mode.239")
+                .replace("{0}", &set.counts.to_string())
+                .replace("{1}", &seconds.to_string()),
+        );
+    }
+    for index in simple_roster_order(document) {
+        let label = document
+            .performers
+            .get(index)
+            .map(|performer| performer.label.as_str())
+            .unwrap_or("");
+        let detail = document
+            .sets
+            .get(set_index)
+            .and_then(|set| set.positions.get(index).copied())
+            .and_then(|point| simple_place_detail(&document.grid, point, locale));
+        if let Some(detail) = detail {
+            lines.push(format!("{label}  {detail}"));
+        } else if !label.is_empty() {
+            lines.push(label.to_string());
         }
     }
     lines.join("\n")
@@ -5973,5 +6454,307 @@ mod tests {
             many.iter().any(|line| line.contains("選んだ人を戻す")),
             "{many:?}"
         );
+    }
+
+    #[test]
+    fn tempo_steps_by_four_and_undoes_without_moving_anyone() {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 12.0, y: 16.0 }, true);
+        app.place_performer_at(Point { x: 20.0, y: 16.0 }, true);
+        let positions = app.document.sets[0].positions.clone();
+        let labels: Vec<_> = app
+            .document
+            .performers
+            .iter()
+            .map(|performer| performer.label.clone())
+            .collect();
+        let schema = app.document.schema_version;
+        assert_eq!(simple_opening_bpm(&app.document.tempo), 120);
+        app.simple_sync_history_notes();
+        app.simple_step_tempo(SIMPLE_TEMPO_STEP);
+        assert_eq!(simple_opening_bpm(&app.document.tempo), 124);
+        assert_eq!(app.document.sets[0].positions, positions);
+        assert_eq!(
+            app.document
+                .performers
+                .iter()
+                .map(|performer| performer.label.as_str())
+                .collect::<Vec<_>>(),
+            labels.iter().map(String::as_str).collect::<Vec<_>>()
+        );
+        assert_eq!(app.document.schema_version, schema);
+        app.simple_sync_history_notes();
+        let lines = app.simple_history_lines();
+        assert!(
+            lines.iter().any(|line| line.contains("テンポ")),
+            "{lines:?}"
+        );
+        let json = app.document.to_json().expect("json");
+        let loaded = drill_core::Document::from_json(&json).expect("reload");
+        assert_eq!(simple_opening_bpm(&loaded.tempo), 124);
+        assert_eq!(loaded.sets[0].positions, positions);
+        assert_eq!(loaded.schema_version, schema);
+        assert!(app.history.undo(&mut app.document));
+        assert_eq!(simple_opening_bpm(&app.document.tempo), 120);
+        assert_eq!(app.document.sets[0].positions, positions);
+
+        for _ in 0..40 {
+            app.simple_step_tempo(-SIMPLE_TEMPO_STEP);
+        }
+        assert_eq!(simple_opening_bpm(&app.document.tempo), SIMPLE_TEMPO_MIN);
+        let revision = app.history.revision();
+        app.simple_step_tempo(-SIMPLE_TEMPO_STEP);
+        assert_eq!(app.history.revision(), revision);
+        for _ in 0..50 {
+            app.simple_step_tempo(SIMPLE_TEMPO_STEP);
+        }
+        assert_eq!(simple_opening_bpm(&app.document.tempo), SIMPLE_TEMPO_MAX);
+        let revision = app.history.revision();
+        app.simple_step_tempo(SIMPLE_TEMPO_STEP);
+        assert_eq!(app.history.revision(), revision);
+
+        let mut later = app.document.tempo.clone();
+        later.set(16.0, 90.0);
+        assert!(app.execute_edit(Edit::SetTempoMap { tempo: later }, "qa"));
+        app.simple_step_tempo(-SIMPLE_TEMPO_STEP);
+        assert_eq!(
+            simple_opening_bpm(&app.document.tempo),
+            SIMPLE_TEMPO_MAX - 4
+        );
+        assert!((app.document.tempo.bpm_at(16.0) - 90.0).abs() < 0.01);
+        assert_eq!(app.document.sets[0].positions, positions);
+
+        app.duplicate_current_set();
+        let moved = app.document.sets[1].positions.clone();
+        app.navigate_to_set(1);
+        app.nav_glide.settle();
+        let set_id = app.document.sets[1].id;
+        let ids: Vec<_> = app.document.performers.iter().map(|p| p.id).collect();
+        assert!(app.execute_edit(
+            Edit::MovePerformers {
+                set_id,
+                performer_ids: ids,
+                positions: vec![Point { x: 18.0, y: 16.0 }, Point { x: 28.0, y: 16.0 },],
+            },
+            "move",
+        ));
+        app.navigate_to_set(0);
+        app.nav_glide.settle();
+        app.simple_step_beat(1);
+        app.nav_glide.settle();
+        assert!(app.simple_holding_a_count());
+        let bpm = simple_opening_bpm(&app.document.tempo);
+        let revision = app.history.revision();
+        app.simple_step_tempo(SIMPLE_TEMPO_STEP);
+        assert_eq!(simple_opening_bpm(&app.document.tempo), bpm);
+        assert_eq!(app.history.revision(), revision);
+        let context = egui::Context::default();
+        app.count_position = 0.0;
+        app.simple_mode.hold_count = false;
+        app.toggle_playback(&context);
+        assert!(app.playing);
+        app.simple_step_tempo(SIMPLE_TEMPO_STEP);
+        assert_eq!(simple_opening_bpm(&app.document.tempo), bpm);
+        app.toggle_playback(&context);
+        assert_eq!(app.document.sets[0].positions, positions);
+        assert_ne!(app.document.sets[1].positions, moved);
+    }
+
+    #[test]
+    fn music_place_names_the_measure_and_the_scene_length() {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 12.0, y: 16.0 }, true);
+        assert_eq!(app.simple_music_caption(), "1小節から");
+        assert!(simple_transition_seconds(&app.document, 0).is_none());
+        app.duplicate_current_set();
+        app.navigate_to_set(0);
+        app.nav_glide.settle();
+        assert_eq!(simple_transition_seconds(&app.document, 0), Some(8));
+        assert_eq!(app.simple_scene_seconds_label().as_deref(), Some("約 8秒"));
+        app.count_position = 5.0;
+        assert_eq!(app.simple_music_caption(), "2小節 1拍");
+        app.count_position = 4.0;
+        assert_eq!(app.simple_music_caption(), "1小節 4拍");
+        app.count_position = 0.0;
+        app.navigate_to_set(1);
+        app.nav_glide.settle();
+        assert_eq!(app.simple_music_caption(), "5小節から");
+        assert_eq!(simple_transition_seconds(&app.document, 1), Some(8));
+        let mut tempo = app.document.tempo.clone();
+        tempo.set(0.0, 60.0);
+        assert!(app.execute_edit(Edit::SetTempoMap { tempo }, "qa"));
+        assert_eq!(simple_transition_seconds(&app.document, 1), Some(16));
+        let (measure, beat) = simple_music_place(&app.document.tempo, 16.0, 0.0);
+        assert_eq!(measure, 5);
+        assert_eq!(beat, None);
+        let (measure, beat) = simple_music_place(&app.document.tempo, 5.0, 5.0);
+        assert_eq!((measure, beat), (2, Some(1)));
+        assert_eq!(app.document.sets[0].counts, 16);
+    }
+
+    #[test]
+    fn position_sheet_lists_places_without_writing() {
+        let mut app = empty_simple_app();
+        let (step, _) = grid_step(&app);
+        let mid_x = app.document.grid.width * 0.5;
+        let on_center = app.document.grid.snap(Point {
+            x: mid_x,
+            y: step * 8.0,
+        });
+        app.place_performer_at(on_center, true);
+        app.place_performer_at(
+            app.document.grid.snap(Point {
+                x: on_center.x + step * 4.0,
+                y: on_center.y,
+            }),
+            true,
+        );
+        app.replace_selection(std::iter::once(0).collect());
+        app.simple_rename_selected("山田");
+        app.simple_rename_scene("サビ");
+        let document = app.document.clone();
+        let revision = app.history.revision();
+        let sheet = simple_position_sheet(&app.document, 0, app.locale);
+        assert!(sheet.starts_with("場面 1"), "{sheet}");
+        assert!(sheet.contains("サビ"), "{sheet}");
+        assert!(sheet.contains("1小節から"), "{sheet}");
+        assert!(sheet.contains("山田"), "{sheet}");
+        assert!(sheet.contains("中央"), "{sheet}");
+        assert!(sheet.contains("右へ"), "{sheet}");
+        assert!(sheet.contains("前から"), "{sheet}");
+        assert!(!sheet.contains("いまの場所"), "{sheet}");
+        assert_eq!(app.document, document);
+        assert_eq!(app.history.revision(), revision);
+        let json = app.document.to_json().expect("json");
+        let loaded = drill_core::Document::from_json(&json).expect("reload");
+        assert_eq!(loaded.sets[0].name, "サビ");
+        assert_eq!(loaded.sets[0].positions, document.sets[0].positions);
+        assert_eq!(loaded.schema_version, document.schema_version);
+        app.duplicate_current_set();
+        let with_move = simple_position_sheet(&app.document, 0, app.locale);
+        assert!(with_move.contains("16拍"), "{with_move}");
+        assert!(with_move.contains("約 8秒"), "{with_move}");
+    }
+
+    #[test]
+    fn scene_loop_watches_one_move_and_restores_the_whole_show() {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 12.0, y: 16.0 }, true);
+        app.place_performer_at(Point { x: 24.0, y: 16.0 }, true);
+        app.duplicate_current_set();
+        app.duplicate_current_set();
+        app.navigate_to_set(1);
+        app.nav_glide.settle();
+        let set_id = app.document.sets[1].id;
+        let ids: Vec<_> = app.document.performers.iter().map(|p| p.id).collect();
+        let start = app.document.sets[1].positions.clone();
+        assert!(app.execute_edit(
+            Edit::MovePerformers {
+                set_id,
+                performer_ids: ids,
+                positions: vec![
+                    Point {
+                        x: start[0].x + 4.0,
+                        y: start[0].y,
+                    },
+                    Point {
+                        x: start[1].x + 4.0,
+                        y: start[1].y,
+                    },
+                ],
+            },
+            "move",
+        ));
+        app.navigate_to_set(0);
+        app.nav_glide.settle();
+        let document = app.document.clone();
+        let revision = app.history.revision();
+        assert_eq!(app.document.timeline_counts(), 32);
+        app.simple_toggle_scene_loop();
+        assert!(app.simple_mode.scene_loop);
+        assert!(app.loop_playback);
+        assert_eq!((app.playback_start, app.playback_end), (0, 16));
+        app.navigate_to_set(1);
+        app.simple_apply_watch_range();
+        assert_eq!((app.playback_start, app.playback_end), (16, 32));
+        app.navigate_to_set(2);
+        app.simple_apply_watch_range();
+        assert_eq!((app.playback_start, app.playback_end), (16, 32));
+        app.simple_toggle_scene_loop();
+        assert!(!app.simple_mode.scene_loop);
+        assert!(!app.loop_playback);
+        assert_eq!((app.playback_start, app.playback_end), (0, 32));
+        assert_eq!(app.document, document);
+        assert_eq!(app.history.revision(), revision);
+        app.navigate_to_set(0);
+        app.nav_glide.settle();
+        assert!(app.commit_transition_counts(0, 8));
+        app.simple_toggle_scene_loop();
+        assert_eq!((app.playback_start, app.playback_end), (0, 8));
+        assert!(app.loop_playback);
+        app.set_simple_mode(false);
+        assert!(!app.simple_mode.scene_loop);
+        assert!(!app.loop_playback);
+        assert_eq!(app.playback_start, 0);
+        assert_eq!(app.playback_end, app.document.timeline_counts());
+    }
+
+    #[test]
+    fn next_person_walks_left_to_right_without_moving() {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 30.0, y: 20.0 }, true);
+        app.place_performer_at(Point { x: 10.0, y: 18.0 }, true);
+        app.place_performer_at(Point { x: 20.0, y: 24.0 }, true);
+        let positions = app.document.sets[0].positions.clone();
+        let revision = app.history.revision();
+        app.replace_selection(BTreeSet::new());
+        app.simple_cycle_person(true);
+        assert_eq!(app.selected, std::iter::once(1).collect());
+        app.simple_cycle_person(true);
+        assert_eq!(app.selected, std::iter::once(2).collect());
+        app.simple_cycle_person(true);
+        assert_eq!(app.selected, std::iter::once(0).collect());
+        app.simple_cycle_person(true);
+        assert_eq!(app.selected, std::iter::once(1).collect());
+        app.simple_cycle_person(false);
+        assert_eq!(app.selected, std::iter::once(0).collect());
+        app.replace_selection([0_usize, 2].into_iter().collect());
+        app.simple_cycle_person(false);
+        assert_eq!(app.selected, std::iter::once(0).collect());
+        assert_eq!(app.document.sets[0].positions, positions);
+        assert_eq!(app.history.revision(), revision);
+        app.duplicate_current_set();
+        app.navigate_to_set(1);
+        app.nav_glide.settle();
+        let set_id = app.document.sets[1].id;
+        let ids: Vec<_> = app.document.performers.iter().map(|p| p.id).collect();
+        let start = app.document.sets[1].positions.clone();
+        assert!(
+            app.execute_edit(
+                Edit::MovePerformers {
+                    set_id,
+                    performer_ids: ids,
+                    positions: start
+                        .iter()
+                        .map(|point| Point {
+                            x: point.x + 2.0,
+                            y: point.y,
+                        })
+                        .collect(),
+                },
+                "move",
+            )
+        );
+        let arrived = app.document.sets[1].positions.clone();
+        app.navigate_to_set(0);
+        app.nav_glide.settle();
+        app.simple_step_beat(3);
+        app.nav_glide.settle();
+        assert!(app.simple_holding_a_count());
+        let revision = app.history.revision();
+        app.simple_cycle_person(true);
+        assert_eq!(app.selected.len(), 1);
+        assert_eq!(app.document.sets[1].positions, arrived);
+        assert_eq!(app.history.revision(), revision);
     }
 }
