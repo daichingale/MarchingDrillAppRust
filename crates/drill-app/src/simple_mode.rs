@@ -633,8 +633,8 @@ impl DrillApp {
     /// Screenshot harness only. Seeds a frame when `DRILLFORGE_QA_SIMPLE` is
     /// `empty`, `placed`, `play`, `glossary`, `selected`, `recent`, `full`,
     /// `move`, `save`, `done`, `line`, `step`, `circle`, `nudge`, `walk`,
-    /// `shows`, `hints`, `memo`, `numbers`, `shape`, `block`, `count`, or
-    /// `places`.
+    /// `shows`, `hints`, `memo`, `numbers`, `shape`, `block`, `count`,
+    /// `places`, or `pair`.
     pub(crate) fn apply_qa_simple_fixture(&mut self) {
         let Ok(stage) = std::env::var("DRILLFORGE_QA_SIMPLE") else {
             return;
@@ -837,6 +837,34 @@ impl DrillApp {
         }
         if stage == "places" {
             self.simple_mode.place_sheet_open = true;
+        }
+        if stage == "pair" {
+            self.place_performer_at(Point { x: 8.0, y: 28.0 }, true);
+            self.place_performer_at(Point { x: 30.0, y: 8.0 }, true);
+            self.place_performer_at(Point { x: 18.0, y: 22.0 }, true);
+            self.place_performer_at(Point { x: 36.0, y: 14.0 }, true);
+            self.simple_diagonal_up();
+            self.simple_center_up();
+            self.duplicate_current_set();
+            let step = self.document.grid.horizontal_units
+                / f32::from(self.document.grid.horizontal_steps.max(1));
+            let origin = self.document.sets[self.current_set].positions[3];
+            let set_id = self.document.sets[self.current_set].id;
+            let performer_id = self.document.performers[3].id;
+            let _ = self.execute_edit(
+                Edit::MovePerformers {
+                    set_id,
+                    performer_ids: vec![performer_id],
+                    positions: vec![Point {
+                        x: origin.x + step * 4.0,
+                        y: origin.y,
+                    }],
+                },
+                "qa",
+            );
+            self.navigate_to_set(self.current_set);
+            self.nav_glide.settle();
+            self.replace_selection([0_usize, 1].into_iter().collect());
         }
         // The harness grabs pass 2, before a 260ms ease would finish.
         // Show the settled chrome instead of a half-played ring.
@@ -1789,6 +1817,50 @@ impl DrillApp {
         self.simple_commit_arrangement(points, note);
     }
 
+    /// Slides the group sideways until its middle sits on the center line.
+    /// The shape stays. With fewer than two chosen, everyone slides.
+    fn simple_center_up(&mut self) {
+        if !self.simple_arrange_targets() {
+            return;
+        }
+        let points = simple_center_points(&self.document.grid, &self.selected_points());
+        self.simple_commit_arrangement(points, "simple-mode.244");
+    }
+
+    /// Pulls a rank forward onto the person nearest the audience. A file,
+    /// where people already share a left-right spot, is left alone.
+    fn simple_dress_front(&mut self) {
+        if !self.simple_arrange_targets() {
+            return;
+        }
+        let points = simple_dress_front_points(&self.document.grid, &self.selected_points());
+        self.simple_commit_arrangement(points, "simple-mode.246");
+    }
+
+    /// A diagonal from the audience's front left toward the back right.
+    /// The first person stands at the front left.
+    fn simple_diagonal_up(&mut self) {
+        if !self.simple_arrange_targets() {
+            return;
+        }
+        let points = simple_diagonal_points(&self.document.grid, &self.selected_points());
+        self.simple_commit_arrangement(points, "simple-mode.248");
+    }
+
+    /// Chooses only the people who change places on the move this scene shows.
+    /// Nothing is written.
+    fn simple_select_movers(&mut self) {
+        if self.playing {
+            return;
+        }
+        let movers = simple_mover_indices(&self.document, self.current_set);
+        if movers.is_empty() {
+            return;
+        }
+        self.replace_selection(movers.into_iter().collect());
+        self.bump_simple_motion(ChromeMotion::Select);
+    }
+
     fn simple_add_scene(&mut self) {
         if !self.is_editable_set_start()
             || self.document.performers.is_empty()
@@ -1885,6 +1957,33 @@ impl DrillApp {
             .clicked()
             {
                 self.simple_toggle_scene_loop();
+            }
+            let movers = simple_mover_indices(&self.document, self.current_set);
+            if !movers.is_empty() {
+                ui.label(
+                    egui::RichText::new(
+                        i18n::registered(self.locale, "simple-mode.241")
+                            .replace("{0}", &movers.len().to_string()),
+                    )
+                    .size(15.0)
+                    .strong()
+                    .color(SIMPLE_INK),
+                );
+                if !self.playing {
+                    let chosen = self.selected.len() == movers.len()
+                        && movers.iter().all(|index| self.selected.contains(index));
+                    if simple_choice_button(
+                        ui,
+                        i18n::registered(self.locale, "simple-mode.242"),
+                        true,
+                        chosen,
+                    )
+                    .on_hover_text(i18n::registered(self.locale, "simple-mode.243"))
+                    .clicked()
+                    {
+                        self.simple_select_movers();
+                    }
+                }
             }
         });
     }
@@ -2027,6 +2126,39 @@ impl DrillApp {
             .clicked()
             {
                 self.simple_change_spacing(false);
+            }
+            if simple_choice_button(
+                ui,
+                i18n::registered(self.locale, "simple-mode.244"),
+                editable,
+                false,
+            )
+            .on_hover_text(i18n::registered(self.locale, "simple-mode.245"))
+            .clicked()
+            {
+                self.simple_center_up();
+            }
+            if simple_choice_button(
+                ui,
+                i18n::registered(self.locale, "simple-mode.246"),
+                editable,
+                false,
+            )
+            .on_hover_text(i18n::registered(self.locale, "simple-mode.247"))
+            .clicked()
+            {
+                self.simple_dress_front();
+            }
+            if simple_choice_button(
+                ui,
+                i18n::registered(self.locale, "simple-mode.248"),
+                editable,
+                false,
+            )
+            .on_hover_text(i18n::registered(self.locale, "simple-mode.249"))
+            .clicked()
+            {
+                self.simple_diagonal_up();
             }
             if self.document.sets.len() >= 2
                 && simple_choice_button(
@@ -2204,6 +2336,16 @@ impl DrillApp {
         {
             ui.label(
                 egui::RichText::new(place)
+                    .size(16.0)
+                    .strong()
+                    .color(SIMPLE_BLUE),
+            );
+        }
+        if self.selected.len() == 2
+            && let Some(gap) = self.simple_gap_caption()
+        {
+            ui.label(
+                egui::RichText::new(gap)
                     .size(16.0)
                     .strong()
                     .color(SIMPLE_BLUE),
@@ -2403,6 +2545,29 @@ impl DrillApp {
             .get(index)
             .copied()?;
         simple_place_line(&self.document.grid, point, self.locale)
+    }
+
+    /// How far apart the two chosen people are, in steps. While a count is
+    /// held, this is the picture on screen. Reading it never writes.
+    fn simple_gap_caption(&self) -> Option<String> {
+        if self.selected.len() != 2 {
+            return None;
+        }
+        let mut chosen = self.selected.iter().copied();
+        let first = chosen.next()?;
+        let second = chosen.next()?;
+        let (left, right) = if self.simple_holding_a_count() {
+            let counts = self.document.sets.get(self.current_set)?.counts.max(1);
+            let progress = (self.count_position / f32::from(counts)).clamp(0.0, 1.0);
+            let mut scratch = Vec::new();
+            self.document
+                .positions_at(self.current_set, progress, &mut scratch);
+            (*scratch.get(first)?, *scratch.get(second)?)
+        } else {
+            let positions = &self.document.sets.get(self.current_set)?.positions;
+            (*positions.get(first)?, *positions.get(second)?)
+        };
+        simple_gap_text(self.locale, &self.document.grid, left, right)
     }
 
     fn simple_mark(&mut self, before: drill_core::Revision, note: &'static str) {
@@ -4393,6 +4558,143 @@ fn simple_spacing_points(
     }
     let scaled = drill_core::editing::scale(points, factor, factor, center);
     simple_fit_points(grid, &scaled)
+}
+
+fn simple_axis_step(grid: &drill_core::GridConfig) -> f32 {
+    grid.horizontal_units / f32::from(grid.horizontal_steps.max(1))
+}
+
+/// Straight-line steps between two dots. The same step size as a walk.
+fn simple_pair_steps(grid: &drill_core::GridConfig, left: Point, right: Point) -> Option<f32> {
+    let step = simple_axis_step(grid);
+    if step <= f32::EPSILON {
+        return None;
+    }
+    Some(simple_round_quarter(
+        (left.x - right.x).hypot(left.y - right.y) / step,
+    ))
+}
+
+fn simple_gap_text(
+    locale: drill_core::Locale,
+    grid: &drill_core::GridConfig,
+    left: Point,
+    right: Point,
+) -> Option<String> {
+    let steps = simple_pair_steps(grid, left, right)?;
+    Some(i18n::registered(locale, "simple-mode.240").replace("{0}", &format_step_count(steps)))
+}
+
+/// People who leave their spot on the move this scene shows.
+fn simple_mover_indices(document: &drill_core::Document, set_index: usize) -> Vec<usize> {
+    let Some((from, to)) = simple_transition_ends(document, set_index) else {
+        return Vec::new();
+    };
+    let Some(start) = document.sets.get(from).map(|set| &set.positions) else {
+        return Vec::new();
+    };
+    let Some(end) = document.sets.get(to).map(|set| &set.positions) else {
+        return Vec::new();
+    };
+    start
+        .iter()
+        .zip(end.iter())
+        .enumerate()
+        .filter(|(_, (from_point, to_point))| {
+            (from_point.x - to_point.x).hypot(from_point.y - to_point.y) > 0.05
+        })
+        .map(|(index, _)| index)
+        .collect()
+}
+
+/// Sideways slide so the group's middle lands on the center line.
+fn simple_center_points(grid: &drill_core::GridConfig, points: &[Point]) -> Vec<Point> {
+    if points.len() < 2 {
+        return points.to_vec();
+    }
+    let step = simple_axis_step(grid);
+    if step <= f32::EPSILON {
+        return points.to_vec();
+    }
+    let center = drill_core::editing::centroid(points);
+    let dx = grid.width * 0.5 - center.x;
+    // A snap can leave the middle a fraction of a step off the 50. That
+    // still reads as the center, so a second press does not creep.
+    if dx.abs() < step * 0.75 {
+        return points.to_vec();
+    }
+    let shifted = points
+        .iter()
+        .map(|point| Point {
+            x: point.x + dx,
+            y: point.y,
+        })
+        .collect::<Vec<_>>();
+    simple_fit_points(grid, &shifted)
+}
+
+/// Same left-right spots, pulled forward to the person nearest the audience.
+/// People who already share a side-to-side spot are left where they are, so
+/// a file does not collapse into one dot.
+fn simple_dress_front_points(grid: &drill_core::GridConfig, points: &[Point]) -> Vec<Point> {
+    if points.len() < 2 {
+        return points.to_vec();
+    }
+    let step = simple_axis_step(grid);
+    if step <= f32::EPSILON {
+        return points.to_vec();
+    }
+    for (index, left) in points.iter().enumerate() {
+        if points
+            .iter()
+            .skip(index + 1)
+            .any(|right| (left.x - right.x).abs() < step * 0.75)
+        {
+            return points.to_vec();
+        }
+    }
+    let front = points.iter().map(|point| point.y).fold(f32::MAX, f32::min);
+    if points
+        .iter()
+        .all(|point| (point.y - front).abs() < step * 0.25)
+    {
+        return points.to_vec();
+    }
+    points
+        .iter()
+        .map(|point| Point {
+            x: point.x,
+            y: front,
+        })
+        .collect()
+}
+
+/// Even diagonal. Index 0 is the audience's front left; the last person is
+/// toward the back right. Neighbors stay about two steps apart.
+fn simple_diagonal_points(grid: &drill_core::GridConfig, points: &[Point]) -> Vec<Point> {
+    let count = points.len();
+    if count < 2 {
+        return points.to_vec();
+    }
+    let step = simple_axis_step(grid);
+    let gap = (step * 2.0).max(0.5);
+    let mut axis = gap / std::f32::consts::SQRT_2;
+    let along = axis * (count - 1) as f32;
+    let span = along.hypot(along);
+    let limit = grid.width.min(grid.height) * 0.72;
+    if span > limit && span > 0.0 {
+        axis *= limit / span;
+    }
+    let mid = drill_core::editing::centroid(points);
+    let start_x = mid.x - axis * (count - 1) as f32 * 0.5;
+    let start_y = mid.y - axis * (count - 1) as f32 * 0.5;
+    let laid = (0..count)
+        .map(|index| Point {
+            x: start_x + axis * index as f32,
+            y: start_y + axis * index as f32,
+        })
+        .collect::<Vec<_>>();
+    simple_fit_points(grid, &laid)
 }
 
 /// "セット 1" and "Set 2" are the names a new scene already has.
@@ -6755,6 +7057,323 @@ mod tests {
         app.simple_cycle_person(true);
         assert_eq!(app.selected.len(), 1);
         assert_eq!(app.document.sets[1].positions, arrived);
+        assert_eq!(app.history.revision(), revision);
+    }
+
+    #[test]
+    fn two_people_show_the_steps_between_them_without_writing() {
+        let mut app = empty_simple_app();
+        let (step, _) = grid_step(&app);
+        let origin = app.document.grid.snap(Point { x: 12.0, y: 16.0 });
+        app.place_performer_at(origin, true);
+        app.place_performer_at(
+            Point {
+                x: origin.x + step * 4.0,
+                y: origin.y,
+            },
+            true,
+        );
+        app.place_performer_at(
+            Point {
+                x: origin.x,
+                y: origin.y + step * 6.0,
+            },
+            true,
+        );
+        let document = app.document.clone();
+        let revision = app.history.revision();
+        app.replace_selection([0_usize, 1].into_iter().collect());
+        let gap = app.simple_gap_caption().expect("gap");
+        assert!(gap.contains('4'), "{gap}");
+        assert!(gap.contains("あいだ"), "{gap}");
+        app.replace_selection([0_usize, 2].into_iter().collect());
+        let deep = app.simple_gap_caption().expect("vertical gap");
+        assert!(deep.contains('6'), "{deep}");
+        assert_eq!(app.document, document);
+        assert_eq!(app.history.revision(), revision);
+
+        app.duplicate_current_set();
+        let set_id = app.document.sets[1].id;
+        let mover = app.document.performers[1].id;
+        let from = app.document.sets[1].positions[1];
+        assert!(app.execute_edit(
+            Edit::MovePerformers {
+                set_id,
+                performer_ids: vec![mover],
+                positions: vec![Point {
+                    x: from.x + step * 8.0,
+                    y: from.y,
+                }],
+            },
+            "apart",
+        ));
+        app.navigate_to_set(0);
+        app.nav_glide.settle();
+        app.replace_selection([0_usize, 1].into_iter().collect());
+        app.simple_step_beat(8);
+        assert!(app.simple_holding_a_count());
+        let mid = app.simple_gap_caption().expect("mid gap");
+        assert!(mid.contains('8'), "{mid}");
+        let parked = app.document.clone();
+        let parked_revision = app.history.revision();
+        assert!(app.simple_gap_caption().is_some());
+        assert_eq!(app.document, parked);
+        assert_eq!(app.history.revision(), parked_revision);
+    }
+
+    #[test]
+    fn choosing_who_moves_leaves_the_drill_unchanged() {
+        let mut app = empty_simple_app();
+        let (step, _) = grid_step(&app);
+        app.place_performer_at(Point { x: 12.0, y: 16.0 }, true);
+        app.place_performer_at(Point { x: 20.0, y: 16.0 }, true);
+        app.place_performer_at(Point { x: 28.0, y: 16.0 }, true);
+        app.duplicate_current_set();
+        let set_id = app.document.sets[1].id;
+        let mover = app.document.performers[0].id;
+        let from = app.document.sets[1].positions[0];
+        assert!(app.execute_edit(
+            Edit::MovePerformers {
+                set_id,
+                performer_ids: vec![mover],
+                positions: vec![Point {
+                    x: from.x + step * 4.0,
+                    y: from.y,
+                }],
+            },
+            "one moves",
+        ));
+        app.navigate_to_set(1);
+        app.nav_glide.settle();
+        let document = app.document.clone();
+        let revision = app.history.revision();
+        assert_eq!(simple_mover_indices(&app.document, 1), vec![0]);
+        app.replace_selection([1_usize, 2].into_iter().collect());
+        app.simple_select_movers();
+        assert_eq!(app.selected, std::iter::once(0).collect());
+        assert_eq!(app.document, document);
+        assert_eq!(app.history.revision(), revision);
+        let json = app.document.to_json().expect("json");
+        let loaded = drill_core::Document::from_json(&json).expect("reload");
+        assert_eq!(loaded.sets[1].positions, document.sets[1].positions);
+        assert_eq!(loaded.schema_version, document.schema_version);
+
+        app.playing = true;
+        app.replace_selection(std::iter::once(2).collect());
+        app.simple_select_movers();
+        assert_eq!(app.selected, std::iter::once(2).collect());
+        app.playing = false;
+        app.navigate_to_set(0);
+        app.nav_glide.settle();
+        assert_eq!(simple_mover_indices(&app.document, 0), vec![0]);
+    }
+
+    #[test]
+    fn centering_slides_sideways_and_undoes_in_one_step() {
+        let mut app = empty_simple_app();
+        let (step, _) = grid_step(&app);
+        app.place_performer_at(Point { x: 6.0, y: 12.0 }, true);
+        app.place_performer_at(
+            Point {
+                x: 6.0 + step * 4.0,
+                y: 18.0,
+            },
+            true,
+        );
+        app.place_performer_at(
+            Point {
+                x: 6.0 + step * 8.0,
+                y: 14.0,
+            },
+            true,
+        );
+        let before = app.document.sets[0].positions.clone();
+        let labels: Vec<_> = app
+            .document
+            .performers
+            .iter()
+            .map(|performer| performer.label.clone())
+            .collect();
+        let schema = app.document.schema_version;
+        let spread_before = span(&before);
+        app.simple_sync_history_notes();
+        app.simple_center_up();
+        let after = app.document.sets[0].positions.clone();
+        let middle = drill_core::editing::centroid(&after);
+        assert!((middle.x - app.document.grid.width * 0.5).abs() < step);
+        assert!((span(&after).1 - spread_before.1).abs() < step);
+        assert!(after[0].x < after[2].x);
+        assert!(on_field(&app, &after));
+        app.simple_sync_history_notes();
+        let lines = app.simple_history_lines();
+        assert!(
+            lines.iter().any(|line| line.contains("中央へ")),
+            "{lines:?}"
+        );
+        let json = app.document.to_json().expect("json");
+        let loaded = drill_core::Document::from_json(&json).expect("reload");
+        assert_eq!(loaded.sets[0].positions, after);
+        assert_eq!(loaded.schema_version, schema);
+        assert_eq!(
+            loaded
+                .performers
+                .iter()
+                .map(|performer| performer.label.as_str())
+                .collect::<Vec<_>>(),
+            labels.iter().map(String::as_str).collect::<Vec<_>>()
+        );
+        assert!(app.history.undo(&mut app.document));
+        assert_eq!(app.document.sets[0].positions, before);
+        app.simple_center_up();
+        let settled = app.document.sets[0].positions.clone();
+        let revision = app.history.revision();
+        app.simple_center_up();
+        assert_eq!(app.document.sets[0].positions, settled);
+        assert_eq!(app.history.revision(), revision);
+
+        let parked = settled[2];
+        app.replace_selection([0_usize, 1].into_iter().collect());
+        app.simple_center_up();
+        assert_eq!(app.document.sets[0].positions[2], parked);
+
+        app.playing = true;
+        let locked = app.document.sets[0].positions.clone();
+        let revision = app.history.revision();
+        app.simple_center_up();
+        assert_eq!(app.document.sets[0].positions, locked);
+        assert_eq!(app.history.revision(), revision);
+    }
+
+    #[test]
+    fn dressing_the_front_keeps_side_to_side_spots() {
+        let mut app = empty_simple_app();
+        let (step, _) = grid_step(&app);
+        let front = app.document.grid.snap(Point { x: 10.0, y: 8.0 });
+        app.place_performer_at(front, true);
+        app.place_performer_at(
+            Point {
+                x: front.x + step * 4.0,
+                y: front.y + step * 6.0,
+            },
+            true,
+        );
+        app.place_performer_at(
+            Point {
+                x: front.x + step * 8.0,
+                y: front.y + step * 3.0,
+            },
+            true,
+        );
+        let before = app.document.sets[0].positions.clone();
+        let schema = app.document.schema_version;
+        app.simple_sync_history_notes();
+        app.simple_dress_front();
+        let after = app.document.sets[0].positions.clone();
+        assert!((after[0].y - after[1].y).abs() < 0.05);
+        assert!((after[0].y - after[2].y).abs() < 0.05);
+        assert!((after[0].y - before[0].y).abs() < 0.05);
+        assert!((after[1].x - before[1].x).abs() < 0.05);
+        assert!((after[2].x - before[2].x).abs() < 0.05);
+        assert!(on_field(&app, &after));
+        app.simple_sync_history_notes();
+        let lines = app.simple_history_lines();
+        assert!(
+            lines.iter().any(|line| line.contains("前をそろえる")),
+            "{lines:?}"
+        );
+        let json = app.document.to_json().expect("json");
+        let loaded = drill_core::Document::from_json(&json).expect("reload");
+        assert_eq!(loaded.sets[0].positions, after);
+        assert_eq!(loaded.schema_version, schema);
+        assert!(app.history.undo(&mut app.document));
+        assert_eq!(app.document.sets[0].positions, before);
+
+        let mut file = empty_simple_app();
+        let spine = file.document.grid.snap(Point { x: 16.0, y: 10.0 });
+        file.place_performer_at(spine, true);
+        file.place_performer_at(
+            Point {
+                x: spine.x,
+                y: spine.y + step * 4.0,
+            },
+            true,
+        );
+        file.place_performer_at(
+            Point {
+                x: spine.x,
+                y: spine.y + step * 8.0,
+            },
+            true,
+        );
+        let filed = file.document.sets[0].positions.clone();
+        let revision = file.history.revision();
+        file.simple_dress_front();
+        assert_eq!(file.document.sets[0].positions, filed);
+        assert_eq!(file.history.revision(), revision);
+
+        app.duplicate_current_set();
+        app.navigate_to_set(0);
+        app.nav_glide.settle();
+        let set_id = app.document.sets[1].id;
+        let person = app.document.performers[0].id;
+        let moved = app.document.sets[1].positions[0];
+        assert!(app.execute_edit(
+            Edit::MovePerformers {
+                set_id,
+                performer_ids: vec![person],
+                positions: vec![Point {
+                    x: moved.x + step * 2.0,
+                    y: moved.y,
+                }],
+            },
+            "so we can step",
+        ));
+        app.simple_step_beat(4);
+        assert!(app.simple_holding_a_count());
+        let held = app.document.sets.clone();
+        let revision = app.history.revision();
+        app.simple_dress_front();
+        assert_eq!(app.document.sets, held);
+        assert_eq!(app.history.revision(), revision);
+    }
+
+    #[test]
+    fn a_diagonal_runs_from_the_front_left_and_undoes() {
+        let mut app = empty_simple_app();
+        let (step, _) = grid_step(&app);
+        app.place_performer_at(Point { x: 8.0, y: 28.0 }, true);
+        app.place_performer_at(Point { x: 30.0, y: 8.0 }, true);
+        app.place_performer_at(Point { x: 18.0, y: 22.0 }, true);
+        app.place_performer_at(Point { x: 36.0, y: 14.0 }, true);
+        let before = app.document.sets[0].positions.clone();
+        let schema = app.document.schema_version;
+        app.simple_sync_history_notes();
+        app.replace_selection([0_usize, 1, 2].into_iter().collect());
+        let parked = before[3];
+        app.simple_diagonal_up();
+        assert_eq!(app.document.sets[0].positions[3], parked);
+        let laid = &app.document.sets[0].positions[..3];
+        assert!(laid[0].x + 0.2 < laid[1].x && laid[1].x + 0.2 < laid[2].x);
+        assert!(laid[0].y + 0.2 < laid[1].y && laid[1].y + 0.2 < laid[2].y);
+        for pair in laid.windows(2) {
+            let apart = (pair[0].x - pair[1].x).hypot(pair[0].y - pair[1].y);
+            assert!(apart > step * 0.5 && apart < step * 4.0, "{apart}");
+        }
+        assert!(on_field(&app, &app.document.sets[0].positions));
+        app.simple_sync_history_notes();
+        let lines = app.simple_history_lines();
+        assert!(lines.iter().any(|line| line.contains("斜め")), "{lines:?}");
+        let json = app.document.to_json().expect("json");
+        let loaded = drill_core::Document::from_json(&json).expect("reload");
+        assert_eq!(loaded.sets[0].positions, app.document.sets[0].positions);
+        assert_eq!(loaded.schema_version, schema);
+        assert!(app.history.undo(&mut app.document));
+        assert_eq!(app.document.sets[0].positions, before);
+
+        app.playing = true;
+        let revision = app.history.revision();
+        app.simple_diagonal_up();
+        assert_eq!(app.document.sets[0].positions, before);
         assert_eq!(app.history.revision(), revision);
     }
 }
