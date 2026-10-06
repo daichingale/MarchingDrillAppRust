@@ -57,6 +57,13 @@ impl RecentProjects {
         self.persist_if_changed();
     }
 
+    /// Screenshot harness only. Empties the in-memory list without rewriting
+    /// the saved recent-files file.
+    pub(crate) fn preview_empty_for_screenshot(&mut self) {
+        self.paths.clear();
+        self.persisted = "[]".to_string();
+    }
+
     fn persist_if_changed(&mut self) {
         let json = serde_json::to_string(&self.paths).unwrap_or_default();
         if json != self.persisted {

@@ -20,6 +20,8 @@ mod egui_backend;
 mod export_state;
 #[path = "field_view.rs"]
 mod field_view;
+#[path = "glossary.rs"]
+mod glossary;
 #[path = "go_to_count.rs"]
 mod go_to_count;
 #[path = "gpu_bridge.rs"]
@@ -681,6 +683,7 @@ pub(crate) struct DrillApp {
     /// Runs the brief dissolve between color themes; idle otherwise.
     theme_fade: app_theme::ThemeFade,
     simple_mode: simple_mode::SimpleModeState,
+    glossary: glossary::GlossaryState,
     ever_played: bool,
     locale: Locale,
     crash_notice_dismissed: bool,
@@ -865,6 +868,7 @@ impl Default for DrillApp {
             app_theme: app_theme::AppTheme::default(),
             theme_fade: app_theme::ThemeFade::default(),
             simple_mode: simple_mode::SimpleModeState::default(),
+            glossary: glossary::GlossaryState::default(),
             ever_played: false,
             locale: Locale::Ja,
             crash_notice_dismissed: false,
@@ -2158,7 +2162,11 @@ impl DrillApp {
             return;
         }
         if ids.len() >= self.document.performers.len() {
-            self.status = i18n::registered(self.locale, "core-edit.018").into();
+            if self.simple_mode.enabled {
+                self.clear_simple_roster();
+            } else {
+                self.status = i18n::registered(self.locale, "core-edit.018").into();
+            }
             return;
         }
         let mut next = self.document.clone();
@@ -2188,6 +2196,40 @@ impl DrillApp {
         self.selection_stack.clear();
         self.selected.clear();
         self.status = i18n::registered(self.locale, "core-edit.012").into();
+    }
+
+    /// Simple mode starts from an empty field, so removing the last person
+    /// returns there. The full editor still keeps one performer.
+    fn clear_simple_roster(&mut self) {
+        if !self.ensure_editable_set_start() {
+            return;
+        }
+        let mut next = self.document.clone();
+        next.performers.clear();
+        for set in &mut next.sets {
+            set.positions.clear();
+            set.routes.overrides.clear();
+        }
+        for subset in &mut next.subsets {
+            subset.members.clear();
+        }
+        next.generators.clear();
+        let failure = i18n::registered(self.locale, "simple-mode.108");
+        if !self.execute_edit(
+            Edit::ReplaceDocument {
+                document: Box::new(next),
+            },
+            failure,
+        ) {
+            return;
+        }
+        self.locked_performers.clear();
+        self.hidden_performers.clear();
+        self.last_filtered_performers.clear();
+        self.visibility_focus = None;
+        self.selection_stack.clear();
+        self.selected.clear();
+        self.status = i18n::registered(self.locale, "simple-mode.109").into();
     }
 
     fn delete_current_set(&mut self) {
@@ -4291,7 +4333,13 @@ impl DrillApp {
                     self.project_state.load_legacy_json(path);
                 }
             }
-            DocumentOpenTarget::NewShow => self.begin_new_show(),
+            DocumentOpenTarget::NewShow => {
+                if self.simple_mode.enabled {
+                    self.begin_simple_show();
+                } else {
+                    self.begin_new_show();
+                }
+            }
         }
     }
 }
