@@ -549,6 +549,11 @@ impl DrillApp {
                 },
                 "qa",
             );
+            // Hold a mid-move count so the screenshot shows the readout
+            // instead of racing through the transition on the first frames.
+            self.playing = true;
+            self.speed = 0.0;
+            self.count_position = 6.0;
         }
         // The harness grabs pass 2, before a 260ms ease would finish.
         // Show the settled chrome instead of a half-played ring.
@@ -938,15 +943,13 @@ impl DrillApp {
             }
             ui.add_space(8.0);
             if ui
-                .small_button("−")
-                .on_hover_text(i18n::registered(self.locale, "simple-mode.112"))
+                .small_button(i18n::registered(self.locale, "simple-mode.112"))
                 .clicked()
             {
                 self.simple_zoom_by(0.8);
             }
             if ui
-                .small_button("＋")
-                .on_hover_text(i18n::registered(self.locale, "simple-mode.111"))
+                .small_button(i18n::registered(self.locale, "simple-mode.111"))
                 .clicked()
             {
                 self.simple_zoom_by(1.25);
