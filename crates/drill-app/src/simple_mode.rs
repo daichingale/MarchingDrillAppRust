@@ -615,7 +615,7 @@ impl DrillApp {
     /// Screenshot harness only. Seeds a frame when `DRILLFORGE_QA_SIMPLE` is
     /// `empty`, `placed`, `play`, `glossary`, `selected`, `recent`, `full`,
     /// `move`, `save`, `done`, `line`, `step`, `circle`, `nudge`, `walk`,
-    /// `shows`, `hints`, `memo`, `numbers`, or `shape`.
+    /// `shows`, `hints`, `memo`, `numbers`, `shape`, or `block`.
     pub(crate) fn apply_qa_simple_fixture(&mut self) {
         let Ok(stage) = std::env::var("DRILLFORGE_QA_SIMPLE") else {
             return;
@@ -764,6 +764,33 @@ impl DrillApp {
             self.place_performer_at(Point { x: 18.0, y: 22.0 }, true);
             self.simple_arc_up();
             self.simple_rename_scene("サビ");
+        }
+        if stage == "block" {
+            self.place_performer_at(Point { x: 8.0, y: 28.0 }, true);
+            self.place_performer_at(Point { x: 30.0, y: 8.0 }, true);
+            self.place_performer_at(Point { x: 18.0, y: 22.0 }, true);
+            self.place_performer_at(Point { x: 36.0, y: 14.0 }, true);
+            self.simple_block_up();
+            self.duplicate_current_set();
+            let step = self.document.grid.horizontal_units
+                / f32::from(self.document.grid.horizontal_steps.max(1));
+            let origin = self.document.sets[self.current_set].positions[0];
+            let set_id = self.document.sets[self.current_set].id;
+            let performer_id = self.document.performers[0].id;
+            let _ = self.execute_edit(
+                Edit::MovePerformers {
+                    set_id,
+                    performer_ids: vec![performer_id],
+                    positions: vec![Point {
+                        x: (origin.x - step * 4.0).max(0.0),
+                        y: origin.y,
+                    }],
+                },
+                "qa",
+            );
+            self.navigate_to_set(self.current_set);
+            self.nav_glide.settle();
+            self.replace_selection(std::iter::once(0).collect());
         }
         // The harness grabs pass 2, before a 260ms ease would finish.
         // Show the settled chrome instead of a half-played ring.
@@ -1464,6 +1491,16 @@ impl DrillApp {
         self.simple_commit_arrangement(points, "simple-mode.148");
     }
 
+    /// A block with the front row toward the audience. With fewer than two
+    /// chosen, everyone joins the block.
+    fn simple_block_up(&mut self) {
+        if !self.simple_arrange_targets() {
+            return;
+        }
+        let points = simple_block_points(&self.document.grid, &self.selected_points());
+        self.simple_commit_arrangement(points, "simple-mode.216");
+    }
+
     /// A circle with the first chosen person on the audience side.
     fn simple_circle_up(&mut self) {
         if !self.simple_arrange_targets() {
@@ -1676,6 +1713,17 @@ impl DrillApp {
             .clicked()
             {
                 self.simple_circle_up();
+            }
+            if simple_choice_button(
+                ui,
+                i18n::registered(self.locale, "simple-mode.216"),
+                editable,
+                false,
+            )
+            .on_hover_text(i18n::registered(self.locale, "simple-mode.217"))
+            .clicked()
+            {
+                self.simple_block_up();
             }
             if simple_choice_button(
                 ui,
@@ -1905,10 +1953,23 @@ impl DrillApp {
         let nudge = editable && !self.selected.is_empty();
         let beside = editable && !self.document.performers.is_empty();
         let clear = editable && self.simple_can_clear_move();
-        if !nudge && !beside && !clear {
+        let swap = editable && self.selected.len() == 2;
+        let restore = self.simple_can_restore_selected();
+        if !nudge && !beside && !clear && !swap && !restore {
             return;
         }
         ui.add_space(4.0);
+        if nudge
+            && self.selected.len() == 1
+            && let Some(place) = self.simple_place_caption()
+        {
+            ui.label(
+                egui::RichText::new(place)
+                    .size(16.0)
+                    .strong()
+                    .color(SIMPLE_BLUE),
+            );
+        }
         if nudge {
             ui.label(
                 egui::RichText::new(i18n::registered(self.locale, "simple-mode.158"))
@@ -1950,6 +2011,31 @@ impl DrillApp {
             {
                 self.simple_add_beside();
             }
+            if swap
+                && simple_choice_button(
+                    ui,
+                    i18n::registered(self.locale, "simple-mode.211"),
+                    true,
+                    false,
+                )
+                .on_hover_text(i18n::registered(self.locale, "simple-mode.212"))
+                .clicked()
+            {
+                self.simple_swap_pair();
+            }
+            if restore {
+                let label = if self.selected.len() == 1 {
+                    "simple-mode.213"
+                } else {
+                    "simple-mode.214"
+                };
+                if simple_choice_button(ui, i18n::registered(self.locale, label), true, false)
+                    .on_hover_text(i18n::registered(self.locale, "simple-mode.215"))
+                    .clicked()
+                {
+                    self.simple_restore_selected();
+                }
+            }
             if clear
                 && simple_choice_button(
                     ui,
@@ -1963,6 +2049,97 @@ impl DrillApp {
                 self.simple_clear_move();
             }
         });
+    }
+
+    /// Trades the two chosen people's places. One undo.
+    fn simple_swap_pair(&mut self) {
+        if self.playing || !self.is_editable_set_start() || self.selected.len() != 2 {
+            return;
+        }
+        let points = self.selected_points();
+        if points.len() != 2 {
+            return;
+        }
+        self.simple_commit_arrangement(vec![points[1], points[0]], "simple-mode.211");
+    }
+
+    /// Some chosen people, but not everyone, stand somewhere else than in
+    /// the previous scene.
+    fn simple_can_restore_selected(&self) -> bool {
+        if !self.is_editable_set_start()
+            || self.selected.is_empty()
+            || self.simple_everyone_selected()
+        {
+            return false;
+        }
+        let Some(previous_index) = self.current_set.checked_sub(1) else {
+            return false;
+        };
+        let Some(current) = self.document.sets.get(self.current_set) else {
+            return false;
+        };
+        let Some(previous) = self.document.sets.get(previous_index) else {
+            return false;
+        };
+        current.positions.len() == previous.positions.len()
+            && self
+                .selected
+                .iter()
+                .any(|&index| current.positions.get(index) != previous.positions.get(index))
+    }
+
+    /// Puts only the chosen people back on their previous-scene spots.
+    fn simple_restore_selected(&mut self) {
+        if !self.simple_can_restore_selected() {
+            return;
+        }
+        let Some(previous_index) = self.current_set.checked_sub(1) else {
+            return;
+        };
+        let Some(previous) = self
+            .document
+            .sets
+            .get(previous_index)
+            .map(|set| set.positions.clone())
+        else {
+            return;
+        };
+        let points: Vec<Point> = self
+            .selected
+            .iter()
+            .filter_map(|&index| previous.get(index).copied())
+            .collect();
+        if points.len() != self.selected.len() {
+            return;
+        }
+        let note = if self.selected.len() == 1 {
+            "simple-mode.213"
+        } else {
+            "simple-mode.214"
+        };
+        let revision = self.history.revision();
+        self.commit_layout(points);
+        if self.history.revision() != revision {
+            self.simple_mark(revision, note);
+            self.bump_simple_motion(ChromeMotion::Move);
+        }
+    }
+
+    /// Where the one chosen person stands, in steps from the center and the
+    /// front. Reading this never writes the document.
+    fn simple_place_caption(&self) -> Option<String> {
+        if self.selected.len() != 1 {
+            return None;
+        }
+        let index = *self.selected.iter().next()?;
+        let point = self
+            .document
+            .sets
+            .get(self.current_set)?
+            .positions
+            .get(index)
+            .copied()?;
+        simple_place_line(&self.document.grid, point, self.locale)
     }
 
     fn simple_mark(&mut self, before: drill_core::Revision, note: &'static str) {
@@ -3183,6 +3360,7 @@ impl DrillApp {
         };
         self.paint_simple_paths(&painter, &to_screen);
         self.paint_simple_audience(&painter, rect, &to_screen);
+        self.paint_simple_sides(&painter, rect, &to_screen);
         let from_screen = |pos: Pos2| {
             field_map.unmap(drill_render::Vec2 {
                 x: pos.x - rect.left(),
@@ -3375,24 +3553,50 @@ impl DrillApp {
     ) {
         let label = i18n::registered(self.locale, "simple-mode.146");
         let anchor = to_screen(simple_audience_point(&self.document.grid));
-        let pos = anchor + egui::Vec2::new(0.0, -16.0);
-        if !rect.contains(pos) {
-            return;
-        }
-        let galley = painter.layout_no_wrap(
-            label.to_owned(),
-            egui::FontId::proportional(13.0),
-            SIMPLE_BLUE,
-        );
-        let pad = egui::Vec2::new(10.0, 4.0);
-        let text_pos = pos - egui::Vec2::new(galley.size().x * 0.5, galley.size().y);
-        let background = egui::Rect::from_min_size(text_pos - pad, galley.size() + pad * 2.0);
-        if !rect.contains_rect(background) {
-            return;
-        }
-        painter.rect_filled(background, 10.0, Color32::from_white_alpha(235));
-        painter.galley(text_pos, galley, SIMPLE_BLUE);
+        paint_simple_chip(painter, rect, anchor, label);
     }
+
+    /// Audience's left and right, on the same front edge as 客席.
+    fn paint_simple_sides(
+        &self,
+        painter: &egui::Painter,
+        rect: egui::Rect,
+        to_screen: &impl Fn(Point) -> Pos2,
+    ) {
+        let (left, right) = simple_side_anchors(&self.document.grid);
+        paint_simple_chip(
+            painter,
+            rect,
+            to_screen(left),
+            i18n::registered(self.locale, "simple-mode.206"),
+        );
+        paint_simple_chip(
+            painter,
+            rect,
+            to_screen(right),
+            i18n::registered(self.locale, "simple-mode.207"),
+        );
+    }
+}
+
+fn paint_simple_chip(painter: &egui::Painter, rect: egui::Rect, anchor: Pos2, label: &str) {
+    let pos = anchor + egui::Vec2::new(0.0, -16.0);
+    if !rect.contains(pos) {
+        return;
+    }
+    let galley = painter.layout_no_wrap(
+        label.to_owned(),
+        egui::FontId::proportional(13.0),
+        SIMPLE_BLUE,
+    );
+    let pad = egui::Vec2::new(10.0, 4.0);
+    let text_pos = pos - egui::Vec2::new(galley.size().x * 0.5, galley.size().y);
+    let background = egui::Rect::from_min_size(text_pos - pad, galley.size() + pad * 2.0);
+    if !rect.contains_rect(background) {
+        return;
+    }
+    painter.rect_filled(background, 10.0, Color32::from_white_alpha(235));
+    painter.galley(text_pos, galley, SIMPLE_BLUE);
 }
 
 /// Front sideline, centered. Field `y = 0` is the audience side, and the
@@ -3402,6 +3606,114 @@ fn simple_audience_point(grid: &drill_core::GridConfig) -> Point {
         x: grid.width * 0.5,
         y: 0.0,
     }
+}
+
+/// Front-sideline anchors for the audience's left and right. Increasing x is
+/// right, the same way a step toward the right of the field is named.
+fn simple_side_anchors(grid: &drill_core::GridConfig) -> (Point, Point) {
+    let inset = (grid.width * 0.08).clamp(1.0, 6.0);
+    let right = (grid.max_x() - inset).max(inset);
+    (Point { x: inset, y: 0.0 }, Point { x: right, y: 0.0 })
+}
+
+/// Steps from the 50 and from the front sideline. Zero on an axis is the
+/// center, or the front itself.
+fn simple_place_line(
+    grid: &drill_core::GridConfig,
+    point: Point,
+    locale: drill_core::Locale,
+) -> Option<String> {
+    let hstep = grid.horizontal_units / f32::from(grid.horizontal_steps.max(1));
+    let vstep = grid.vertical_units / f32::from(grid.vertical_steps.max(1));
+    if hstep <= f32::EPSILON || vstep <= f32::EPSILON {
+        return None;
+    }
+    let side_steps = simple_round_quarter((point.x - grid.width * 0.5) / hstep);
+    let front_steps = simple_round_quarter(point.y / vstep).max(0.0);
+    let front = format_step_count(front_steps);
+    let across = format_step_count(side_steps.abs());
+    // The 50 is not always a grid point. Anything closer to it than to a
+    // full step away still reads as the center.
+    let detail = if side_steps.abs() < 0.75 {
+        i18n::registered(locale, "simple-mode.208").replace("{0}", &front)
+    } else if side_steps > 0.0 {
+        i18n::registered(locale, "simple-mode.209")
+            .replace("{0}", &across)
+            .replace("{1}", &front)
+    } else {
+        i18n::registered(locale, "simple-mode.210")
+            .replace("{0}", &across)
+            .replace("{1}", &front)
+    };
+    Some(i18n::registered(locale, "simple-mode.218").replace("{0}", &detail))
+}
+
+/// Columns and rows for a block that is square or a little wider than deep.
+/// A short last row is allowed. A single-file line is not, once two columns fit.
+fn simple_block_dims(count: usize) -> (usize, usize) {
+    if count <= 1 {
+        return (count.max(1), 1);
+    }
+    let mut best = (count, 1usize);
+    let mut best_key = (i32::MAX, usize::MAX);
+    for cols in 2..=count {
+        let rows = count.div_ceil(cols);
+        if rows > cols {
+            continue;
+        }
+        let leftover = cols * rows - count;
+        let ratio = ((cols as f32 / rows as f32 - 1.5).abs() * 1000.0).round() as i32;
+        let penalty = if leftover == 0 { 0 } else { 850 };
+        let key = (ratio + penalty, cols);
+        if key < best_key {
+            best_key = key;
+            best = (cols, rows);
+        }
+    }
+    best
+}
+
+/// Front row toward the audience, left to right in the order given. Gaps are
+/// two steps, and the block stays centered on the group.
+fn simple_block_points(grid: &drill_core::GridConfig, points: &[Point]) -> Vec<Point> {
+    let count = points.len();
+    if count < 2 {
+        return points.to_vec();
+    }
+    let (cols, rows) = simple_block_dims(count);
+    let step_x = grid.horizontal_units / f32::from(grid.horizontal_steps.max(1));
+    let step_y = grid.vertical_units / f32::from(grid.vertical_steps.max(1));
+    if step_x <= f32::EPSILON || step_y <= f32::EPSILON {
+        return points.to_vec();
+    }
+    let gap_x = step_x * 2.0;
+    let gap_y = step_y * 2.0;
+    let center = grid.snap(drill_core::editing::centroid(points));
+    let raw: Vec<Point> = (0..count)
+        .map(|index| {
+            let row = index / cols;
+            let col = index % cols;
+            let row_count = if row + 1 == rows {
+                count - row * cols
+            } else {
+                cols
+            };
+            Point {
+                x: center.x + (col as f32 - (row_count as f32 - 1.0) * 0.5) * gap_x,
+                y: center.y + (row as f32 - (rows as f32 - 1.0) * 0.5) * gap_y,
+            }
+        })
+        .collect();
+    simple_fit_points(grid, &raw)
+        .into_iter()
+        .map(|point| {
+            let snapped = grid.snap(point);
+            Point {
+                x: snapped.x.clamp(0.0, grid.max_x()),
+                y: snapped.y.clamp(0.0, grid.max_y()),
+            }
+        })
+        .collect()
 }
 
 /// A quarter step or less is a hold, matching drill-core continuity.
@@ -4783,6 +5095,10 @@ mod tests {
         app.simple_change_spacing(false);
         app.simple_line_up();
         app.simple_rename_scene("サビ");
+        app.replace_selection([0_usize, 1].into_iter().collect());
+        app.simple_swap_pair();
+        app.simple_block_up();
+        app.simple_restore_selected();
         assert_eq!(app.document.sets[0].positions, positions);
         assert_eq!(app.document.sets[0].name, name);
         assert_eq!(app.history.revision(), revision);
@@ -5385,5 +5701,277 @@ mod tests {
         let long = "あ".repeat(30);
         app.simple_rename_scene(&long);
         assert_eq!(app.document.sets[1].name.chars().count(), 20);
+    }
+
+    #[test]
+    fn side_labels_sit_on_the_front_sideline() {
+        let grid = drill_core::GridConfig::default();
+        let (left, right) = simple_side_anchors(&grid);
+        assert!(left.x + 1.0 < grid.width * 0.5);
+        assert!(right.x > grid.width * 0.5 + 1.0);
+        assert!(left.y.abs() < 0.01 && right.y.abs() < 0.01);
+        assert!(right.x <= grid.max_x() + 0.01);
+    }
+
+    #[test]
+    fn place_line_counts_steps_from_center_and_the_front() {
+        let mut app = empty_simple_app();
+        let (step, _) = grid_step(&app);
+        let mid_x = app.document.grid.width * 0.5;
+        let on_center = app.document.grid.snap(Point {
+            x: mid_x,
+            y: step * 8.0,
+        });
+        app.place_performer_at(on_center, true);
+        app.replace_selection(std::iter::once(0).collect());
+        let document = app.document.clone();
+        let revision = app.history.revision();
+        let middle = app.simple_place_caption().expect("center");
+        assert!(middle.contains("中央"), "{middle}");
+        assert!(middle.contains("前から"), "{middle}");
+        assert!(middle.contains('8'), "{middle}");
+        assert!(!middle.contains("右へ"), "{middle}");
+        assert!(!middle.contains("左へ"), "{middle}");
+        assert!(middle.contains("いまの場所"), "{middle}");
+        assert_eq!(app.document, document);
+        assert_eq!(app.history.revision(), revision);
+        let right_of_center = app.document.grid.snap(Point {
+            x: on_center.x + step * 4.0,
+            y: on_center.y,
+        });
+        app.place_performer_at(right_of_center, true);
+        app.replace_selection(std::iter::once(1).collect());
+        let right = app.simple_place_caption().expect("right");
+        assert!(right.contains("右へ"), "{right}");
+        assert!(right.contains("前から"), "{right}");
+        assert!(app.document.sets[0].positions[1].x > mid_x + step * 2.0);
+        let left_of_center = app.document.grid.snap(Point {
+            x: on_center.x - step * 4.0,
+            y: on_center.y,
+        });
+        let set_id = app.document.sets[0].id;
+        let performer_id = app.document.performers[0].id;
+        assert!(app.execute_edit(
+            Edit::MovePerformers {
+                set_id,
+                performer_ids: vec![performer_id],
+                positions: vec![left_of_center],
+            },
+            "left",
+        ));
+        let left = simple_place_line(&app.document.grid, left_of_center, app.locale).expect("left");
+        assert!(left.contains("左へ"), "{left}");
+        assert!(left.contains("前から"), "{left}");
+        let quiet = simple_place_line(&app.document.grid, left_of_center, app.locale);
+        assert_eq!(quiet.as_deref(), Some(left.as_str()));
+        assert_eq!(app.document.sets[0].positions[0], left_of_center);
+        assert!(left_of_center.x + step * 2.0 < mid_x);
+    }
+
+    #[test]
+    fn a_block_faces_the_audience_and_undoes() {
+        let mut app = empty_simple_app();
+        let spots = [
+            Point { x: 10.0, y: 30.0 },
+            Point { x: 40.0, y: 12.0 },
+            Point { x: 22.0, y: 24.0 },
+            Point { x: 48.0, y: 18.0 },
+            Point { x: 16.0, y: 36.0 },
+            Point { x: 34.0, y: 8.0 },
+        ];
+        for spot in spots {
+            app.place_performer_at(spot, true);
+        }
+        let before = app.document.sets[0].positions.clone();
+        let labels: Vec<_> = app
+            .document
+            .performers
+            .iter()
+            .map(|performer| performer.label.clone())
+            .collect();
+        app.simple_sync_history_notes();
+        app.simple_block_up();
+        let positions = app.document.sets[0].positions.clone();
+        let (step_x, step_y) = grid_step(&app);
+        for index in 0..3 {
+            assert!((positions[index].y - positions[0].y).abs() < 0.05);
+            assert!((positions[index + 3].y - positions[3].y).abs() < 0.05);
+        }
+        assert!(positions[0].y + step_y < positions[3].y);
+        assert!(positions[0].x + step_x < positions[1].x);
+        assert!(positions[1].x + step_x < positions[2].x);
+        assert!(positions[3].x + step_x < positions[4].x);
+        assert!((positions[1].x - positions[0].x - step_x * 2.0).abs() < 0.08);
+        assert!((positions[3].y - positions[0].y - step_y * 2.0).abs() < 0.08);
+        assert!(on_field(&app, &positions));
+        assert!(app.document.sets[0].shape.is_none());
+        assert_eq!(
+            app.document
+                .performers
+                .iter()
+                .map(|performer| performer.label.as_str())
+                .collect::<Vec<_>>(),
+            labels.iter().map(String::as_str).collect::<Vec<_>>()
+        );
+        app.simple_sync_history_notes();
+        let lines = app.simple_history_lines();
+        assert!(
+            lines.iter().any(|line| line.contains("かたまり")),
+            "{lines:?}"
+        );
+        let json = app.document.to_json().expect("json");
+        let loaded = drill_core::Document::from_json(&json).expect("reload");
+        assert_eq!(loaded.sets[0].positions, positions);
+        assert_eq!(loaded.schema_version, app.document.schema_version);
+        assert!(app.history.undo(&mut app.document));
+        assert_eq!(app.document.sets[0].positions, before);
+
+        let mut five = empty_simple_app();
+        for spot in spots.iter().take(5) {
+            five.place_performer_at(*spot, true);
+        }
+        five.simple_block_up();
+        let five_points = &five.document.sets[0].positions;
+        assert!((five_points[0].y - five_points[2].y).abs() < 0.05);
+        assert!(five_points[0].y + 0.5 < five_points[3].y);
+        assert!((five_points[3].y - five_points[4].y).abs() < 0.05);
+        let front_mid = (five_points[0].x + five_points[2].x) * 0.5;
+        let back_mid = (five_points[3].x + five_points[4].x) * 0.5;
+        assert!((front_mid - back_mid).abs() < 0.2);
+        assert!(on_field(&five, five_points));
+
+        let mut part = empty_simple_app();
+        for spot in spots {
+            part.place_performer_at(spot, true);
+        }
+        let parked = part.document.sets[0].positions[4..].to_vec();
+        part.replace_selection([0_usize, 1, 2, 3].into_iter().collect());
+        part.simple_block_up();
+        assert_eq!(&part.document.sets[0].positions[4..], parked.as_slice());
+        assert!(
+            (part.document.sets[0].positions[0].y - part.document.sets[0].positions[1].y).abs()
+                < 0.05
+        );
+        assert!(part.document.sets[0].positions[0].y + 0.5 < part.document.sets[0].positions[2].y);
+
+        let mut edge = empty_simple_app();
+        edge.place_performer_at(Point { x: 8.0, y: 0.0 }, true);
+        edge.place_performer_at(Point { x: 14.0, y: 0.0 }, true);
+        edge.place_performer_at(Point { x: 20.0, y: 0.0 }, true);
+        edge.place_performer_at(Point { x: 26.0, y: 0.0 }, true);
+        edge.simple_block_up();
+        let edged = &edge.document.sets[0].positions;
+        assert!(on_field(&edge, edged));
+        let distinct = edged
+            .iter()
+            .map(|point| {
+                (
+                    (point.x * 100.0).round() as i32,
+                    (point.y * 100.0).round() as i32,
+                )
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(distinct.len(), 4);
+    }
+
+    #[test]
+    fn swapping_two_people_is_one_undo() {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 12.0, y: 16.0 }, true);
+        app.place_performer_at(Point { x: 20.0, y: 16.0 }, true);
+        app.place_performer_at(Point { x: 28.0, y: 24.0 }, true);
+        let before = app.document.sets[0].positions.clone();
+        app.replace_selection([0_usize, 2].into_iter().collect());
+        app.simple_sync_history_notes();
+        app.simple_swap_pair();
+        assert_eq!(app.document.sets[0].positions[0], before[2]);
+        assert_eq!(app.document.sets[0].positions[2], before[0]);
+        assert_eq!(app.document.sets[0].positions[1], before[1]);
+        app.simple_sync_history_notes();
+        let lines = app.simple_history_lines();
+        assert!(
+            lines.iter().any(|line| line.contains("入れ替え")),
+            "{lines:?}"
+        );
+        let json = app.document.to_json().expect("json");
+        let loaded = drill_core::Document::from_json(&json).expect("reload");
+        assert_eq!(loaded.sets[0].positions, app.document.sets[0].positions);
+        assert!(app.history.undo(&mut app.document));
+        assert_eq!(app.document.sets[0].positions, before);
+        app.replace_selection(std::iter::once(1).collect());
+        app.simple_swap_pair();
+        assert_eq!(app.document.sets[0].positions, before);
+    }
+
+    #[test]
+    fn restoring_chosen_people_leaves_the_others_where_they_moved() {
+        let mut app = moved_pair();
+        let set_id = app.document.sets[1].id;
+        let other = app.document.performers[1].id;
+        let other_from = app.document.sets[1].positions[1];
+        let other_to = Point {
+            x: other_from.x + 6.0,
+            y: other_from.y,
+        };
+        assert!(app.execute_edit(
+            Edit::MovePerformers {
+                set_id,
+                performer_ids: vec![other],
+                positions: vec![other_to],
+            },
+            "other",
+        ));
+        app.navigate_to_set(1);
+        app.nav_glide.settle();
+        let previous = app.document.sets[0].positions.clone();
+        let moved = app.document.sets[1].positions.clone();
+        assert_ne!(moved[0], previous[0]);
+        assert_ne!(moved[1], previous[1]);
+        app.replace_selection(std::iter::once(0).collect());
+        assert!(app.simple_can_restore_selected());
+        app.simple_sync_history_notes();
+        app.simple_restore_selected();
+        assert_eq!(app.document.sets[1].positions[0], previous[0]);
+        assert_eq!(app.document.sets[1].positions[1], other_to);
+        assert!(!app.simple_can_restore_selected());
+        app.simple_sync_history_notes();
+        let lines = app.simple_history_lines();
+        assert!(
+            lines.iter().any(|line| line.contains("この人を戻す")),
+            "{lines:?}"
+        );
+        let json = app.document.to_json().expect("json");
+        let loaded = drill_core::Document::from_json(&json).expect("reload");
+        assert_eq!(loaded.sets[1].positions[0], previous[0]);
+        assert_eq!(loaded.sets[1].positions[1], other_to);
+        assert!(app.history.undo(&mut app.document));
+        app.simple_sync_history_notes();
+        assert_eq!(app.document.sets[1].positions, moved);
+
+        app.replace_selection([0_usize, 1].into_iter().collect());
+        assert!(!app.simple_can_restore_selected());
+        app.simple_restore_selected();
+        assert_eq!(app.document.sets[1].positions, moved);
+        app.navigate_to_set(0);
+        app.nav_glide.settle();
+        app.replace_selection(std::iter::once(0).collect());
+        assert!(!app.simple_can_restore_selected());
+
+        app.navigate_to_set(1);
+        app.nav_glide.settle();
+        app.place_performer_at(Point { x: 36.0, y: 20.0 }, true);
+        let stayed = app.document.sets[1].positions[2];
+        app.replace_selection([0_usize, 1].into_iter().collect());
+        assert!(app.simple_can_restore_selected());
+        app.simple_restore_selected();
+        assert_eq!(app.document.sets[1].positions[0], previous[0]);
+        assert_eq!(app.document.sets[1].positions[1], previous[1]);
+        assert_eq!(app.document.sets[1].positions[2], stayed);
+        app.simple_sync_history_notes();
+        let many = app.simple_history_lines();
+        assert!(
+            many.iter().any(|line| line.contains("選んだ人を戻す")),
+            "{many:?}"
+        );
     }
 }
