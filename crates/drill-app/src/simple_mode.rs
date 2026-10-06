@@ -1959,7 +1959,7 @@ impl DrillApp {
         let mut open = true;
         let mut copy = false;
         let copied = self.simple_mode.memo_copied;
-        egui::Window::new(i18n::registered(self.locale, "simple-mode.178"))
+        egui::Window::new(i18n::registered(self.locale, "simple-mode.192"))
             .id(egui::Id::new("simple-scene-memo"))
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .collapsible(false)

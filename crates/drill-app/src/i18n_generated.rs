@@ -3012,6 +3012,8 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "simple-mode.190") => "Name",
         (Locale::Ja, "simple-mode.191") => "拍の数",
         (Locale::En, "simple-mode.191") => "Counts",
+        (Locale::Ja, "simple-mode.192") => "この場面のメモ",
+        (Locale::En, "simple-mode.192") => "Notes for this scene",
         _ => "[missing message]",
     }
 }
