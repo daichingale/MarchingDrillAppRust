@@ -2081,6 +2081,16 @@ impl History {
         self.cursor < self.commands.len()
     }
 
+    /// How many edits `undo` would walk back. Session UI uses this to name
+    /// the next undo without storing a second history.
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+
+    pub fn redo_len(&self) -> usize {
+        self.commands.len() - self.cursor
+    }
+
     pub fn mark_saved(&mut self) {
         self.savepoint = Some(self.cursor);
     }
