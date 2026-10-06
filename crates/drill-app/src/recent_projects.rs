@@ -64,6 +64,13 @@ impl RecentProjects {
         self.persisted = "[]".to_string();
     }
 
+    /// Screenshot harness only. Shows these paths without rewriting the saved
+    /// recent-files file, as long as a later prune does not change the list.
+    pub(crate) fn preview_paths_for_screenshot(&mut self, paths: Vec<PathBuf>) {
+        self.paths = paths;
+        self.persisted = serde_json::to_string(&self.paths).unwrap_or_default();
+    }
+
     fn persist_if_changed(&mut self) {
         let json = serde_json::to_string(&self.paths).unwrap_or_default();
         if json != self.persisted {
