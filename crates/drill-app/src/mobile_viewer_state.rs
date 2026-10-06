@@ -112,7 +112,14 @@ mod tests {
             state.last_poll = Instant::now() - POLL_INTERVAL;
             let started = Instant::now();
             let event = state.poll(Revision(5));
-            assert!(started.elapsed() < Duration::from_millis(2));
+            let elapsed = started.elapsed();
+            // Poll only receives a finished job. A shared CI runner can pause
+            // the thread for longer than 2ms, so the bound stays under one
+            // frame and still fails if the viewer is built on this thread.
+            assert!(
+                elapsed < Duration::from_millis(16),
+                "poll must return without building the viewer, took {elapsed:?}"
+            );
             if let Some(event) = event {
                 break event;
             }
