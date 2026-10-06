@@ -137,6 +137,7 @@ pub fn fetch_manifest() -> Result<Manifest, TransportError> {
     Manifest::parse(&bytes).map_err(TransportError::InvalidManifest)
 }
 
+#[cfg(any(windows, test))]
 fn validate_response(
     status: u16,
     content_type: &str,

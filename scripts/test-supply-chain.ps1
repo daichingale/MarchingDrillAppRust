@@ -2,6 +2,13 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Push-Location $root
 try {
+    # `--locked` is the consistency check. A cold CI cache has no crates.io
+    # index, and `--offline` then fails with "no matching package" even when
+    # Cargo.lock already matches the manifests. Fetch the locked set first so
+    # the index exists, then prove resolution stays offline and unchanged.
+    cargo fetch --locked
+    if ($LASTEXITCODE -ne 0) { throw "Cargo.lock is inconsistent with workspace manifests" }
+
     cargo metadata --locked --offline --format-version 1 | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Cargo.lock is inconsistent with workspace manifests" }
 
@@ -16,11 +23,13 @@ try {
         Where-Object { $_.FullName -notmatch '[\\/]benches[\\/]' } |
         Select-String -Pattern '\bunsafe\s*(\{|fn\b|impl\b|extern\b|trait\b)' |
         Where-Object {
-            $_.Path -notlike '*drill-updater\src\transport.rs' -and
-            $_.Path -notlike '*drill-project\src\lib.rs' -and
+            # Match both Windows and Linux path separators. CI runs this script
+            # under pwsh on every OS, and -like '\' patterns never match '/'.
+            $_.Path -notmatch 'drill-updater[/\\]src[/\\]transport\.rs$' -and
+            $_.Path -notmatch 'drill-project[/\\]src[/\\]lib\.rs$' -and
             # Diagnostic-only Windows PSAPI FFI. It reads this process' memory
             # counters into a fully initialized, layout-compatible structure.
-            $_.Path -notlike '*drill-audio\examples\audio_device_diagnostic.rs'
+            $_.Path -notmatch 'drill-audio[/\\]examples[/\\]audio_device_diagnostic\.rs$'
         })
     if ($unsafe.Count -ne 0) {
         $unsafe | ForEach-Object { Write-Error "$($_.Path):$($_.LineNumber): unexpected unsafe code" }

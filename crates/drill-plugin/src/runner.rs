@@ -363,7 +363,10 @@ mod tests {
                 "-NoProfile".into(),
                 "-NonInteractive".into(),
                 "-Command".into(),
-                format!("[Console]::Out.Write('{}')", response.replace('\'', "''")),
+                format!(
+                    "$null = [Console]::In.ReadToEnd(); [Console]::Out.Write('{}')",
+                    response.replace('\'', "''")
+                ),
             ],
             "large" => vec![
                 "-NoProfile".into(),
@@ -383,15 +386,22 @@ mod tests {
                 "-Command".into(),
                 "Start-Sleep -Seconds 2".into(),
             ],
-            _ => vec!["-NoProfile".into(), "-Command".into(), "exit 7".into()],
+            _ => vec![
+                "-NoProfile".into(),
+                "-Command".into(),
+                "$null = [Console]::In.ReadToEnd(); exit 7".into(),
+            ],
         };
         #[cfg(not(windows))]
         let arguments = match mode {
-            "ok" => vec!["-c".into(), format!("printf '%s' '{response}'")],
+            "ok" => vec![
+                "-c".into(),
+                format!("cat >/dev/null; printf '%s' '{response}'"),
+            ],
             "large" => vec!["-c".into(), "yes 1234567890 | head -1000".into()],
             "stderr-large" => vec!["-c".into(), "yes 1234567890 | head -1000 >&2".into()],
             "wait" => vec!["-c".into(), "sleep 2".into()],
-            _ => vec!["-c".into(), "exit 7".into()],
+            _ => vec!["-c".into(), "cat >/dev/null; exit 7".into()],
         };
         RunnerSpec {
             executable,

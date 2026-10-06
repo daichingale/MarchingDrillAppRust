@@ -72,7 +72,7 @@ the staged literal-pair API and direct locale conditionals.
 | legacy.0064 | tr | `inspector_media.rs:381` | キャンセル | Cancel |
 | legacy.0065 | conditional | `subset_snapshot_state.rs:298` | キャンセル | Cancel |
 | legacy.0066 | tr | `inspector_media.rs:596` | クリック / カウントイン | Click / Count-in |
-| legacy.0067 | tr | `onboarding.rs:211` | クリック: 1人選択　Ctrl/Cmd+クリック: 追加選択 | Click: select one   Ctrl/Cmd+click: add to selection |
+| legacy.0067 | tr | `onboarding.rs:211` | クリック: 1人選択　Shift / Ctrl/Cmd+クリック: 追加または解除 | Click: select one   Shift or Ctrl/Cmd-click: add or remove |
 | legacy.0068 | tr | `workspace_inspector.rs:130` | クリック／空白から囲む／Ctrl・Cmdで追加選択 | Click, drag a marquee from empty space, or Ctrl/Cmd-click to add. |
 | legacy.0069 | tr | `inspector_media.rs:601` | クリックを再生 | Play Click |
 | legacy.0070 | tr | `inspector_media.rs:648` | クリック音は再生出力へ反映されます。設定変更時だけ再生成します。 | The click is mixed into playback and rebuilt only when settings change. |
@@ -214,7 +214,7 @@ the staged literal-pair API and direct locale conditionals.
 | legacy.0206 | tr | `app_state.rs:1890` | 曲全体 | Whole Show |
 | legacy.0207 | tr | `app_ui.rs:1109` | 曲全体 | Whole Show |
 | legacy.0208 | conditional | `app_state.rs:1599` | 区切り | Delimiter |
-| legacy.0209 | tr | `onboarding.rs:212` | 空白からドラッグ: 範囲選択　演者をドラッグ: 隊形を移動 | Drag from empty space: box-select   Drag a performer: move formation |
+| legacy.0209 | tr | `onboarding.rs:212` | 選択: 空白ドラッグで囲み選択。移動: 空欄からでも移動。配置: クリックで追加 | Select: drag empty space to marquee. Move: drag from empty space. Place: click to add |
 | legacy.0210 | conditional | `workspace_inspector.rs:86` | 空欄の数値はテンポマップから自動計算します。編集はUndo/Redoできます。 | Blank numeric fields follow the tempo map. Changes support Undo/Redo. |
 | legacy.0211 | tr | `app_state.rs:1514` | 警告 | Warnings |
 | legacy.0212 | tr | `inspector_media.rs:660` | 欠落した音源を再リンク… | Relink Missing Audio… |

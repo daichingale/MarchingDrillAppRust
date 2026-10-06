@@ -8,8 +8,8 @@ license.workspace = true
 
 [dev-dependencies]
 blake3 = "1.8.6"
-drill-core = { path = "../drill-core" }
-drill-project = { path = "../drill-project" }
+drill-core = { path = "../drill-core", version = "0.1.0" }
+drill-project = { path = "../drill-project", version = "0.1.0" }
 
 [[bench]]
 name = "ui_latency"

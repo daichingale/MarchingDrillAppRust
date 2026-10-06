@@ -3,7 +3,7 @@
 Generated from committed `Cargo.lock` and Cargo package metadata. Do not edit manually.
 Regenerate with `pwsh ./scripts/generate-third-party-licenses.ps1`.
 
-Cargo.lock SHA-256: `b32caf74757cf1a9b2cb64123318160f186cf861945f372044ad27b6ba948404`
+Cargo.lock SHA-256: `325f971aee8be0071c3520a0a1cd74f009c0735a4ac65e879ebd478ea44c4bec`
 
 | Package | Version | SPDX license expression | Source |
 |---|---:|---|---|
@@ -66,7 +66,7 @@ Cargo.lock SHA-256: `b32caf74757cf1a9b2cb64123318160f186cf861945f372044ad27b6ba9
 | cfg_aliases | 0.2.2 | MIT | registry+https://github.com/rust-lang/crates.io-index |
 | cfg-if | 1.0.4 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | cgl | 0.3.2 | MIT / Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
-| chacha20 | 0.10.1 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
+| chacha20 | 0.10.2 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | clipboard-win | 5.4.1 | BSL-1.0 | registry+https://github.com/rust-lang/crates.io-index |
 | codespan-reporting | 0.13.1 | Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | color | 0.3.3 | Apache-2.0 OR MIT | registry+https://github.com/rust-lang/crates.io-index |
@@ -74,7 +74,6 @@ Cargo.lock SHA-256: `b32caf74757cf1a9b2cb64123318160f186cf861945f372044ad27b6ba9
 | concurrent-queue | 2.5.0 | Apache-2.0 OR MIT | registry+https://github.com/rust-lang/crates.io-index |
 | const-oid | 0.10.2 | Apache-2.0 OR MIT | registry+https://github.com/rust-lang/crates.io-index |
 | constant_time_eq | 0.4.2 | CC0-1.0 OR MIT-0 OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
-| core-foundation | 0.10.1 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | core-foundation | 0.9.4 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | core-foundation-sys | 0.8.7 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | core-graphics | 0.23.2 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
@@ -290,7 +289,7 @@ Cargo.lock SHA-256: `b32caf74757cf1a9b2cb64123318160f186cf861945f372044ad27b6ba9
 | profiling | 1.0.18 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | pxfm | 0.1.30 | BSD-3-Clause OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | quick-error | 2.0.1 | MIT/Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
-| quick-xml | 0.39.4 | MIT | registry+https://github.com/rust-lang/crates.io-index |
+| quick-xml | 0.41.0 | MIT | registry+https://github.com/rust-lang/crates.io-index |
 | quote | 1.0.47 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | r-efi | 5.3.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later | registry+https://github.com/rust-lang/crates.io-index |
 | r-efi | 6.0.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later | registry+https://github.com/rust-lang/crates.io-index |
@@ -306,7 +305,7 @@ Cargo.lock SHA-256: `b32caf74757cf1a9b2cb64123318160f186cf861945f372044ad27b6ba9
 | regex-lite | 0.1.9 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | renderdoc-sys | 1.1.0 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | rfd | 0.17.2 | MIT | registry+https://github.com/rust-lang/crates.io-index |
-| rtrb | 0.3.4 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
+| rtrb | 0.3.5 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | rustc_version | 0.4.1 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | rustc-hash | 1.1.0 | Apache-2.0/MIT | registry+https://github.com/rust-lang/crates.io-index |
 | rustc-hash | 2.1.3 | Apache-2.0 OR MIT | registry+https://github.com/rust-lang/crates.io-index |
@@ -404,11 +403,11 @@ Cargo.lock SHA-256: `b32caf74757cf1a9b2cb64123318160f186cf861945f372044ad27b6ba9
 | wayland-protocols-misc | 0.3.12 | MIT | registry+https://github.com/rust-lang/crates.io-index |
 | wayland-protocols-plasma | 0.3.12 | MIT | registry+https://github.com/rust-lang/crates.io-index |
 | wayland-protocols-wlr | 0.3.12 | MIT | registry+https://github.com/rust-lang/crates.io-index |
-| wayland-scanner | 0.31.10 | MIT | registry+https://github.com/rust-lang/crates.io-index |
+| wayland-scanner | 0.31.11 | MIT | registry+https://github.com/rust-lang/crates.io-index |
 | wayland-sys | 0.31.11 | MIT | registry+https://github.com/rust-lang/crates.io-index |
 | web-sys | 0.3.103 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | web-time | 1.1.0 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
-| webbrowser | 1.2.1 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
+| webbrowser | 1.2.4 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | weezl | 0.1.12 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | wgpu | 29.0.4 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | wgpu-core | 29.0.4 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |

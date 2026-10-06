@@ -18,6 +18,11 @@
 *.toml               text eol=lf
 *.sh                 text eol=lf
 
+# Cargo.lock is hashed into THIRD_PARTY_LICENSES.md. Both files are compared
+# across operating systems, so a Windows checkout must not rewrite them as CRLF.
+Cargo.lock           text eol=lf
+THIRD_PARTY_LICENSES.md text eol=lf
+
 # Binary assets: never touch these.
 *.ttf                binary
 *.otf                binary
