@@ -2912,6 +2912,26 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         }
         (Locale::Ja, "simple-mode.145") => "半分の速さで見ます",
         (Locale::En, "simple-mode.145") => "Watch at half speed",
+        (Locale::Ja, "simple-mode.146") => "客席",
+        (Locale::En, "simple-mode.146") => "Audience",
+        (Locale::Ja, "simple-mode.147") => "青い線は、この人が動く道です",
+        (Locale::En, "simple-mode.147") => "The blue line shows where this person walks",
+        (Locale::Ja, "simple-mode.148") => "縦一列",
+        (Locale::En, "simple-mode.148") => "Column",
+        (Locale::Ja, "simple-mode.149") => "先頭が客席側になる縦一列に並べます",
+        (Locale::En, "simple-mode.149") => {
+            "Line them up front to back, with the first person toward the audience"
+        }
+        (Locale::Ja, "simple-mode.150") => "円に並べる",
+        (Locale::En, "simple-mode.150") => "Circle",
+        (Locale::Ja, "simple-mode.151") => "先頭が客席側になる円に並べます",
+        (Locale::En, "simple-mode.151") => {
+            "Stand them in a circle, with the first person toward the audience"
+        }
+        (Locale::Ja, "simple-mode.152") => "左右",
+        (Locale::En, "simple-mode.152") => "Swap",
+        (Locale::Ja, "simple-mode.153") => "左右を入れ替えます",
+        (Locale::En, "simple-mode.153") => "Swap left and right",
         _ => "[missing message]",
     }
 }

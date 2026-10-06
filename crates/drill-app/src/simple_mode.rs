@@ -592,7 +592,7 @@ impl DrillApp {
 
     /// Screenshot harness only. Seeds a frame when `DRILLFORGE_QA_SIMPLE` is
     /// `empty`, `placed`, `play`, `glossary`, `selected`, `recent`, `full`,
-    /// `move`, `save`, `done`, `line`, or `step`.
+    /// `move`, `save`, `done`, `line`, `step`, or `circle`.
     pub(crate) fn apply_qa_simple_fixture(&mut self) {
         let Ok(stage) = std::env::var("DRILLFORGE_QA_SIMPLE") else {
             return;
@@ -658,6 +658,14 @@ impl DrillApp {
             self.place_performer_at(Point { x: 8.0, y: 28.0 }, true);
             self.place_performer_at(Point { x: 30.0, y: 8.0 }, true);
             self.simple_line_up();
+        }
+        if stage == "circle" {
+            self.place_performer_at(Point { x: 8.0, y: 28.0 }, true);
+            self.place_performer_at(Point { x: 30.0, y: 8.0 }, true);
+            self.simple_circle_up();
+            self.duplicate_current_set();
+            self.navigate_to_set(0);
+            self.nav_glide.settle();
         }
         if stage == "step" {
             self.duplicate_current_set();
@@ -728,6 +736,16 @@ impl DrillApp {
                     self.simple_beat_row(ui);
                     self.simple_rehearsal_row(ui);
                     self.simple_arrange_row(ui);
+                    if !self.playing
+                        && !simple_move_paths(&self.document, self.current_set).is_empty()
+                    {
+                        ui.add_space(4.0);
+                        ui.label(
+                            egui::RichText::new(i18n::registered(self.locale, "simple-mode.147"))
+                                .size(14.0)
+                                .color(super::app_theme::SECONDARY_TEXT),
+                        );
+                    }
                     if self.simple_mode.overlap_note {
                         ui.add_space(6.0);
                         ui.label(
@@ -1202,14 +1220,31 @@ impl DrillApp {
         }
     }
 
-    /// Lines the chosen people up, left to right in the order they were
-    /// placed. With fewer than two chosen, everyone lines up.
-    fn simple_line_up(&mut self) {
+    /// Uses the chosen people, or everyone when fewer than two are chosen.
+    /// Refuses a mid-count picture so a reshape cannot bake a preview.
+    fn simple_arrange_targets(&mut self) -> bool {
         if !self.is_editable_set_start() || self.document.performers.len() < 2 {
-            return;
+            return false;
         }
         if self.selected.len() < 2 {
             self.replace_selection((0..self.document.performers.len()).collect());
+        }
+        self.selected.len() >= 2
+    }
+
+    fn simple_commit_arrangement(&mut self, points: Vec<Point>) {
+        let revision = self.history.revision();
+        self.commit_layout(points);
+        if self.history.revision() != revision {
+            self.bump_simple_motion(ChromeMotion::Move);
+        }
+    }
+
+    /// Lines the chosen people up, left to right in the order they were
+    /// placed. With fewer than two chosen, everyone lines up.
+    fn simple_line_up(&mut self) {
+        if !self.simple_arrange_targets() {
+            return;
         }
         let count = self.selected.len();
         let grid = self.document.grid.clone();
@@ -1222,11 +1257,7 @@ impl DrillApp {
         let step = grid.horizontal_units / f32::from(grid.horizontal_steps.max(1));
         let ideal = step * 2.0;
         let span = (ideal * count.saturating_sub(1) as f32).min(grid.width * 0.72);
-        let gap = if count <= 1 {
-            0.0
-        } else {
-            span / (count - 1) as f32
-        };
+        let gap = span / (count - 1) as f32;
         let left = ((grid.width - span) * 0.5).max(0.0);
         let points = (0..count)
             .map(|index| Point {
@@ -1234,11 +1265,35 @@ impl DrillApp {
                 y,
             })
             .collect();
-        let revision = self.history.revision();
-        self.commit_layout(points);
-        if self.history.revision() != revision {
-            self.bump_simple_motion(ChromeMotion::Move);
+        self.simple_commit_arrangement(points);
+    }
+
+    /// A file facing the audience: the first chosen person stands closest
+    /// to the front sideline.
+    fn simple_file_up(&mut self) {
+        if !self.simple_arrange_targets() {
+            return;
         }
+        let points = simple_file_points(&self.document.grid, &self.selected_points());
+        self.simple_commit_arrangement(points);
+    }
+
+    /// A circle with the first chosen person on the audience side.
+    fn simple_circle_up(&mut self) {
+        if !self.simple_arrange_targets() {
+            return;
+        }
+        let points = simple_circle_points(&self.document.grid, &self.selected_points());
+        self.simple_commit_arrangement(points);
+    }
+
+    /// Swaps left and right around the group's own center.
+    fn simple_swap_sides(&mut self) {
+        if !self.simple_arrange_targets() {
+            return;
+        }
+        let points = drill_core::editing::flip_horizontal(&self.selected_points());
+        self.simple_commit_arrangement(points);
     }
 
     fn simple_add_scene(&mut self) {
@@ -1357,6 +1412,39 @@ impl DrillApp {
             .clicked()
             {
                 self.simple_line_up();
+            }
+            if simple_choice_button(
+                ui,
+                i18n::registered(self.locale, "simple-mode.148"),
+                editable,
+                false,
+            )
+            .on_hover_text(i18n::registered(self.locale, "simple-mode.149"))
+            .clicked()
+            {
+                self.simple_file_up();
+            }
+            if simple_choice_button(
+                ui,
+                i18n::registered(self.locale, "simple-mode.150"),
+                editable,
+                false,
+            )
+            .on_hover_text(i18n::registered(self.locale, "simple-mode.151"))
+            .clicked()
+            {
+                self.simple_circle_up();
+            }
+            if simple_choice_button(
+                ui,
+                i18n::registered(self.locale, "simple-mode.152"),
+                editable,
+                false,
+            )
+            .on_hover_text(i18n::registered(self.locale, "simple-mode.153"))
+            .clicked()
+            {
+                self.simple_swap_sides();
             }
             if self.document.sets.len() >= 2
                 && simple_choice_button(
@@ -2146,6 +2234,8 @@ impl DrillApp {
             let v = field_map.map(point);
             Pos2::new(rect.left() + v.x, rect.top() + v.y)
         };
+        self.paint_simple_paths(&painter, &to_screen);
+        self.paint_simple_audience(&painter, rect, &to_screen);
         let from_screen = |pos: Pos2| {
             field_map.unmap(drill_render::Vec2 {
                 x: pos.x - rect.left(),
@@ -2314,6 +2404,122 @@ impl DrillApp {
             }
         }
     }
+
+    fn paint_simple_paths(&self, painter: &egui::Painter, to_screen: &impl Fn(Point) -> Pos2) {
+        if self.drag_preview.is_some() {
+            return;
+        }
+        let ink = Color32::from_rgba_unmultiplied(20, 96, 200, 180);
+        for (start, end) in simple_move_paths(&self.document, self.current_set) {
+            let from = to_screen(start);
+            let to = to_screen(end);
+            painter.line_segment([from, to], Stroke::new(2.5, ink));
+            painter.circle_stroke(to, 8.0, Stroke::new(1.5, ink));
+        }
+    }
+
+    fn paint_simple_audience(
+        &self,
+        painter: &egui::Painter,
+        rect: egui::Rect,
+        to_screen: &impl Fn(Point) -> Pos2,
+    ) {
+        let label = i18n::registered(self.locale, "simple-mode.146");
+        let anchor = to_screen(simple_audience_point(&self.document.grid));
+        let pos = anchor + egui::Vec2::new(0.0, -16.0);
+        if !rect.contains(pos) {
+            return;
+        }
+        let galley = painter.layout_no_wrap(
+            label.to_owned(),
+            egui::FontId::proportional(13.0),
+            SIMPLE_BLUE,
+        );
+        let pad = egui::Vec2::new(10.0, 4.0);
+        let text_pos = pos - egui::Vec2::new(galley.size().x * 0.5, galley.size().y);
+        let background = egui::Rect::from_min_size(text_pos - pad, galley.size() + pad * 2.0);
+        if !rect.contains_rect(background) {
+            return;
+        }
+        painter.rect_filled(background, 10.0, Color32::from_white_alpha(235));
+        painter.galley(text_pos, galley, SIMPLE_BLUE);
+    }
+}
+
+/// Front sideline, centered. Field `y = 0` is the audience side, and the
+/// 2D map draws that edge at the bottom of the field.
+fn simple_audience_point(grid: &drill_core::GridConfig) -> Point {
+    Point {
+        x: grid.width * 0.5,
+        y: 0.0,
+    }
+}
+
+/// The move leaving this scene, or the move arriving at the last scene.
+/// A person who stays put is left out. Reading this never writes the document.
+fn simple_move_paths(document: &drill_core::Document, set_index: usize) -> Vec<(Point, Point)> {
+    let sets = document.sets.len();
+    if sets < 2 || set_index >= sets {
+        return Vec::new();
+    }
+    let (from, to) = if set_index + 1 < sets {
+        (set_index, set_index + 1)
+    } else {
+        (set_index - 1, set_index)
+    };
+    let start = &document.sets[from].positions;
+    let end = &document.sets[to].positions;
+    start
+        .iter()
+        .zip(end.iter())
+        .filter(|&(from_point, to_point)| {
+            (from_point.x - to_point.x).hypot(from_point.y - to_point.y) > 0.05
+        })
+        .map(|(from_point, to_point)| (*from_point, *to_point))
+        .collect()
+}
+
+/// Front-to-back file. Index 0 stands closest to the audience.
+fn simple_file_points(grid: &drill_core::GridConfig, points: &[Point]) -> Vec<Point> {
+    let count = points.len();
+    if count < 2 {
+        return points.to_vec();
+    }
+    let x = points.iter().map(|point| point.x).sum::<f32>() / count as f32;
+    let step = grid.vertical_units / f32::from(grid.vertical_steps.max(1));
+    let ideal = step * 2.0;
+    let span = (ideal * count.saturating_sub(1) as f32).min(grid.height * 0.72);
+    let gap = span / (count - 1) as f32;
+    let front = ((grid.height - span) * 0.5).max(0.0);
+    (0..count)
+        .map(|index| Point {
+            x,
+            y: front + gap * index as f32,
+        })
+        .collect()
+}
+
+/// Circle around the group, kept on the field. Index 0 faces the audience.
+fn simple_circle_points(grid: &drill_core::GridConfig, points: &[Point]) -> Vec<Point> {
+    let count = points.len();
+    if count < 2 {
+        return points.to_vec();
+    }
+    let center = drill_core::editing::centroid(points);
+    let step = grid.vertical_units / f32::from(grid.vertical_steps.max(1));
+    let spacing = (step * 2.0).max(0.5);
+    let chord_radius = spacing / (2.0 * (std::f32::consts::PI / count as f32).sin().max(0.05));
+    // A two-step chord is correct for a large cast, but four people at that
+    // spacing collapse into one blob on screen. Keep a circle big enough to read.
+    let min_radius = (grid.width.min(grid.height) * 0.18).max(spacing);
+    let desired = chord_radius.max(min_radius);
+    let max_radius = (grid.width.min(grid.height) * 0.42).max(spacing);
+    let radius = desired.clamp(spacing * 0.5, max_radius);
+    let center = Point {
+        x: center.x.clamp(radius, (grid.width - radius).max(radius)),
+        y: center.y.clamp(radius, (grid.height - radius).max(radius)),
+    };
+    drill_core::shapes::circle(center, radius, count)
 }
 
 fn simple_show_file_stem(raw: &str) -> String {
@@ -2989,5 +3195,158 @@ mod tests {
         app.simple_toggle_slow();
         assert!(!app.simple_is_slow());
         assert!((app.speed - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn audience_mark_is_the_front_sideline_drawn_at_the_bottom() {
+        let grid = drill_core::GridConfig::japan_floor();
+        let point = simple_audience_point(&grid);
+        assert!((point.x - grid.width * 0.5).abs() < 0.01);
+        assert!(point.y.abs() < 0.01);
+        let map = drill_render::FieldMap::with_view(
+            grid.width,
+            grid.height,
+            drill_render::Vec2 { x: 400.0, y: 300.0 },
+            0.0,
+            None,
+            1.0,
+        );
+        let front = map.map(point);
+        let back = map.map(Point {
+            x: point.x,
+            y: grid.height,
+        });
+        assert!(front.y > back.y);
+    }
+
+    #[test]
+    fn path_lines_follow_a_move_without_writing_the_document() {
+        let app = moved_pair();
+        let revision = app.history.revision();
+        let document = app.document.clone();
+        let paths = simple_move_paths(&app.document, app.current_set);
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].0, app.document.sets[0].positions[0]);
+        assert_eq!(paths[0].1, app.document.sets[1].positions[0]);
+        assert_eq!(simple_move_paths(&app.document, 0), paths);
+        assert_eq!(app.document, document);
+        assert_eq!(app.history.revision(), revision);
+
+        let mut still = empty_simple_app();
+        still.place_performer_at(Point { x: 8.0, y: 6.0 }, true);
+        still.place_performer_at(Point { x: 14.0, y: 18.0 }, true);
+        still.duplicate_current_set();
+        assert!(simple_move_paths(&still.document, 0).is_empty());
+        assert!(simple_move_paths(&still.document, 1).is_empty());
+    }
+
+    #[test]
+    fn file_up_puts_the_first_person_toward_the_audience() {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 8.0, y: 28.0 }, true);
+        app.place_performer_at(Point { x: 30.0, y: 8.0 }, true);
+        app.place_performer_at(Point { x: 18.0, y: 18.0 }, true);
+        let parked = app.document.sets[0].positions[2];
+        let before = app.document.sets[0].positions.clone();
+        app.replace_selection([0_usize, 1].into_iter().collect());
+        app.simple_file_up();
+        let positions = &app.document.sets[0].positions;
+        assert!(positions[0].y < positions[1].y);
+        assert!((positions[0].x - positions[1].x).abs() < 0.01);
+        assert_eq!(positions[2], parked);
+        assert!(app.document.sets[0].shape.is_none());
+        let json = app.document.to_json().expect("json");
+        let loaded = drill_core::Document::from_json(&json).expect("reload");
+        assert_eq!(loaded.sets[0].positions, *positions);
+        assert!(loaded.sets[0].shape.is_none());
+        assert!(app.history.undo(&mut app.document));
+        assert_eq!(app.document.sets[0].positions, before);
+    }
+
+    #[test]
+    fn circle_puts_the_first_person_toward_the_audience() {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 8.0, y: 8.0 }, true);
+        app.place_performer_at(Point { x: 16.0, y: 24.0 }, true);
+        app.place_performer_at(Point { x: 28.0, y: 12.0 }, true);
+        app.place_performer_at(Point { x: 22.0, y: 30.0 }, true);
+        let before = app.document.sets[0].positions.clone();
+        let intended = simple_circle_points(&app.document.grid, &before);
+        assert_eq!(intended.len(), 4);
+        assert!(intended[0].y + 0.01 < intended[1].y.min(intended[2].y).min(intended[3].y));
+        let width = intended
+            .iter()
+            .map(|point| point.x)
+            .fold(f32::NEG_INFINITY, f32::max)
+            - intended
+                .iter()
+                .map(|point| point.x)
+                .fold(f32::INFINITY, f32::min);
+        assert!(width > 8.0, "a small group still needs a readable circle");
+        app.simple_circle_up();
+        let positions = &app.document.sets[0].positions;
+        for (got, want) in positions.iter().zip(&intended) {
+            assert!((got.x - want.x).abs() < 1.0);
+            assert!((got.y - want.y).abs() < 1.0);
+        }
+        assert!(positions[0].y < positions[1].y);
+        assert!(app.document.sets[0].shape.is_none());
+        let json = app.document.to_json().expect("json");
+        let loaded = drill_core::Document::from_json(&json).expect("reload");
+        assert_eq!(loaded.sets[0].positions, *positions);
+        assert_eq!(loaded.performers.len(), 4);
+        assert!(app.history.undo(&mut app.document));
+        assert_eq!(app.document.sets[0].positions, before);
+    }
+
+    #[test]
+    fn swapping_sides_is_one_undo_and_the_json_stays_readable() {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 6.0, y: 16.0 }, true);
+        app.place_performer_at(Point { x: 18.0, y: 16.0 }, true);
+        app.place_performer_at(Point { x: 32.0, y: 16.0 }, true);
+        let before = app.document.sets[0].positions.clone();
+        app.simple_swap_sides();
+        let after = &app.document.sets[0].positions;
+        let left_before = before
+            .iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| a.x.total_cmp(&b.x))
+            .map(|(index, _)| index)
+            .expect("left");
+        let right_after = after
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.x.total_cmp(&b.x))
+            .map(|(index, _)| index)
+            .expect("right");
+        assert_eq!(left_before, right_after);
+        for (from, to) in before.iter().zip(after.iter()) {
+            assert!((from.y - to.y).abs() < 0.01);
+        }
+        assert!(app.document.sets[0].shape.is_none());
+        let json = app.document.to_json().expect("json");
+        let loaded = drill_core::Document::from_json(&json).expect("reload");
+        assert_eq!(loaded.sets[0].positions, *after);
+        assert!(app.history.undo(&mut app.document));
+        assert_eq!(app.document.sets[0].positions, before);
+    }
+
+    #[test]
+    fn a_held_count_does_not_reshape_the_group() {
+        let mut app = moved_pair();
+        app.navigate_to_set(0);
+        app.nav_glide.settle();
+        app.simple_step_beat(2);
+        app.nav_glide.settle();
+        assert!(app.simple_holding_a_count());
+        let positions = app.document.sets[0].positions.clone();
+        let revision = app.history.revision();
+        app.simple_file_up();
+        app.simple_circle_up();
+        app.simple_swap_sides();
+        app.simple_line_up();
+        assert_eq!(app.document.sets[0].positions, positions);
+        assert_eq!(app.history.revision(), revision);
     }
 }
