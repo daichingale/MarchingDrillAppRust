@@ -237,6 +237,9 @@ pub(crate) struct SimpleModeState {
     /// A named save is in flight. Failure reopens the sheet.
     naming_pending: bool,
     saved_note_until: Option<Instant>,
+    /// Looking at a count between pictures. The arrival picture stays put
+    /// until they go back to the start of the scene or press play.
+    hold_count: bool,
     /// Name field for the single selected person.
     person_name: String,
     person_name_for: Option<usize>,
@@ -288,6 +291,26 @@ enum PhoneIcon {
     Pause,
     Next,
     Trash,
+}
+
+fn simple_choice_button(
+    ui: &mut egui::Ui,
+    label: &str,
+    enabled: bool,
+    active: bool,
+) -> egui::Response {
+    let color = if active { Color32::WHITE } else { SIMPLE_BLUE };
+    let mut button = egui::Button::new(egui::RichText::new(label).size(15.0).color(color))
+        .corner_radius(18.0)
+        .min_size(egui::Vec2::new(72.0, 36.0));
+    if active {
+        button = button.fill(SIMPLE_BLUE);
+    } else {
+        button = button
+            .fill(Color32::WHITE)
+            .stroke(Stroke::new(1.5, SIMPLE_BLUE));
+    }
+    ui.add_enabled(enabled, button)
 }
 
 fn paint_phone_icon(painter: &egui::Painter, center: Pos2, icon: PhoneIcon, color: Color32) {
@@ -569,7 +592,7 @@ impl DrillApp {
 
     /// Screenshot harness only. Seeds a frame when `DRILLFORGE_QA_SIMPLE` is
     /// `empty`, `placed`, `play`, `glossary`, `selected`, `recent`, `full`,
-    /// `move`, `save`, or `done`.
+    /// `move`, `save`, `done`, `line`, or `step`.
     pub(crate) fn apply_qa_simple_fixture(&mut self) {
         let Ok(stage) = std::env::var("DRILLFORGE_QA_SIMPLE") else {
             return;
@@ -631,6 +654,33 @@ impl DrillApp {
             self.simple_mode.naming = true;
             self.simple_mode.name_draft = "文化祭".to_string();
         }
+        if stage == "line" {
+            self.place_performer_at(Point { x: 8.0, y: 28.0 }, true);
+            self.place_performer_at(Point { x: 30.0, y: 8.0 }, true);
+            self.simple_line_up();
+        }
+        if stage == "step" {
+            self.duplicate_current_set();
+            let set_id = self.document.sets[self.current_set].id;
+            let performer_id = self.document.performers[0].id;
+            let moved = self.document.sets[self.current_set].positions[0];
+            let _ = self.execute_edit(
+                Edit::MovePerformers {
+                    set_id,
+                    performer_ids: vec![performer_id],
+                    positions: vec![Point {
+                        x: moved.x + 6.0,
+                        y: moved.y,
+                    }],
+                },
+                "qa",
+            );
+            self.playing = false;
+            self.navigate_to_set(0);
+            self.nav_glide.settle();
+            self.simple_step_beat(6);
+            self.nav_glide.settle();
+        }
         // The harness grabs pass 2, before a 260ms ease would finish.
         // Show the settled chrome instead of a half-played ring.
         self.simple_mode.seen_people = self.document.performers.len();
@@ -648,9 +698,13 @@ impl DrillApp {
     pub(crate) fn simple_ui(&mut self, ui: &mut egui::Ui) {
         // Keep edits on the set's arrival picture. A set-to-set glide is the
         // exception: snapping here would erase the motion the shared loop
-        // just computed.
-        if !self.playing && self.nav_glide.position().is_none() {
+        // just computed. Stepping one count is the other exception, so a
+        // paused picture can stay where they stopped to look.
+        if self.playing {
+            self.simple_mode.hold_count = false;
+        } else if self.nav_glide.position().is_none() && !self.simple_holding_a_count() {
             self.count_position = 0.0;
+            self.simple_mode.hold_count = false;
             self.document
                 .positions_at(self.current_set, 0.0, &mut self.frame_positions);
         }
@@ -672,6 +726,8 @@ impl DrillApp {
                     self.simple_cue(ui);
                     ui.add_space(6.0);
                     self.simple_beat_row(ui);
+                    self.simple_rehearsal_row(ui);
+                    self.simple_arrange_row(ui);
                     if self.simple_mode.overlap_note {
                         ui.add_space(6.0);
                         ui.label(
@@ -922,6 +978,7 @@ impl DrillApp {
         if response.clicked() && !current {
             self.simple_mode.overlap_note = false;
             self.simple_mode.finished_playback = false;
+            self.simple_mode.hold_count = false;
             self.navigate_to_set(index);
         }
     }
@@ -958,6 +1015,15 @@ impl DrillApp {
                 egui::RichText::new(i18n::registered(self.locale, "simple-mode.102"))
                     .size(14.0)
                     .color(super::app_theme::SECONDARY_TEXT),
+            );
+            return;
+        }
+        if self.simple_holding_a_count() {
+            ui.label(
+                egui::RichText::new(i18n::registered(self.locale, "simple-mode.136"))
+                    .size(18.0)
+                    .strong()
+                    .color(SIMPLE_INK),
             );
             return;
         }
@@ -1073,7 +1139,264 @@ impl DrillApp {
         });
     }
 
+    fn simple_holding_a_count(&self) -> bool {
+        self.simple_mode.hold_count && self.count_position > 0.05
+    }
+
+    fn simple_step_limits(&self) -> (bool, bool) {
+        let total = self.document.timeline_counts();
+        let current = self
+            .document
+            .global_count(self.current_set, self.count_position)
+            .round()
+            .clamp(0.0, total as f32) as u32;
+        (current > 0, current < total)
+    }
+
+    /// One count forward or back, without writing the picture. Editing stays
+    /// locked until the count is a scene's arrival again.
+    fn simple_step_beat(&mut self, delta: i32) {
+        if self.playing || delta == 0 || !self.show_has_motion() {
+            return;
+        }
+        let total = self.document.timeline_counts();
+        let current = self
+            .document
+            .global_count(self.current_set, self.count_position)
+            .round()
+            .clamp(0.0, total as f32) as u32;
+        let next = if let Ok(steps) = u32::try_from(delta) {
+            current.saturating_add(steps).min(total)
+        } else {
+            current.saturating_sub(delta.unsigned_abs())
+        };
+        if next == current {
+            return;
+        }
+        self.simple_mode.finished_playback = false;
+        self.navigate_to_global_count(next);
+        self.simple_mode.hold_count = self.count_position > 0.05;
+    }
+
+    fn simple_is_slow(&self) -> bool {
+        (self.speed - 0.5).abs() < 0.01
+    }
+
+    fn simple_toggle_slow(&mut self) {
+        self.speed = if self.simple_is_slow() { 1.0 } else { 0.5 };
+    }
+
+    fn simple_everyone_selected(&self) -> bool {
+        !self.document.performers.is_empty()
+            && self.selected.len() == self.document.performers.len()
+    }
+
+    fn simple_toggle_everyone(&mut self) {
+        if self.document.performers.len() < 2 {
+            return;
+        }
+        if self.simple_everyone_selected() {
+            self.replace_selection(BTreeSet::new());
+        } else {
+            self.replace_selection((0..self.document.performers.len()).collect());
+        }
+    }
+
+    /// Lines the chosen people up, left to right in the order they were
+    /// placed. With fewer than two chosen, everyone lines up.
+    fn simple_line_up(&mut self) {
+        if !self.is_editable_set_start() || self.document.performers.len() < 2 {
+            return;
+        }
+        if self.selected.len() < 2 {
+            self.replace_selection((0..self.document.performers.len()).collect());
+        }
+        let count = self.selected.len();
+        let grid = self.document.grid.clone();
+        let y = self
+            .selected_points()
+            .iter()
+            .map(|point| point.y)
+            .sum::<f32>()
+            / count as f32;
+        let step = grid.horizontal_units / f32::from(grid.horizontal_steps.max(1));
+        let ideal = step * 2.0;
+        let span = (ideal * count.saturating_sub(1) as f32).min(grid.width * 0.72);
+        let gap = if count <= 1 {
+            0.0
+        } else {
+            span / (count - 1) as f32
+        };
+        let left = ((grid.width - span) * 0.5).max(0.0);
+        let points = (0..count)
+            .map(|index| Point {
+                x: left + gap * index as f32,
+                y,
+            })
+            .collect();
+        let revision = self.history.revision();
+        self.commit_layout(points);
+        if self.history.revision() != revision {
+            self.bump_simple_motion(ChromeMotion::Move);
+        }
+    }
+
+    fn simple_add_scene(&mut self) {
+        if !self.is_editable_set_start()
+            || self.document.performers.is_empty()
+            || self.document.sets.len() < 2
+        {
+            return;
+        }
+        self.simple_mode.finished_playback = false;
+        self.simple_mode.hold_count = false;
+        self.duplicate_current_set();
+    }
+
+    fn simple_rehearsal_row(&mut self, ui: &mut egui::Ui) {
+        if !self.show_has_motion() {
+            return;
+        }
+        ui.add_space(4.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::Vec2::new(8.0, 8.0);
+            if !self.playing {
+                let (back, forward) = self.simple_step_limits();
+                if simple_choice_button(
+                    ui,
+                    i18n::registered(self.locale, "simple-mode.133"),
+                    back,
+                    false,
+                )
+                .on_hover_text(i18n::registered(self.locale, "simple-mode.142"))
+                .clicked()
+                {
+                    self.simple_step_beat(-1);
+                }
+                let counts = self
+                    .document
+                    .sets
+                    .get(self.current_set)
+                    .map(|set| set.counts)
+                    .unwrap_or(1);
+                let now = (self.count_position.round() as i32).clamp(0, i32::from(counts));
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{now} / {counts}{}",
+                        i18n::registered(self.locale, "simple-mode.138")
+                    ))
+                    .size(16.0)
+                    .strong()
+                    .color(SIMPLE_BLUE),
+                );
+                if simple_choice_button(
+                    ui,
+                    i18n::registered(self.locale, "simple-mode.134"),
+                    forward,
+                    false,
+                )
+                .on_hover_text(i18n::registered(self.locale, "simple-mode.143"))
+                .clicked()
+                {
+                    self.simple_step_beat(1);
+                }
+                if self.simple_holding_a_count()
+                    && simple_choice_button(
+                        ui,
+                        i18n::registered(self.locale, "simple-mode.135"),
+                        true,
+                        false,
+                    )
+                    .on_hover_text(i18n::registered(self.locale, "simple-mode.144"))
+                    .clicked()
+                {
+                    self.simple_mode.hold_count = false;
+                    self.navigate_to_set(self.current_set);
+                }
+            }
+            if simple_choice_button(
+                ui,
+                i18n::registered(self.locale, "simple-mode.137"),
+                true,
+                self.simple_is_slow(),
+            )
+            .on_hover_text(i18n::registered(self.locale, "simple-mode.145"))
+            .clicked()
+            {
+                self.simple_toggle_slow();
+            }
+        });
+    }
+
+    fn simple_arrange_row(&mut self, ui: &mut egui::Ui) {
+        if self.playing || self.document.performers.len() < 2 {
+            return;
+        }
+        let editable = self.is_editable_set_start();
+        ui.add_space(4.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::Vec2::new(8.0, 8.0);
+            if simple_choice_button(
+                ui,
+                i18n::registered(self.locale, "simple-mode.130"),
+                true,
+                self.simple_everyone_selected(),
+            )
+            .on_hover_text(i18n::registered(self.locale, "simple-mode.140"))
+            .clicked()
+            {
+                self.simple_toggle_everyone();
+            }
+            if simple_choice_button(
+                ui,
+                i18n::registered(self.locale, "simple-mode.132"),
+                editable,
+                false,
+            )
+            .on_hover_text(i18n::registered(self.locale, "simple-mode.141"))
+            .clicked()
+            {
+                self.simple_line_up();
+            }
+            if self.document.sets.len() >= 2
+                && simple_choice_button(
+                    ui,
+                    i18n::registered(self.locale, "simple-mode.129"),
+                    editable,
+                    false,
+                )
+                .on_hover_text(i18n::registered(self.locale, "simple-mode.139"))
+                .clicked()
+            {
+                self.simple_add_scene();
+            }
+        });
+        if self.selected.len() >= 2 && editable {
+            ui.label(
+                egui::RichText::new(i18n::registered(self.locale, "simple-mode.131"))
+                    .size(14.0)
+                    .color(super::app_theme::SECONDARY_TEXT),
+            );
+        }
+    }
+
+    fn simple_refresh_held_picture(&mut self) {
+        if self.playing || self.nav_glide.position().is_some() || !self.simple_holding_a_count() {
+            return;
+        }
+        let counts = self
+            .document
+            .sets
+            .get(self.current_set)
+            .map(|set| set.counts.max(1))
+            .unwrap_or(1);
+        let progress = (self.count_position / f32::from(counts)).clamp(0.0, 1.0);
+        self.document
+            .positions_at(self.current_set, progress, &mut self.frame_positions);
+    }
+
     fn simple_field_card(&mut self, ui: &mut egui::Ui, height: f32) {
+        self.simple_refresh_held_picture();
         let width = ui.available_width();
         let (rect, _) = ui.allocate_exact_size(egui::Vec2::new(width, height), Sense::hover());
         let card = rect.shrink(8.0);
@@ -2545,5 +2868,126 @@ mod tests {
         assert!(app.playing);
         assert_eq!(app.current_set, 0);
         assert!(app.count_position.abs() < f32::EPSILON);
+    }
+
+    fn moved_pair() -> DrillApp {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 8.0, y: 6.0 }, true);
+        app.place_performer_at(Point { x: 14.0, y: 18.0 }, true);
+        app.duplicate_current_set();
+        let set_id = app.document.sets[app.current_set].id;
+        let performer_id = app.document.performers[0].id;
+        assert!(app.execute_edit(
+            Edit::MovePerformers {
+                set_id,
+                performer_ids: vec![performer_id],
+                positions: vec![Point { x: 24.0, y: 10.0 }],
+            },
+            "move",
+        ));
+        app
+    }
+
+    #[test]
+    fn another_scene_can_be_added_after_the_first_move() {
+        let mut app = moved_pair();
+        assert_eq!(app.document.sets.len(), 2);
+        let copied = app.document.sets[1].positions.clone();
+        app.simple_add_scene();
+        assert_eq!(app.document.sets.len(), 3);
+        assert_eq!(app.document.sets[2].positions, copied);
+        assert_eq!(app.current_set, 2);
+        assert!(app.history.can_undo());
+        assert!(app.history.undo(&mut app.document));
+        assert_eq!(app.document.sets.len(), 2);
+    }
+
+    #[test]
+    fn a_held_count_does_not_accept_a_new_scene() {
+        let mut app = moved_pair();
+        app.navigate_to_set(0);
+        app.nav_glide.settle();
+        app.simple_step_beat(2);
+        app.nav_glide.settle();
+        assert!(app.simple_holding_a_count());
+        let sets = app.document.sets.len();
+        app.simple_add_scene();
+        assert_eq!(app.document.sets.len(), sets);
+    }
+
+    #[test]
+    fn everyone_can_be_selected_and_dragged_together() {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 8.0, y: 6.0 }, true);
+        app.place_performer_at(Point { x: 14.0, y: 6.0 }, true);
+        app.place_performer_at(Point { x: 20.0, y: 6.0 }, true);
+        app.simple_toggle_everyone();
+        assert_eq!(app.selected.len(), 3);
+        assert!(app.simple_everyone_selected());
+        let before = app.document.sets[0].positions.clone();
+        app.begin_field_drag(Pos2::new(0.0, 0.0));
+        app.update_field_drag(Pos2::new(40.0, 0.0), 10.0, false);
+        app.commit_field_drag();
+        for (from, to) in before.iter().zip(&app.document.sets[0].positions) {
+            assert!((to.x - from.x) > 0.5);
+            assert!((to.y - from.y).abs() < 0.01);
+        }
+        app.simple_toggle_everyone();
+        assert!(app.selected.is_empty());
+    }
+
+    #[test]
+    fn line_up_is_one_undo_and_the_json_stays_readable() {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 4.0, y: 4.0 }, true);
+        app.place_performer_at(Point { x: 10.0, y: 30.0 }, true);
+        app.place_performer_at(Point { x: 36.0, y: 12.0 }, true);
+        let parked = app.document.sets[0].positions[2];
+        let before = app.document.sets[0].positions.clone();
+        app.replace_selection([0_usize, 1].into_iter().collect());
+        app.simple_line_up();
+        let positions = &app.document.sets[0].positions;
+        assert!((positions[0].y - positions[1].y).abs() < 0.01);
+        assert!(positions[0].x < positions[1].x);
+        assert_eq!(positions[2], parked);
+        let json = app.document.to_json().expect("json");
+        let loaded = drill_core::Document::from_json(&json).expect("reload");
+        assert_eq!(loaded.sets[0].positions, *positions);
+        assert_eq!(loaded.performers.len(), 3);
+        assert!(app.history.undo(&mut app.document));
+        assert_eq!(app.document.sets[0].positions, before);
+    }
+
+    #[test]
+    fn stepping_one_count_does_not_write_the_document() {
+        let mut app = moved_pair();
+        app.navigate_to_set(0);
+        app.nav_glide.settle();
+        let revision = app.history.revision();
+        let document = app.document.clone();
+        app.simple_step_beat(1);
+        app.nav_glide.settle();
+        assert_eq!(app.document, document);
+        assert_eq!(app.history.revision(), revision);
+        assert!(app.count_position > 0.5);
+        assert!(app.simple_holding_a_count());
+        assert!(!app.is_editable_set_start());
+        app.simple_step_beat(-1);
+        app.nav_glide.settle();
+        assert!(!app.simple_holding_a_count());
+        assert!(app.is_editable_set_start());
+        assert_eq!(app.document, document);
+    }
+
+    #[test]
+    fn slow_playback_toggles_between_half_and_normal() {
+        let mut app = empty_simple_app();
+        assert!((app.speed - 1.0).abs() < 0.01);
+        app.simple_toggle_slow();
+        assert!(app.simple_is_slow());
+        assert!((app.speed - 0.5).abs() < 0.01);
+        app.simple_toggle_slow();
+        assert!(!app.simple_is_slow());
+        assert!((app.speed - 1.0).abs() < 0.01);
     }
 }

@@ -231,6 +231,12 @@ pub fn run(
         return Err(RunnerError::Protocol(ProtocolError::InputTooLarge));
     }
     let (path, manifest) = verified_executable(spec, verifier, limits)?;
+    // Tests spawn several children at once. On Windows each one is
+    // PowerShell, and a cold start can miss a short deadline if they all
+    // launch together. One slot, taken before the clock starts, keeps the
+    // result about the child rather than about how crowded the runner was.
+    #[cfg(test)]
+    let _process_slot = test_process_slot();
     let started = Instant::now();
     let mut child = Command::new(path)
         .args(&spec.arguments)
@@ -317,10 +323,29 @@ pub fn run(
 }
 
 #[cfg(test)]
+fn test_process_slot() -> std::sync::MutexGuard<'static, ()> {
+    static SLOT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    SLOT.lock().unwrap_or_else(|poison| poison.into_inner())
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::{ApiVersion, IntegrityMetadata, PluginInfo};
     use semver::Version;
+
+    /// Long enough for PowerShell to start on a cold Windows runner.
+    /// The tests still check the child's result, not how fast it started.
+    fn child_deadline() -> Duration {
+        #[cfg(windows)]
+        {
+            Duration::from_secs(20)
+        }
+        #[cfg(not(windows))]
+        {
+            Duration::from_secs(5)
+        }
+    }
 
     struct Verifier;
     impl SignatureVerifier for Verifier {
@@ -419,7 +444,7 @@ mod tests {
     fn execute(mode: &str, mut limits: PluginLimits) -> Result<RunResult, RunnerError> {
         limits.memory_bytes = usize::MAX;
         if mode != "wait" {
-            limits.interactive_deadline = Duration::from_secs(5);
+            limits.interactive_deadline = child_deadline();
         }
         run(
             &spec(mode),
@@ -473,7 +498,7 @@ mod tests {
         s.stderr_bytes = 256;
         let mut limits = PluginLimits::DEFAULT;
         limits.memory_bytes = usize::MAX;
-        limits.interactive_deadline = Duration::from_secs(5);
+        limits.interactive_deadline = child_deadline();
         assert!(matches!(
             run(
                 &s,
@@ -521,7 +546,7 @@ mod tests {
                 &Verifier,
                 PluginLimits {
                     memory_bytes: usize::MAX,
-                    interactive_deadline: Duration::from_secs(5),
+                    interactive_deadline: child_deadline(),
                     ..PluginLimits::DEFAULT
                 },
                 &cancel
@@ -537,7 +562,7 @@ mod tests {
                     &Verifier,
                     PluginLimits {
                         memory_bytes: usize::MAX,
-                        interactive_deadline: Duration::from_secs(5),
+                        interactive_deadline: child_deadline(),
                         ..PluginLimits::DEFAULT
                     },
                     &cancel
@@ -566,7 +591,7 @@ mod tests {
             &Verifier,
             PluginLimits {
                 memory_bytes: usize::MAX,
-                interactive_deadline: Duration::from_secs(5),
+                interactive_deadline: child_deadline(),
                 ..PluginLimits::DEFAULT
             },
             &cancel,

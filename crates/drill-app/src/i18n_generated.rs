@@ -2874,6 +2874,44 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "simple-mode.127") => "Shows",
         (Locale::Ja, "simple-mode.128") => "やめる",
         (Locale::En, "simple-mode.128") => "Not now",
+        (Locale::Ja, "simple-mode.129") => "場面を足す",
+        (Locale::En, "simple-mode.129") => "Add a scene",
+        (Locale::Ja, "simple-mode.130") => "みんな",
+        (Locale::En, "simple-mode.130") => "Everyone",
+        (Locale::Ja, "simple-mode.131") => "ドラッグすると、いっしょに動きます",
+        (Locale::En, "simple-mode.131") => "Drag to move them together",
+        (Locale::Ja, "simple-mode.132") => "横一列",
+        (Locale::En, "simple-mode.132") => "Line up",
+        (Locale::Ja, "simple-mode.133") => "前の拍",
+        (Locale::En, "simple-mode.133") => "Previous count",
+        (Locale::Ja, "simple-mode.134") => "次の拍",
+        (Locale::En, "simple-mode.134") => "Next count",
+        (Locale::Ja, "simple-mode.135") => "場面のはじめ",
+        (Locale::En, "simple-mode.135") => "Start of scene",
+        (Locale::Ja, "simple-mode.136") => "動かすときは、場面のはじめに戻ってください",
+        (Locale::En, "simple-mode.136") => {
+            "Go back to the start of this scene before you move anyone"
+        }
+        (Locale::Ja, "simple-mode.137") => "ゆっくり",
+        (Locale::En, "simple-mode.137") => "Slow",
+        (Locale::Ja, "simple-mode.138") => "拍",
+        (Locale::En, "simple-mode.138") => " counts",
+        (Locale::Ja, "simple-mode.139") => "今の並びのまま、うしろに場面を足します",
+        (Locale::En, "simple-mode.139") => "Add another scene with this same picture",
+        (Locale::Ja, "simple-mode.140") => "全員を選びます。もう一度押すと、選択をやめます",
+        (Locale::En, "simple-mode.140") => "Select everyone. Tap again to clear",
+        (Locale::Ja, "simple-mode.141") => "人を横一列に並べます",
+        (Locale::En, "simple-mode.141") => "Line the people up side by side",
+        (Locale::Ja, "simple-mode.142") => "一拍前の位置を見ます",
+        (Locale::En, "simple-mode.142") => "Look at the previous count",
+        (Locale::Ja, "simple-mode.143") => "一拍あとの位置を見ます",
+        (Locale::En, "simple-mode.143") => "Look at the next count",
+        (Locale::Ja, "simple-mode.144") => "この場面のはじめに戻して、動かせるようにします",
+        (Locale::En, "simple-mode.144") => {
+            "Return to the start of this scene so you can move people"
+        }
+        (Locale::Ja, "simple-mode.145") => "半分の速さで見ます",
+        (Locale::En, "simple-mode.145") => "Watch at half speed",
         _ => "[missing message]",
     }
 }
