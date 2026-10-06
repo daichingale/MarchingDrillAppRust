@@ -59,6 +59,33 @@ pub(crate) fn playback_decision(document: &Document, input: PlaybackInput) -> Pl
     }
 }
 
+/// Counts still left in a count-in after `dt_seconds` at `bpm` and `speed`.
+///
+/// A count-in holds the picture: the drill does not move until this reaches
+/// zero. Non-finite or non-positive tempo and speed fall back to 120 BPM and
+/// 1× so a bad clock cannot stall or jump the wait.
+pub(crate) fn advance_count_in(remaining: f32, dt_seconds: f32, bpm: f32, speed: f32) -> f32 {
+    if !(remaining.is_finite() && remaining > 0.0) {
+        return 0.0;
+    }
+    let bpm = if bpm.is_finite() && bpm > 0.0 {
+        bpm
+    } else {
+        120.0
+    };
+    let speed = if speed.is_finite() && speed > 0.0 {
+        speed
+    } else {
+        1.0
+    };
+    let dt = if dt_seconds.is_finite() && dt_seconds > 0.0 {
+        dt_seconds
+    } else {
+        0.0
+    };
+    (remaining - dt * (bpm / 60.0) * speed).max(0.0)
+}
+
 /// Pointer travel (pixels) below which a press is a click, not a move.
 /// egui reports `drag_started` for tiny motion, and snapping a zero-pixel
 /// drag would jump an off-grid performer the moment they were clicked.
@@ -143,6 +170,15 @@ mod tests {
             },
         );
         assert_eq!(decision, PlaybackDecision::LoopTo(2.0));
+    }
+
+    #[test]
+    fn count_in_uses_the_tempo_and_never_goes_negative() {
+        assert!((advance_count_in(4.0, 0.5, 120.0, 1.0) - 3.0).abs() < 1e-4);
+        assert!((advance_count_in(4.0, 0.5, 120.0, 2.0) - 2.0).abs() < 1e-4);
+        assert_eq!(advance_count_in(1.0, 10.0, 120.0, 1.0), 0.0);
+        assert_eq!(advance_count_in(4.0, f32::NAN, 120.0, 1.0), 4.0);
+        assert!((advance_count_in(4.0, 0.5, f32::NAN, 1.0) - 3.0).abs() < 1e-4);
     }
 
     #[test]

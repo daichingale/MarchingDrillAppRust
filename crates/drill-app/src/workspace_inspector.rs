@@ -214,6 +214,7 @@ impl DrillApp {
                 self.count_position = editor_count as f32;
             }
             ui.separator();
+            self.show_section_picker(ui);
             ui.heading(super::i18n::registered(self.locale, "workspace-inspector.013"));
             ui.small(super::i18n::registered(self.locale, "workspace-inspector.014"));
             if self.document.performers.is_empty() {
@@ -514,7 +515,7 @@ impl DrillApp {
             });
             if self.selected.is_empty() && !self.document.performers.is_empty() {
                 ui.small(super::i18n::registered(self.locale, "core-edit.031"));
-                let rows: Vec<(usize, String, Option<Point>)> = self
+                let rows: Vec<(usize, String, Option<Point>, [u8; 3])> = self
                     .document
                     .performers
                     .iter()
@@ -525,13 +526,18 @@ impl DrillApp {
                             .sets
                             .get(self.current_set)
                             .and_then(|set| set.positions.get(index).copied());
-                        (index, performer.label.clone(), point)
+                        (
+                            index,
+                            performer.label.clone(),
+                            point,
+                            performer.resolved_color(&self.document.sections),
+                        )
                     })
                     .collect();
                 let additive = ui.input(|input| {
                     input.modifiers.command || input.modifiers.ctrl || input.modifiers.shift
                 });
-                for (index, label, point) in rows {
+                for (index, label, point, color) in rows {
                     let text = match point {
                         Some(point) => format!(
                             "{}  ·  {}",
@@ -544,12 +550,21 @@ impl DrillApp {
                         ),
                         None => label,
                     };
-                    if ui
-                        .selectable_label(self.selected.contains(&index), text)
-                        .clicked()
-                    {
-                        self.select_performer_from_list(index, additive);
-                    }
+                    ui.horizontal(|ui| {
+                        let (swatch, _) =
+                            ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
+                        ui.painter().rect_filled(
+                            swatch,
+                            3.0,
+                            Color32::from_rgb(color[0], color[1], color[2]),
+                        );
+                        if ui
+                            .selectable_label(self.selected.contains(&index), text)
+                            .clicked()
+                        {
+                            self.select_performer_from_list(index, additive);
+                        }
+                    });
                 }
             } else if !self.selected.is_empty() {
                 if self.workspace_focus == Some(WorkspaceFocus::Performer) {
@@ -1813,6 +1828,51 @@ impl DrillApp {
         );
     }
 
+    fn show_section_picker(&mut self, ui: &mut egui::Ui) {
+        if self.document.sections.is_empty() || self.document.performers.is_empty() {
+            return;
+        }
+        let sections: Vec<(SectionId, String, [u8; 3], BTreeSet<usize>)> = self
+            .document
+            .sections
+            .iter()
+            .map(|section| {
+                let members = self
+                    .document
+                    .performers
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, performer)| {
+                        performer.section == section.id && self.is_selectable_index(*index)
+                    })
+                    .map(|(index, _)| index)
+                    .collect();
+                (section.id, section.name.clone(), section.color, members)
+            })
+            .collect();
+        ui.label(super::i18n::registered(self.locale, "full-mode.031"));
+        ui.horizontal_wrapped(|ui| {
+            for (id, name, color, members) in sections {
+                let count = members.len();
+                let active = !members.is_empty() && self.selected == members;
+                let (swatch, _) =
+                    ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
+                ui.painter().rect_filled(
+                    swatch,
+                    3.0,
+                    Color32::from_rgb(color[0], color[1], color[2]),
+                );
+                if ui
+                    .selectable_label(active, format!("{name} {count}"))
+                    .on_hover_text(super::i18n::registered(self.locale, "full-mode.032"))
+                    .clicked()
+                {
+                    self.select_section(id);
+                }
+            }
+        });
+    }
+
     #[rustfmt::skip]
     fn show_performer_properties(&mut self, ui: &mut egui::Ui) {
         self.ensure_performer_draft();
@@ -1826,6 +1886,13 @@ impl DrillApp {
             .collect();
         let enter = ui.input(|input| input.key_pressed(egui::Key::Enter));
         if single {
+            if let Some(&index) = self.selected.iter().next()
+                && let Some(performer) = self.document.performers.get(index)
+            {
+                let color = performer.resolved_color(&self.document.sections);
+                let (swatch, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                ui.painter().rect_filled(swatch, 3.0, Color32::from_rgb(color[0], color[1], color[2]));
+            }
             if let Some(&first) = self.selected.iter().next() {
                 let segments = continuity::performer_continuity(&self.document, first);
                 if let Some(seg) = segments.iter().find(|s| s.from_set == self.current_set) {

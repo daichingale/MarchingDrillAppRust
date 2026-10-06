@@ -90,7 +90,7 @@ use drill_core::route_suggestions::{
 use drill_core::transition::SetCounts;
 use drill_core::video::{ExportPreset, VideoExportConfig};
 use drill_core::{
-    Document, Edit, GridConfig, GridLine, GridStyle, History, Performer, PerformerId,
+    Document, Edit, EditKind, GridConfig, GridLine, GridStyle, History, Performer, PerformerId,
     PerformerKind, Point, SectionId, Set, Symbol, Unit, camera::Camera, clinic, continuity,
     coordinates, editing, evenly_spaced_arc, evenly_spaced_line, pathing, shapes,
 };
@@ -122,6 +122,24 @@ pub(crate) struct PlaybackRangeSummary {
 }
 
 pub(crate) const PLAYBACK_SPEED_PRESETS: [f32; 3] = [0.5, 1.0, 2.0];
+
+/// Beats held still before a count-in releases the drill.
+pub(crate) const COUNT_IN_BEATS: f32 = 4.0;
+
+/// Tempo that is actually in effect at the playhead.
+///
+/// The toolbar's base-tempo editor writes count 0. A later tempo-map change
+/// must not keep showing that opening number while the playhead is elsewhere.
+pub(crate) fn playhead_bpm(document: &Document, set_index: usize, local_count: f32) -> f32 {
+    document
+        .tempo
+        .bpm_at(document.global_count(set_index, local_count))
+}
+
+/// The beat a count-in should show: 4, then 3, then 2, then 1.
+pub(crate) fn count_in_display(remaining: f32) -> u32 {
+    remaining.ceil().clamp(1.0, COUNT_IN_BEATS) as u32
+}
 
 pub(crate) fn playback_range_summary(
     document: &Document,
@@ -602,6 +620,10 @@ pub(crate) struct DrillApp {
     playback_start: u32,
     playback_end: u32,
     loop_playback: bool,
+    /// When set, Play waits [`COUNT_IN_BEATS`] at the playhead tempo before the drill moves.
+    count_in_enabled: bool,
+    /// Beats still to wait. `None` once the drill itself is advancing.
+    count_in_remaining: Option<f32>,
     last_frame: Instant,
     frame_positions: Vec<Point>,
     audio_state: audio_state::AudioState,
@@ -824,6 +846,8 @@ impl Default for DrillApp {
             playback_start: 0,
             playback_end,
             loop_playback: false,
+            count_in_enabled: false,
+            count_in_remaining: None,
             last_frame: Instant::now(),
             selected: BTreeSet::new(),
             locked_performers: BTreeSet::new(),
@@ -2576,6 +2600,7 @@ impl DrillApp {
                 if self.history.undo(&mut self.document) {
                     self.dirty = true;
                     self.clamp_session_to_document();
+                    self.tempo_bpm = self.document.tempo.bpm_at(0.0);
                     self.status = i18n::registered(self.locale, "app-state.149").into();
                 }
             }
@@ -2583,6 +2608,7 @@ impl DrillApp {
                 if self.history.redo(&mut self.document) {
                     self.dirty = true;
                     self.clamp_session_to_document();
+                    self.tempo_bpm = self.document.tempo.bpm_at(0.0);
                     self.status = i18n::registered(self.locale, "app-state.150").into();
                 }
             }
@@ -3390,6 +3416,7 @@ impl DrillApp {
     fn toggle_playback(&mut self, context: &egui::Context) {
         if self.playing {
             self.playing = false;
+            self.count_in_remaining = None;
             self.audio_state.pause();
             return;
         }
@@ -3402,15 +3429,11 @@ impl DrillApp {
         self.playing = self.playback_end > self.playback_start;
         if self.playing {
             self.ever_played = true;
-            if let Some(track) = &self.document.audio {
-                let global = self
-                    .document
-                    .global_count(self.current_set, self.count_position);
-                let seconds =
-                    drill_core::audio::count_to_audio_time(track, &self.document.tempo, global);
-                self.audio_state.seek_seconds(seconds);
-                self.audio_state.set_mix(track.gain_linear(), track.muted);
-                self.audio_state.play();
+            if self.count_in_enabled {
+                self.count_in_remaining = Some(COUNT_IN_BEATS);
+            } else {
+                self.count_in_remaining = None;
+                self.begin_playback_audio();
             }
             // Advance playback is `dt`-based (see `controller::playback_decision`),
             // so it does not need a fixed 60fps tick -- it needs "as often as
@@ -3421,6 +3444,124 @@ impl DrillApp {
             // while paused.
             context.request_repaint();
         }
+    }
+
+    /// Start the reference track at the playhead. A count-in calls this only
+    /// after the four beats, so the audio does not run ahead of the picture.
+    fn begin_playback_audio(&mut self) {
+        if let Some(track) = &self.document.audio {
+            let global = self
+                .document
+                .global_count(self.current_set, self.count_position);
+            let seconds =
+                drill_core::audio::count_to_audio_time(track, &self.document.tempo, global);
+            self.audio_state.seek_seconds(seconds);
+            self.audio_state.set_mix(track.gain_linear(), track.muted);
+            self.audio_state.play();
+        }
+    }
+
+    /// Hold the picture while a count-in is running.
+    ///
+    /// Returns true when this frame must not advance the drill. The frame that
+    /// finishes the count-in starts the audio and still holds, so the first
+    /// moving frame begins exactly at the in-point.
+    fn tick_count_in(&mut self, dt: f32) -> bool {
+        let Some(left) = self.count_in_remaining else {
+            return false;
+        };
+        let bpm = playhead_bpm(&self.document, self.current_set, self.count_position);
+        let next = controller::advance_count_in(left, dt, bpm, self.speed);
+        if next > 0.0 {
+            self.count_in_remaining = Some(next);
+        } else {
+            self.count_in_remaining = None;
+            self.begin_playback_audio();
+        }
+        true
+    }
+
+    fn undo_button_label(&self) -> String {
+        self.history_button_label(true)
+    }
+
+    fn redo_button_label(&self) -> String {
+        self.history_button_label(false)
+    }
+
+    fn history_button_label(&self, undo: bool) -> String {
+        let verb = i18n::registered(
+            self.locale,
+            if undo {
+                "full-mode.009"
+            } else {
+                "full-mode.010"
+            },
+        );
+        let kind = if undo {
+            self.history.undo_kind()
+        } else {
+            self.history.redo_kind()
+        };
+        match kind {
+            Some(kind) => format!("{verb}: {}", self.edit_kind_label(kind)),
+            None => verb.to_owned(),
+        }
+    }
+
+    fn edit_kind_label(&self, kind: EditKind) -> &'static str {
+        match kind {
+            EditKind::Positions => i18n::registered(self.locale, "full-mode.011"),
+            EditKind::Counts => i18n::registered(self.locale, "full-mode.012"),
+            EditKind::Routes => i18n::registered(self.locale, "full-mode.013"),
+            EditKind::Shape => i18n::registered(self.locale, "full-mode.014"),
+            EditKind::Annotation => i18n::registered(self.locale, "full-mode.015"),
+            EditKind::Marker => i18n::registered(self.locale, "full-mode.016"),
+            EditKind::Grid => i18n::registered(self.locale, "full-mode.017"),
+            EditKind::Tempo => i18n::registered(self.locale, "full-mode.018"),
+            EditKind::Audio => i18n::registered(self.locale, "full-mode.019"),
+            EditKind::Underlay => i18n::registered(self.locale, "full-mode.020"),
+            EditKind::Title => i18n::registered(self.locale, "full-mode.021"),
+            EditKind::Sync => i18n::registered(self.locale, "full-mode.022"),
+            EditKind::Section => i18n::registered(self.locale, "full-mode.023"),
+            EditKind::Subset => i18n::registered(self.locale, "full-mode.024"),
+            EditKind::Performer => i18n::registered(self.locale, "full-mode.025"),
+            EditKind::Camera => i18n::registered(self.locale, "full-mode.026"),
+            EditKind::Document => i18n::registered(self.locale, "full-mode.027"),
+        }
+    }
+
+    fn snap_selected_to_grid(&mut self) {
+        let grid = self.document.grid.clone();
+        let points = self
+            .selected_points()
+            .into_iter()
+            .map(|point| grid.snap_to_step(point))
+            .collect();
+        self.commit_layout(points);
+    }
+
+    /// Mirror the selection across the field's center line, not its own middle.
+    fn mirror_selection_across_field(&mut self) {
+        let axis = self.document.grid.width * 0.5;
+        let points = editing::mirror(&self.selected_points(), axis);
+        self.commit_layout(points);
+    }
+
+    fn select_section(&mut self, section: SectionId) {
+        let indices = self
+            .document
+            .performers
+            .iter()
+            .enumerate()
+            .filter(|(index, performer)| {
+                performer.section == section && self.is_selectable_index(*index)
+            })
+            .map(|(index, _)| index)
+            .collect();
+        self.replace_selection(indices);
+        self.status = i18n::registered(self.locale, "full-mode.033")
+            .replace("{0}", &self.selected.len().to_string());
     }
 
     fn selected_points(&self) -> Vec<Point> {
@@ -5023,5 +5164,107 @@ mod locale_regression_tests {
                 "Japanese leaked into English UI: {label}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod full_mode_tool_tests {
+    use super::*;
+    use drill_core::Section;
+
+    #[test]
+    fn playhead_bpm_follows_a_later_tempo_change() {
+        let mut document = Document::demo(1, 1);
+        document.tempo.set(0.0, 120.0);
+        document.tempo.set(16.0, 90.0);
+        assert_eq!(playhead_bpm(&document, 0, 0.0).round(), 120.0);
+        assert_eq!(playhead_bpm(&document, 0, 15.0).round(), 120.0);
+        assert_eq!(playhead_bpm(&document, 1, 0.0).round(), 90.0);
+    }
+
+    #[test]
+    fn count_in_display_counts_down_from_four() {
+        assert_eq!(count_in_display(4.0), 4);
+        assert_eq!(count_in_display(3.01), 4);
+        assert_eq!(count_in_display(3.0), 3);
+        assert_eq!(count_in_display(0.2), 1);
+    }
+
+    #[test]
+    fn count_in_holds_the_picture_until_the_beats_are_done() {
+        let mut app = DrillApp {
+            count_in_remaining: Some(COUNT_IN_BEATS),
+            ..DrillApp::default()
+        };
+        let before = app.document.sets[0].positions.clone();
+        assert!(app.tick_count_in(0.5));
+        assert!((app.count_in_remaining.unwrap() - 3.0).abs() < 1e-3);
+        assert_eq!(app.count_position, 0.0);
+        assert_eq!(app.document.sets[0].positions, before);
+        assert!(app.tick_count_in(1.5));
+        assert!(app.count_in_remaining.is_none());
+        assert_eq!(app.count_position, 0.0);
+    }
+
+    #[test]
+    fn snap_selected_lands_on_the_step_grid_when_snap_is_off() {
+        let mut app = DrillApp::default();
+        app.document.grid.snap_enabled = false;
+        let raw = Point { x: 1.2, y: 2.4 };
+        app.document.sets[0].positions[0] = raw;
+        app.selected.insert(0);
+        let expected = app.document.grid.snap_to_step(raw);
+        app.snap_selected_to_grid();
+        assert_eq!(app.document.sets[0].positions[0], expected);
+        assert!(app.history.can_undo());
+        assert_eq!(app.history.undo_kind(), Some(EditKind::Positions));
+        assert_eq!(app.undo_button_label(), "元に戻す: 人の位置");
+        assert!(app.history.undo(&mut app.document));
+        assert_eq!(app.document.sets[0].positions[0], raw);
+    }
+
+    #[test]
+    fn mirror_across_the_field_center_swaps_sides() {
+        let mut app = DrillApp::default();
+        let grid = app.document.grid.clone();
+        let before = grid.snap_to_step(Point {
+            x: grid.width * 0.2,
+            y: grid.height * 0.4,
+        });
+        app.document.sets[0].positions[0] = before;
+        app.selected.insert(0);
+        app.mirror_selection_across_field();
+        let mirrored = editing::mirror(&[before], grid.width * 0.5)[0];
+        let snapped = grid.snap(mirrored);
+        let expected = Point {
+            x: snapped.x.clamp(0.0, grid.max_x()),
+            y: snapped.y.clamp(0.0, grid.max_y()),
+        };
+        assert_eq!(app.document.sets[0].positions[0], expected);
+        assert!(expected.x > grid.width * 0.5);
+        assert!(app.history.can_undo());
+    }
+
+    #[test]
+    fn selecting_a_section_selects_only_its_visible_members() {
+        let mut app = DrillApp::default();
+        let brass = SectionId::new(2).expect("section id");
+        app.document.sections.push(Section {
+            id: brass,
+            name: "金管".into(),
+            short: "Br".into(),
+            color: [30, 90, 200],
+            order: 1,
+        });
+        app.document.performers[0].section = brass;
+        app.document.performers[1].section = brass;
+        app.document.performers[2].section = brass;
+        app.hidden_performers.insert(app.document.performers[1].id);
+        app.select_section(brass);
+        assert!(app.selected.contains(&0));
+        assert!(!app.selected.contains(&1));
+        assert!(app.selected.contains(&2));
+        assert_eq!(app.selected.len(), 2);
+        assert_eq!(app.status, "2人を選びました");
     }
 }

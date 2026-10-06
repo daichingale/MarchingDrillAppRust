@@ -228,7 +228,10 @@ impl eframe::App for DrillApp {
             self.last_autosave = Instant::now();
         }
         if self.playing {
-            let audio_count = if let (Some(seconds), Some(track)) = (
+            let counting_in = self.tick_count_in(dt);
+            let audio_count = if counting_in {
+                None
+            } else if let (Some(seconds), Some(track)) = (
                 self.audio_state.clock_seconds(),
                 self.document.audio.as_ref(),
             ) {
@@ -240,49 +243,56 @@ impl eframe::App for DrillApp {
             } else {
                 None
             };
-            let decision = controller::playback_decision(
-                &self.document,
-                controller::PlaybackInput {
-                    global_count: self
-                        .document
-                        .global_count(self.current_set, self.count_position),
-                    audio_count,
-                    dt_seconds: dt,
-                    speed: self.speed,
-                    range_start: self.playback_start,
-                    range_end: self.playback_end,
-                    loop_enabled: self.loop_playback,
-                },
-            );
-            match decision {
-                controller::PlaybackDecision::Seek(count) => self.seek_global(count),
-                controller::PlaybackDecision::LoopTo(count) => {
-                    self.seek_global(count);
-                    if audio_count.is_some()
-                        && let Some(track) = &self.document.audio
-                    {
-                        let seconds = drill_core::audio::count_to_audio_time(
-                            track,
-                            &self.document.tempo,
-                            count,
-                        );
-                        self.audio_state.seek_seconds(seconds);
+            if counting_in {
+                ui.ctx().request_repaint();
+            } else {
+                let decision = controller::playback_decision(
+                    &self.document,
+                    controller::PlaybackInput {
+                        global_count: self
+                            .document
+                            .global_count(self.current_set, self.count_position),
+                        audio_count,
+                        dt_seconds: dt,
+                        speed: self.speed,
+                        range_start: self.playback_start,
+                        range_end: self.playback_end,
+                        loop_enabled: self.loop_playback,
+                    },
+                );
+                match decision {
+                    controller::PlaybackDecision::Seek(count) => self.seek_global(count),
+                    controller::PlaybackDecision::LoopTo(count) => {
+                        self.seek_global(count);
+                        if audio_count.is_some()
+                            && let Some(track) = &self.document.audio
+                        {
+                            let seconds = drill_core::audio::count_to_audio_time(
+                                track,
+                                &self.document.tempo,
+                                count,
+                            );
+                            self.audio_state.seek_seconds(seconds);
+                        }
+                    }
+                    controller::PlaybackDecision::StopAt(count) => {
+                        self.seek_global(count);
+                        self.playing = false;
+                        self.count_in_remaining = None;
+                        self.audio_state.pause();
+                        self.note_simple_playback_finished();
                     }
                 }
-                controller::PlaybackDecision::StopAt(count) => {
-                    self.seek_global(count);
-                    self.playing = false;
-                    self.audio_state.pause();
-                    self.note_simple_playback_finished();
-                }
+                // See app_state.rs's `toggle_playback` for why this is a bare
+                // `request_repaint()` rather than a fixed 16ms: playback already
+                // advances by `dt`, so pacing the repaint to vsync instead of a
+                // hardcoded 60fps interval is a straight win on high-refresh
+                // displays and cannot busy-spin because this arm only runs while
+                // `self.playing` was true at the top of this block.
+                ui.ctx().request_repaint();
             }
-            // See app_state.rs's `toggle_playback` for why this is a bare
-            // `request_repaint()` rather than a fixed 16ms: playback already
-            // advances by `dt`, so pacing the repaint to vsync instead of a
-            // hardcoded 60fps interval is a straight win on high-refresh
-            // displays and cannot busy-spin because this arm only runs while
-            // `self.playing` was true at the top of this block.
-            ui.ctx().request_repaint();
+        } else {
+            self.count_in_remaining = None;
         }
         self.advance_view_motion(ui.ctx(), dt);
         // The renderer reads the *visual* playhead, which is the logical one
@@ -933,14 +943,20 @@ impl eframe::App for DrillApp {
                     self.navigate_to_global_count(self.playback_start);
                 }
                 if ui
-                    .add_enabled(self.history.can_undo(), egui::Button::new("← Undo"))
+                    .add_enabled(
+                        self.history.can_undo(),
+                        egui::Button::new(self.undo_button_label()),
+                    )
                     .on_hover_text(super::i18n::registered(self.locale, "app-ui.160"))
                     .clicked()
                 {
                     self.execute_command(UiCommand::Undo, ui.ctx());
                 }
                 if ui
-                    .add_enabled(self.history.can_redo(), egui::Button::new("→ Redo"))
+                    .add_enabled(
+                        self.history.can_redo(),
+                        egui::Button::new(self.redo_button_label()),
+                    )
                     .on_hover_text(super::i18n::registered(self.locale, "app-ui.161"))
                     .clicked()
                 {
@@ -966,6 +982,14 @@ impl eframe::App for DrillApp {
                         self.dirty = true;
                     }
                 }
+                let live_bpm =
+                    super::playhead_bpm(&self.document, self.current_set, self.count_position)
+                        .round() as i32;
+                ui.label(
+                    super::i18n::registered(self.locale, "full-mode.005")
+                        .replace("{0}", &live_bpm.to_string()),
+                )
+                .on_hover_text(super::i18n::registered(self.locale, "full-mode.035"));
                 ui.separator();
                 ui.label(format!(
                     "{} {}",
@@ -1196,6 +1220,20 @@ impl eframe::App for DrillApp {
                         {
                             let points = self.selected_points();
                             self.commit_layout(editing::align_horizontal(&points));
+                        }
+                        if ui
+                            .button(super::i18n::registered(self.locale, "full-mode.001"))
+                            .on_hover_text(super::i18n::registered(self.locale, "full-mode.002"))
+                            .clicked()
+                        {
+                            self.snap_selected_to_grid();
+                        }
+                        if ui
+                            .button(super::i18n::registered(self.locale, "full-mode.003"))
+                            .on_hover_text(super::i18n::registered(self.locale, "full-mode.004"))
+                            .clicked()
+                        {
+                            self.mirror_selection_across_field();
                         }
                         if ui
                             .button(super::i18n::registered(self.locale, "app-ui.079"))
@@ -2248,6 +2286,26 @@ impl eframe::App for DrillApp {
                         Color32::from_gray(205),
                     );
                 }
+                if let Some(left) = self.count_in_remaining {
+                    let shown = super::count_in_display(left);
+                    let caption = super::i18n::registered(self.locale, "full-mode.036")
+                        .replace("{0}", &shown.to_string());
+                    let plate = Rect::from_center_size(rect.center(), Vec2::new(220.0, 72.0));
+                    painter.rect_filled(plate, 12.0, Color32::from_white_alpha(235));
+                    painter.rect_stroke(
+                        plate,
+                        12.0,
+                        Stroke::new(2.0, super::app_theme::ACCENT),
+                        StrokeKind::Inside,
+                    );
+                    painter.text(
+                        plate.center(),
+                        egui::Align2::CENTER_CENTER,
+                        caption,
+                        egui::FontId::proportional(32.0),
+                        super::app_theme::ACCENT,
+                    );
+                }
                 let grid_width = self.document.grid.width;
                 let grid_height = self.document.grid.height;
                 let to_screen = |point: Point| {
@@ -2873,6 +2931,35 @@ impl DrillApp {
                 self.jump_to_show_start();
             }
             self.show_playback_speed_presets(ui);
+            let live_bpm =
+                super::playhead_bpm(&self.document, self.current_set, self.count_position).round()
+                    as i32;
+            ui.label(
+                super::i18n::registered(self.locale, "full-mode.034")
+                    .replace("{0}", &live_bpm.to_string()),
+            );
+            ui.checkbox(
+                &mut self.count_in_enabled,
+                super::i18n::registered(self.locale, "full-mode.006"),
+            )
+            .on_hover_text(super::i18n::registered(self.locale, "full-mode.007"));
+            if let Some(left) = self.count_in_remaining {
+                let shown = super::count_in_display(left);
+                ui.strong(
+                    super::i18n::registered(self.locale, "full-mode.008")
+                        .replace("{0}", &shown.to_string()),
+                );
+            }
+            if ui
+                .button(super::i18n::registered(self.locale, "full-mode.028"))
+                .on_hover_text(super::i18n::registered(self.locale, "full-mode.029"))
+                .clicked()
+            {
+                let csv =
+                    coordinates::set_coordinates_csv(&self.document, self.current_set, self.locale);
+                ui.ctx().copy_text(csv);
+                self.status = super::i18n::registered(self.locale, "full-mode.030").into();
+            }
         });
     }
 

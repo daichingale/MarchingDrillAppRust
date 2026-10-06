@@ -228,8 +228,20 @@ impl GridConfig {
         if !self.snap_enabled {
             return point;
         }
+        self.snap_to_step(point)
+    }
+
+    /// Snap onto the step lattice even when [`Self::snap_enabled`] is off.
+    ///
+    /// Dragging honors the snap toggle. "Put these dots on the grid" does not:
+    /// a formation that was nudged with snap disabled can still be dressed
+    /// back onto the step intersections.
+    pub fn snap_to_step(&self, point: Point) -> Point {
         let dx = self.horizontal_units / self.horizontal_steps.max(1) as f32;
         let dy = self.vertical_units / self.vertical_steps.max(1) as f32;
+        if !(dx.is_finite() && dy.is_finite() && dx > 0.0 && dy > 0.0) {
+            return point;
+        }
         Point {
             x: (point.x / dx).round() * dx,
             y: (point.y / dy).round() * dy,
@@ -1372,6 +1384,29 @@ pub enum Edit {
     },
 }
 
+/// Coarse name of an edit, for undo/redo captions. The stored history entry
+/// is the inverse, but the variant still says what kind of change it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditKind {
+    Document,
+    Positions,
+    Counts,
+    Routes,
+    Shape,
+    Annotation,
+    Marker,
+    Grid,
+    Tempo,
+    Audio,
+    Underlay,
+    Title,
+    Sync,
+    Section,
+    Subset,
+    Performer,
+    Camera,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum EditCoalesceKey {
     MovePerformers(SetId),
@@ -1433,6 +1468,43 @@ impl Edit {
             | Self::InsertCameraCut { .. }
             | Self::RemoveCameraCut { .. } => None,
             Self::InsertProductionMarker { .. } | Self::RemoveProductionMarker { .. } => None,
+        }
+    }
+
+    /// What an undo or redo button should say this edit changes.
+    pub fn kind(&self) -> EditKind {
+        match self {
+            Self::ReplaceDocument { .. } => EditKind::Document,
+            Self::MovePerformers { .. } => EditKind::Positions,
+            Self::SetCounts { .. } => EditKind::Counts,
+            Self::SetRoutes { .. } => EditKind::Routes,
+            Self::SetShape { .. } => EditKind::Shape,
+            Self::SetAnnotation { .. } => EditKind::Annotation,
+            Self::InsertProductionMarker { .. }
+            | Self::SetProductionMarker { .. }
+            | Self::RemoveProductionMarker { .. } => EditKind::Marker,
+            Self::ReplaceGrid { .. } => EditKind::Grid,
+            Self::SetTempoMap { .. } => EditKind::Tempo,
+            Self::SetAudioTrack { .. } => EditKind::Audio,
+            Self::SetImageUnderlay { .. } => EditKind::Underlay,
+            Self::RenameDocument { .. } => EditKind::Title,
+            Self::AddSyncAnchor { .. }
+            | Self::MoveSyncAnchor { .. }
+            | Self::RemoveSyncAnchor { .. } => EditKind::Sync,
+            Self::AddSection { .. }
+            | Self::RenameSection { .. }
+            | Self::RemoveSection { .. }
+            | Self::RestoreSection { .. }
+            | Self::AssignPerformersToSection { .. } => EditKind::Section,
+            Self::AddSubset { .. }
+            | Self::RenameSubset { .. }
+            | Self::SetSubsetMembers { .. }
+            | Self::RemoveSubset { .. } => EditKind::Subset,
+            Self::SetPerformerMetadata { .. } => EditKind::Performer,
+            Self::InsertCameraKeyframe { .. }
+            | Self::RemoveCameraKeyframe { .. }
+            | Self::InsertCameraCut { .. }
+            | Self::RemoveCameraCut { .. } => EditKind::Camera,
         }
     }
 
@@ -1964,6 +2036,15 @@ enum HistoryEntry {
     Legacy(MoveCommand),
 }
 
+impl HistoryEntry {
+    fn kind(&self) -> EditKind {
+        match self {
+            Self::Legacy(_) => EditKind::Positions,
+            Self::Stable(edit) => edit.kind(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Revision(pub u64);
 
@@ -2079,6 +2160,18 @@ impl History {
     }
     pub fn can_redo(&self) -> bool {
         self.cursor < self.commands.len()
+    }
+
+    /// Kind of change `undo` would apply. `None` when the stack is empty.
+    pub fn undo_kind(&self) -> Option<EditKind> {
+        self.cursor
+            .checked_sub(1)
+            .and_then(|index| self.commands.get(index).map(HistoryEntry::kind))
+    }
+
+    /// Kind of change `redo` would apply. `None` when there is nothing to redo.
+    pub fn redo_kind(&self) -> Option<EditKind> {
+        self.commands.get(self.cursor).map(HistoryEntry::kind)
     }
 
     /// How many edits `undo` would walk back. Session UI uses this to name
@@ -3389,5 +3482,46 @@ mod tests {
                 .underlay
                 .is_none()
         );
+    }
+
+    #[test]
+    fn snap_to_step_ignores_the_snap_toggle() {
+        let off = GridConfig {
+            snap_enabled: false,
+            ..GridConfig::default()
+        };
+        let raw = Point { x: 1.2, y: 3.4 };
+        assert_eq!(off.snap(raw), raw);
+        let stepped = off.snap_to_step(raw);
+        assert_ne!(stepped, raw);
+        let on = GridConfig {
+            snap_enabled: true,
+            ..off.clone()
+        };
+        assert_eq!(on.snap(raw), stepped);
+        assert_eq!(on.snap_to_step(stepped), stepped);
+    }
+
+    #[test]
+    fn undo_kind_names_the_position_edit_then_the_redo() {
+        let mut document = Document::demo(1, 1);
+        let set_id = document.sets[0].id;
+        let performer_id = document.performers[0].id;
+        let mut history = History::with_limit(4);
+        history
+            .execute(
+                &mut document,
+                Edit::MovePerformers {
+                    set_id,
+                    performer_ids: vec![performer_id],
+                    positions: vec![Point { x: 4.0, y: 6.0 }],
+                },
+            )
+            .unwrap();
+        assert_eq!(history.undo_kind(), Some(EditKind::Positions));
+        assert_eq!(history.redo_kind(), None);
+        assert!(history.undo(&mut document));
+        assert_eq!(history.undo_kind(), None);
+        assert_eq!(history.redo_kind(), Some(EditKind::Positions));
     }
 }
