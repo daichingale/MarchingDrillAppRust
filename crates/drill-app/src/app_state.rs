@@ -1845,6 +1845,7 @@ impl DrillApp {
         self.underlay_state.remove();
         self.field_tool = FieldTool::Select;
         self.field_pointer = None;
+        self.simple_reset_session_view();
     }
 
     fn begin_simple_show(&mut self) {
@@ -4473,6 +4474,7 @@ impl DrillApp {
         self.count_position = 0.0;
         self.playing = false;
         self.reset_selection_for_document();
+        self.simple_reset_session_view();
         self.field_tool = FieldTool::Select;
         self.field_pointer = None;
         self.drag_before = None;
