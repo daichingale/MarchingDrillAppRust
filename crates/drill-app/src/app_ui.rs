@@ -686,6 +686,21 @@ impl eframe::App for DrillApp {
                             self.dirty = true;
                         }
                     }
+                    ui.checkbox(
+                        &mut self.show_field_marks,
+                        super::i18n::registered(self.locale, "full-mode.037"),
+                    )
+                    .on_hover_text(super::i18n::registered(self.locale, "full-mode.038"));
+                    ui.checkbox(
+                        &mut self.show_dot_labels,
+                        super::i18n::registered(self.locale, "full-mode.039"),
+                    )
+                    .on_hover_text(super::i18n::registered(self.locale, "full-mode.040"));
+                    ui.checkbox(
+                        &mut self.labels_while_playing,
+                        super::i18n::registered(self.locale, "full-mode.041"),
+                    )
+                    .on_hover_text(super::i18n::registered(self.locale, "full-mode.042"));
                     ui.separator();
                     // App chrome only: the field view keeps its own
                     // print-styled drill_render::Theme regardless of this
@@ -1241,6 +1256,38 @@ impl eframe::App for DrillApp {
                             .clicked()
                         {
                             self.mirror_selection_across_field();
+                        }
+                        if selected_count >= 2 {
+                            if ui
+                                .button(super::i18n::registered(self.locale, "full-mode.043"))
+                                .on_hover_text(super::i18n::registered(
+                                    self.locale,
+                                    "full-mode.044",
+                                ))
+                                .clicked()
+                            {
+                                self.arrange_selection_arc();
+                            }
+                            if ui
+                                .button(super::i18n::registered(self.locale, "full-mode.045"))
+                                .on_hover_text(super::i18n::registered(
+                                    self.locale,
+                                    "full-mode.046",
+                                ))
+                                .clicked()
+                            {
+                                self.arrange_selection_circle();
+                            }
+                            if ui
+                                .button(super::i18n::registered(self.locale, "full-mode.047"))
+                                .on_hover_text(super::i18n::registered(
+                                    self.locale,
+                                    "full-mode.048",
+                                ))
+                                .clicked()
+                            {
+                                self.arrange_selection_block();
+                            }
                         }
                         if ui
                             .button(super::i18n::registered(self.locale, "app-ui.079"))
@@ -2042,10 +2089,16 @@ impl eframe::App for DrillApp {
                             ui.small(super::i18n::registered(self.locale, "core-edit.009"));
                         });
                     });
+                let hide_labels = super::hide_labels_for_playback(
+                    self.playing,
+                    self.document.performers.len(),
+                    self.labels_while_playing,
+                );
                 let render_options = drill_render::RenderOptions {
                     margin: 0.0,
                     field_center: Some(self.field_viewport.center),
                     field_zoom: self.field_viewport.zoom,
+                    show_labels: self.show_dot_labels && !hide_labels,
                     ..drill_render::RenderOptions::default()
                 };
                 let scene = drill_render::Scene {
@@ -2127,7 +2180,7 @@ impl eframe::App for DrillApp {
                         set.id,
                         &trail_performer_ids,
                         &field_map,
-                        24,
+                        super::trail_sample_count(self.playing, self.document.performers.len()),
                         &mut self.display_list,
                     );
                 }
@@ -2161,6 +2214,9 @@ impl eframe::App for DrillApp {
                         .as_ref()
                         .map(|value| &value.placement),
                 );
+                if self.show_field_marks {
+                    self.paint_field_marks(&painter, rect, &field_map);
+                }
                 // A/B comparison is a deliberately session-only visual aid:
                 // amber dots are the selected reference set, while cyan lines
                 // make the displacement from that form immediately legible.
@@ -3005,7 +3061,105 @@ impl DrillApp {
                 ui.ctx().copy_text(csv);
                 self.status = super::i18n::registered(self.locale, "full-mode.030").into();
             }
+            let scene_start = self.document.global_count(self.current_set, 0.0) as u32;
+            let scene_end = (scene_start + u32::from(self.document.sets[self.current_set].counts))
+                .min(self.document.timeline_counts());
+            let repeating = self.loop_playback
+                && self.playback_start == scene_start
+                && self.playback_end == scene_end;
+            if ui
+                .selectable_label(
+                    repeating,
+                    super::i18n::registered(self.locale, "full-mode.049"),
+                )
+                .on_hover_text(super::i18n::registered(self.locale, "full-mode.050"))
+                .clicked()
+            {
+                let (start, end, looping) = super::toggle_scene_loop(
+                    self.playback_start,
+                    self.playback_end,
+                    self.loop_playback,
+                    scene_start,
+                    scene_end,
+                );
+                self.playback_start = start;
+                self.playback_end = end;
+                self.loop_playback = looping;
+                self.status = if looping {
+                    super::i18n::registered(self.locale, "full-mode.052").into()
+                } else {
+                    super::i18n::registered(self.locale, "full-mode.051").into()
+                };
+            }
+            let chosen = !self.selected.is_empty();
+            if ui
+                .add_enabled(
+                    chosen,
+                    egui::Button::new(super::i18n::registered(self.locale, "full-mode.053")),
+                )
+                .on_hover_text(super::i18n::registered(self.locale, "full-mode.054"))
+                .clicked()
+            {
+                let indices: Vec<usize> = self.selected.iter().copied().collect();
+                let sheet = coordinates::member_sheets(&self.document, &indices, self.locale);
+                ui.ctx().copy_text(sheet);
+                self.status = super::i18n::registered(self.locale, "full-mode.055").into();
+            }
+            if self.show_dot_labels
+                && super::hide_labels_for_playback(
+                    self.playing,
+                    self.document.performers.len(),
+                    self.labels_while_playing,
+                )
+            {
+                ui.label(super::i18n::registered(self.locale, "full-mode.056"));
+                if ui
+                    .small_button(super::i18n::registered(self.locale, "full-mode.057"))
+                    .on_hover_text(super::i18n::registered(self.locale, "full-mode.058"))
+                    .clicked()
+                {
+                    self.labels_while_playing = true;
+                }
+            }
         });
+    }
+
+    fn paint_field_marks(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        field_map: &drill_render::FieldMap,
+    ) {
+        let color = Color32::from_rgb(36, 84, 158);
+        let font = egui::FontId::proportional(12.0);
+        let to_screen = |point: Point| {
+            let mapped = field_map.map(point);
+            Pos2::new(rect.left() + mapped.x, rect.top() + mapped.y)
+        };
+        for mark in coordinates::field_marks(&self.document.grid, self.locale) {
+            let (pos, align) = match mark.kind {
+                coordinates::FieldMarkKind::Side => (
+                    to_screen(mark.at) + Vec2::new(0.0, -6.0),
+                    egui::Align2::CENTER_BOTTOM,
+                ),
+                coordinates::FieldMarkKind::Depth => (
+                    to_screen(mark.at) + Vec2::new(8.0, 0.0),
+                    egui::Align2::LEFT_CENTER,
+                ),
+                coordinates::FieldMarkKind::Frame => (
+                    to_screen(mark.at) + Vec2::new(0.0, -8.0),
+                    egui::Align2::CENTER_BOTTOM,
+                ),
+                coordinates::FieldMarkKind::Front => (
+                    to_screen(mark.at) + Vec2::new(0.0, 6.0),
+                    egui::Align2::CENTER_TOP,
+                ),
+            };
+            if !rect.expand(28.0).contains(pos) {
+                continue;
+            }
+            painter.text(pos, align, mark.text, font.clone(), color);
+        }
     }
 
     fn show_set_card_strip(&mut self, ui: &mut egui::Ui) {

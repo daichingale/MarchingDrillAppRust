@@ -599,40 +599,13 @@ impl DrillApp {
                             ));
                         }
                         if ui.small_button(super::i18n::registered(self.locale, "workspace-inspector.083")).clicked() {
-                            let center = Point {
-                                x: (min.x + max.x) * 0.5,
-                                y: max.y,
-                            };
-                            let radius =
-                                ((max.x - min.x) * 0.5).max((max.y - min.y) * 0.5).max(2.5);
-                            self.commit_layout(evenly_spaced_arc(
-                                center,
-                                radius,
-                                std::f32::consts::PI,
-                                std::f32::consts::TAU,
-                                self.selected.len(),
-                            ));
+                            self.arrange_selection_arc();
                         }
                         if ui.small_button(super::i18n::registered(self.locale, "workspace-inspector.084")).clicked() {
-                            let center = Point {
-                                x: (min.x + max.x) * 0.5,
-                                y: (min.y + max.y) * 0.5,
-                            };
-                            let radius =
-                                ((max.x - min.x) * 0.5).max((max.y - min.y) * 0.5).max(2.5);
-                            self.commit_layout(shapes::circle(
-                                center,
-                                radius,
-                                self.selected.len(),
-                            ));
+                            self.arrange_selection_circle();
                         }
                         if ui.small_button(super::i18n::registered(self.locale, "workspace-inspector.085")).clicked() {
-                            let n = self.selected.len();
-                            let cols = (n as f32).sqrt().ceil() as usize;
-                            let rows = n.div_ceil(cols.max(1));
-                            let mut pts = shapes::block_fit(min, max, cols, rows);
-                            pts.truncate(n);
-                            self.commit_layout(pts);
+                            self.arrange_selection_block();
                         }
                         if ui.small_button(super::i18n::registered(self.locale, "workspace-inspector.086")).clicked() {
                             let center = Point {

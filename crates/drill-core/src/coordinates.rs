@@ -576,6 +576,246 @@ pub fn coordinates_csv_localized(doc: &Document, locale: Locale) -> String {
     out
 }
 
+/// A short label painted on the field: meters or yards from the center and
+/// from the front, plus the contest-floor frames. Session display only — it
+/// is not stored in the drill file.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FieldMark {
+    pub at: Point,
+    pub kind: FieldMarkKind,
+    pub text: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FieldMarkKind {
+    /// Side-to-side number, sitting on the front sideline.
+    Side,
+    /// Front-to-back number, sitting on the left sideline.
+    Depth,
+    /// Size of a centered reference frame, on that frame's front edge.
+    Frame,
+    /// Which edge faces the audience.
+    Front,
+}
+
+/// Labels for the bold grid lines and the centered reference frames.
+///
+/// Side labels are meters or yards from the field's own center (`右` is the
+/// audience's right, larger x). Depth labels are the same unit measured from
+/// the front sideline. Edges are skipped so the border is not numbered twice.
+pub fn field_marks(grid: &GridConfig, locale: Locale) -> Vec<FieldMark> {
+    let suffix = match grid.unit {
+        crate::Unit::Yards => "yd",
+        crate::Unit::Meters => "m",
+    };
+    let mut marks = Vec::new();
+    let center_x = grid.width * 0.5;
+    for x in grid.horizontal_major_positions() {
+        if x < 0.35 || x > grid.width - 0.35 {
+            continue;
+        }
+        let delta = x - center_x;
+        let text = if delta.abs() < 0.35 {
+            if locale == Locale::Ja {
+                "中".to_owned()
+            } else {
+                "C".to_owned()
+            }
+        } else if delta > 0.0 {
+            let distance = format_mark_distance(delta);
+            if locale == Locale::Ja {
+                format!("右{distance}{suffix}")
+            } else {
+                format!("R{distance}{suffix}")
+            }
+        } else {
+            let distance = format_mark_distance(-delta);
+            if locale == Locale::Ja {
+                format!("左{distance}{suffix}")
+            } else {
+                format!("L{distance}{suffix}")
+            }
+        };
+        marks.push(FieldMark {
+            at: Point { x, y: 0.0 },
+            kind: FieldMarkKind::Side,
+            text,
+        });
+    }
+    for y in grid.vertical_major_positions() {
+        if y < 0.35 || y > grid.height - 0.35 {
+            continue;
+        }
+        let distance = format_mark_distance(y);
+        let text = if locale == Locale::Ja {
+            format!("前{distance}{suffix}")
+        } else {
+            format!("F{distance}{suffix}")
+        };
+        marks.push(FieldMark {
+            at: Point { x: 0.0, y },
+            kind: FieldMarkKind::Depth,
+            text,
+        });
+    }
+    for (&side, bounds) in grid
+        .reference_frames
+        .iter()
+        .zip(grid.reference_frame_bounds())
+    {
+        if !side.is_finite() || side < 1.0 {
+            continue;
+        }
+        let (min_x, min_y, max_x, _max_y) = bounds;
+        if min_y < -0.5 || min_y > grid.height {
+            continue;
+        }
+        let distance = format_mark_distance(side);
+        let text = format!("{distance}{suffix}");
+        let x = ((min_x + max_x) * 0.5 + 2.0).min(max_x - 0.4);
+        marks.push(FieldMark {
+            at: Point { x, y: min_y },
+            kind: FieldMarkKind::Frame,
+            text,
+        });
+    }
+    marks.push(FieldMark {
+        at: Point {
+            x: center_x,
+            y: 0.0,
+        },
+        kind: FieldMarkKind::Front,
+        text: if locale == Locale::Ja {
+            "前".to_owned()
+        } else {
+            "Front".to_owned()
+        },
+    });
+    marks
+}
+
+fn format_mark_distance(value: f32) -> String {
+    let rounded = value.round();
+    if (value - rounded).abs() < 0.25 {
+        format!("{rounded:.0}")
+    } else {
+        format!("{value:.1}")
+    }
+}
+
+fn round_quarter_steps(value: f32) -> f32 {
+    (value * 4.0).round() / 4.0
+}
+
+fn format_quarter_steps(value: f32) -> String {
+    let rounded = round_quarter_steps(value);
+    if (rounded - rounded.round()).abs() < 0.01 {
+        format!("{:.0}", rounded.round())
+    } else if (rounded * 2.0 - (rounded * 2.0).round()).abs() < 0.01 {
+        format!("{rounded:.1}")
+    } else {
+        format!("{rounded:.2}")
+    }
+}
+
+/// Where one person stands, in steps from the center and from the front.
+pub fn place_in_steps(point: Point, grid: &GridConfig, locale: Locale) -> String {
+    let hstep = grid.horizontal_units / f32::from(grid.horizontal_steps.max(1));
+    let vstep = grid.vertical_units / f32::from(grid.vertical_steps.max(1));
+    if !(hstep.is_finite() && vstep.is_finite() && hstep > 0.0 && vstep > 0.0) {
+        return String::new();
+    }
+    let side = round_quarter_steps((point.x - grid.width * 0.5) / hstep);
+    let front = round_quarter_steps(point.y / vstep).max(0.0);
+    let front_steps = format_quarter_steps(front);
+    let across = format_quarter_steps(side.abs());
+    if locale == Locale::Ja {
+        if side.abs() < 0.75 {
+            format!("中央、前から {front_steps}歩")
+        } else if side > 0.0 {
+            format!("中央から右へ {across}歩、前から {front_steps}歩")
+        } else {
+            format!("中央から左へ {across}歩、前から {front_steps}歩")
+        }
+    } else if side.abs() < 0.75 {
+        format!("center, {front_steps} steps from the front")
+    } else if side > 0.0 {
+        format!("{across} steps right of center, {front_steps} steps from the front")
+    } else {
+        format!("{across} steps left of center, {front_steps} steps from the front")
+    }
+}
+
+fn scene_heading(set: &crate::Set, index: usize, locale: Locale) -> String {
+    let title = set.annotation.title.trim();
+    let name = if title.is_empty() {
+        set.name.trim()
+    } else {
+        title
+    };
+    if locale == Locale::Ja {
+        if name.is_empty() {
+            format!("{}（{}拍）", index + 1, set.counts)
+        } else {
+            format!("{} {name}（{}拍）", index + 1, set.counts)
+        }
+    } else if name.is_empty() {
+        format!("{} ({} counts)", index + 1, set.counts)
+    } else {
+        format!("{} {name} ({} counts)", index + 1, set.counts)
+    }
+}
+
+fn next_move_line(segment: &crate::continuity::ContinuitySegment, locale: Locale) -> String {
+    if segment.direction_kind == crate::continuity::TravelDirection::Hold {
+        return if locale == Locale::Ja {
+            format!("次の場面まで、動きません（{}拍）", segment.counts)
+        } else {
+            format!("holds until the next scene ({} counts)", segment.counts)
+        };
+    }
+    let steps = format_quarter_steps(segment.distance_steps);
+    let direction = segment.direction_kind.text(locale);
+    if locale == Locale::Ja {
+        format!(
+            "次の場面まで、{direction}へ {steps}歩（{}拍）",
+            segment.counts
+        )
+    } else {
+        format!("{steps} steps {direction} over {} counts", segment.counts)
+    }
+}
+
+/// Plain-text sheet for the chosen people: every scene, where they stand,
+/// and how they walk to the next scene. Empty when every index is out of range.
+pub fn member_sheets(doc: &Document, indices: &[usize], locale: Locale) -> String {
+    let mut blocks = Vec::new();
+    for &index in indices {
+        let Some(performer) = doc.performers.get(index) else {
+            continue;
+        };
+        let mut lines = vec![performer.label.clone()];
+        let segments = crate::continuity::performer_continuity(doc, index);
+        for (set_index, set) in doc.sets.iter().enumerate() {
+            lines.push(scene_heading(set, set_index, locale));
+            if let Some(point) = set.positions.get(index).copied() {
+                let place = place_in_steps(point, &doc.grid, locale);
+                if !place.is_empty() {
+                    lines.push(format!("  {place}"));
+                }
+            }
+            if let Some(segment) = segments
+                .iter()
+                .find(|segment| segment.from_set == set_index)
+            {
+                lines.push(format!("  {}", next_move_line(segment, locale)));
+            }
+        }
+        blocks.push(lines.join("\n"));
+    }
+    blocks.join("\n\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -804,5 +1044,65 @@ mod tests {
         let csv = coordinates_csv_localized(&doc, Locale::En);
         assert!(expected.contains("8-to-5"));
         assert!(csv.contains("8-to-5"));
+    }
+
+    #[test]
+    fn japan_floor_marks_name_the_center_the_front_and_the_contest_frame() {
+        let marks = field_marks(&GridConfig::japan_floor(), Locale::Ja);
+        let texts: Vec<&str> = marks.iter().map(|mark| mark.text.as_str()).collect();
+        assert!(texts.contains(&"中"));
+        assert!(texts.contains(&"前"));
+        assert!(texts.iter().any(|text| text.contains("30m")));
+        assert!(texts.iter().any(|text| text.starts_with('左')));
+        assert!(
+            texts
+                .iter()
+                .any(|text| text.starts_with("前") && text.ends_with('m'))
+        );
+        let english = field_marks(&GridConfig::japan_floor(), Locale::En);
+        assert!(english.iter().any(|mark| mark.text == "Front"));
+        assert!(english.iter().any(|mark| mark.text == "C"));
+        assert!(english.iter().all(|mark| {
+            !mark.text.chars().any(|ch| {
+                matches!(ch,
+                    '\u{3040}'..='\u{30ff}' |
+                    '\u{3400}'..='\u{4dbf}' |
+                    '\u{4e00}'..='\u{9fff}')
+            })
+        }));
+    }
+
+    #[test]
+    fn member_sheet_lists_every_scene_and_the_walk_between_them() {
+        let mut doc = Document::demo(1, 1);
+        let sheet = member_sheets(&doc, &[0], Locale::Ja);
+        assert!(sheet.starts_with("A1"));
+        assert!(sheet.contains("セット 1"));
+        assert!(sheet.contains("セット 2"));
+        assert!(sheet.contains("次の場面まで"));
+        assert!(sheet.contains('歩'));
+        assert!(member_sheets(&doc, &[99], Locale::Ja).is_empty());
+        doc.sets[0].name = "Open".into();
+        doc.sets[1].name = "Close".into();
+        let english = member_sheets(&doc, &[0], Locale::En);
+        assert!(english.contains("Open"));
+        assert!(english.contains("steps"));
+        assert!(english.contains("counts"));
+        assert!(!english.chars().any(|ch| {
+            matches!(ch,
+                '\u{3040}'..='\u{30ff}' |
+                '\u{3400}'..='\u{4dbf}' |
+                '\u{4e00}'..='\u{9fff}')
+        }));
+    }
+
+    #[test]
+    fn place_in_steps_uses_the_audience_right() {
+        let grid = GridConfig::default();
+        let right = place_in_steps(Point { x: 55.0, y: 5.0 }, &grid, Locale::Ja);
+        assert!(right.contains("右"));
+        assert!(right.contains("前から"));
+        let center = place_in_steps(Point { x: 50.0, y: 0.0 }, &grid, Locale::Ja);
+        assert!(center.starts_with("中央、"));
     }
 }
