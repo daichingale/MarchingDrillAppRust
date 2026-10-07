@@ -1125,7 +1125,12 @@ impl Document {
             .get(index + 1)
             .map_or(&from_set.positions, |s| &s.positions);
         out.clear();
-        out.reserve(from_set.positions.len().saturating_sub(out.capacity()));
+        // `reserve` is extra slots past `len`. After `clear`, `len` is 0, so
+        // reserving `needed - capacity` does not grow a buffer that is already
+        // past that difference but still short of the cast (capacity 50,
+        // 100 people → reserve(50) is a no-op, then `extend` allocates again
+        // on the playback hot path).
+        out.reserve(from_set.positions.len());
         if index == last_index || local_count >= f32::from(from_set.counts) {
             out.extend_from_slice(to);
             return;

@@ -143,6 +143,44 @@ pub(crate) fn count_in_display(remaining: f32) -> u32 {
     remaining.ceil().clamp(1.0, COUNT_IN_BEATS) as u32
 }
 
+/// At this cast size, drawing a name on every dot (and a dense path for
+/// every person) starts to cost a frame. Playback then drops the names
+/// unless the director asks to keep them, and draws coarser paths.
+pub(crate) const LIGHT_PLAYBACK_MIN: usize = 48;
+
+pub(crate) fn hide_labels_for_playback(
+    playing: bool,
+    performers: usize,
+    keep_labels: bool,
+) -> bool {
+    playing && performers >= LIGHT_PLAYBACK_MIN && !keep_labels
+}
+
+pub(crate) fn trail_sample_count(playing: bool, performers: usize) -> u16 {
+    if playing && performers >= LIGHT_PLAYBACK_MIN {
+        8
+    } else {
+        24
+    }
+}
+
+/// One click sets the play range to this scene and turns the loop on.
+/// The same click again, while that scene is already looping, turns it off
+/// and leaves the range where it is.
+pub(crate) fn toggle_scene_loop(
+    range_start: u32,
+    range_end: u32,
+    looping: bool,
+    scene_start: u32,
+    scene_end: u32,
+) -> (u32, u32, bool) {
+    if looping && range_start == scene_start && range_end == scene_end {
+        (range_start, range_end, false)
+    } else {
+        (scene_start, scene_end, true)
+    }
+}
+
 pub(crate) fn playback_range_summary(
     document: &Document,
     playback_start: u32,
@@ -790,6 +828,14 @@ pub(crate) struct DrillApp {
     /// Session-only. When on, the field draws every person's path for the
     /// move leaving the current scene, including while playback is running.
     playback_paths: bool,
+    /// Session-only. Numbers on the bold lines: meters or yards from the
+    /// center and from the front. Not stored in the drill file.
+    show_field_marks: bool,
+    /// Session-only. Each person's number drawn on their dot.
+    show_dot_labels: bool,
+    /// Session-only. Keep those numbers up while a large cast is playing.
+    /// Off by default so playback can skip a text layout per person.
+    labels_while_playing: bool,
     /// Session-only list of keyboard shortcuts. Not stored in the drill file.
     shortcut_help_open: bool,
     /// People who pass too close, and people whose step is too long for the
@@ -948,6 +994,9 @@ impl Default for DrillApp {
             heatmap_enabled: false,
             trail_selection: drill_render::TrailSelection::None,
             playback_paths: false,
+            show_field_marks: true,
+            show_dot_labels: true,
+            labels_while_playing: false,
             shortcut_help_open: false,
             move_check: rehearsal_checks::MoveCheck::default(),
             set_comparison: None,
@@ -3562,6 +3611,60 @@ impl DrillApp {
         self.commit_layout(points);
     }
 
+    fn selection_arc_points(&self) -> Option<Vec<Point>> {
+        let (min, max) = self.selection_bounds()?;
+        let center = Point {
+            x: (min.x + max.x) * 0.5,
+            y: max.y,
+        };
+        let radius = ((max.x - min.x) * 0.5).max((max.y - min.y) * 0.5).max(2.5);
+        Some(evenly_spaced_arc(
+            center,
+            radius,
+            std::f32::consts::PI,
+            std::f32::consts::TAU,
+            self.selected.len(),
+        ))
+    }
+
+    fn selection_circle_points(&self) -> Option<Vec<Point>> {
+        let (min, max) = self.selection_bounds()?;
+        let center = Point {
+            x: (min.x + max.x) * 0.5,
+            y: (min.y + max.y) * 0.5,
+        };
+        let radius = ((max.x - min.x) * 0.5).max((max.y - min.y) * 0.5).max(2.5);
+        Some(shapes::circle(center, radius, self.selected.len()))
+    }
+
+    fn selection_block_points(&self) -> Option<Vec<Point>> {
+        let (min, max) = self.selection_bounds()?;
+        let count = self.selected.len();
+        let cols = (count as f32).sqrt().ceil() as usize;
+        let rows = count.div_ceil(cols.max(1));
+        let mut points = shapes::block_fit(min, max, cols, rows);
+        points.truncate(count);
+        Some(points)
+    }
+
+    fn arrange_selection_arc(&mut self) {
+        if let Some(points) = self.selection_arc_points() {
+            self.commit_layout(points);
+        }
+    }
+
+    fn arrange_selection_circle(&mut self) {
+        if let Some(points) = self.selection_circle_points() {
+            self.commit_layout(points);
+        }
+    }
+
+    fn arrange_selection_block(&mut self) {
+        if let Some(points) = self.selection_block_points() {
+            self.commit_layout(points);
+        }
+    }
+
     fn select_section(&mut self, section: SectionId) {
         let indices = self
             .document
@@ -5285,5 +5388,75 @@ mod full_mode_tool_tests {
         assert!(app.selected.contains(&2));
         assert_eq!(app.selected.len(), 2);
         assert_eq!(app.status, "2人を選びました");
+    }
+
+    #[test]
+    fn arc_bows_toward_the_audience_and_can_be_undone() {
+        let mut app = DrillApp::default();
+        for (index, point) in [
+            Point { x: 10.0, y: 12.0 },
+            Point { x: 16.0, y: 12.0 },
+            Point { x: 22.0, y: 12.0 },
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            app.document.sets[0].positions[index] = point;
+        }
+        app.replace_selection([0, 1, 2].into());
+        let points = app.selection_arc_points().expect("three people");
+        assert!(points[1].y < points[0].y);
+        assert!(points[1].y < points[2].y);
+        let before = app.document.sets[0].positions[1];
+        app.arrange_selection_arc();
+        assert_ne!(app.document.sets[0].positions[1], before);
+        assert!(app.history.can_undo());
+        assert!(app.history.undo(&mut app.document));
+        assert_eq!(app.document.sets[0].positions[1], before);
+    }
+
+    #[test]
+    fn circle_starts_toward_the_audience_and_block_keeps_the_front_rank() {
+        let mut app = DrillApp::default();
+        for (index, point) in [
+            Point { x: 10.0, y: 10.0 },
+            Point { x: 18.0, y: 10.0 },
+            Point { x: 10.0, y: 18.0 },
+            Point { x: 18.0, y: 18.0 },
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            app.document.sets[0].positions[index] = point;
+        }
+        app.replace_selection([0, 1, 2, 3].into());
+        let circle = app.selection_circle_points().expect("four people");
+        let front = circle.iter().map(|point| point.y).fold(f32::MAX, f32::min);
+        assert!((circle[0].y - front).abs() < 1e-3);
+        let block = app.selection_block_points().expect("four people");
+        assert_eq!(block.len(), 4);
+        assert!(block[0].y < block[2].y);
+        assert!((block[0].y - block[1].y).abs() < 1e-3);
+    }
+
+    #[test]
+    fn scene_loop_toggles_only_when_this_scene_is_already_repeating() {
+        let (start, end, looping) = toggle_scene_loop(0, 32, false, 16, 32);
+        assert_eq!((start, end, looping), (16, 32, true));
+        let (start, end, looping) = toggle_scene_loop(16, 32, true, 16, 32);
+        assert_eq!((start, end, looping), (16, 32, false));
+        let (start, end, looping) = toggle_scene_loop(0, 32, true, 16, 32);
+        assert_eq!((start, end, looping), (16, 32, true));
+    }
+
+    #[test]
+    fn a_large_cast_hides_numbers_while_playing_unless_asked_to_keep_them() {
+        assert!(!hide_labels_for_playback(true, 16, false));
+        assert!(hide_labels_for_playback(true, LIGHT_PLAYBACK_MIN, false));
+        assert!(!hide_labels_for_playback(false, 80, false));
+        assert!(!hide_labels_for_playback(true, 80, true));
+        assert_eq!(trail_sample_count(true, 80), 8);
+        assert_eq!(trail_sample_count(false, 80), 24);
+        assert_eq!(trail_sample_count(true, 12), 24);
     }
 }
