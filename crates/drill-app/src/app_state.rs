@@ -89,7 +89,7 @@ use drill_core::Locale;
 use drill_core::route_suggestions::{
     RouteSuggestion, SuggestionConstraints, SuggestionLimits, SuggestionReason, suggest_routes,
 };
-use drill_core::transition::SetCounts;
+use drill_core::transition::{Easing, RouteShape, SetCounts};
 use drill_core::video::{ExportPreset, VideoExportConfig};
 use drill_core::{
     Document, Edit, EditKind, GridConfig, GridLine, GridStyle, History, Performer, PerformerId,
@@ -161,6 +161,177 @@ pub(crate) fn trail_sample_count(playing: bool, performers: usize) -> u16 {
         8
     } else {
         24
+    }
+}
+
+/// A large cast only draws the dots inside the window. Zooming in on part
+/// of the form then skips everyone else, which is where playback was
+/// spending its time.
+pub(crate) fn cull_offscreen_dots(performers: usize) -> bool {
+    performers >= LIGHT_PLAYBACK_MIN
+}
+
+/// How the move leaving this scene is timed and shaped. Straight and linear
+/// is the file default, so choosing it again writes nothing new.
+const SCENE_ARC_BULGE: f32 = 0.22;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SceneWalk {
+    Steady,
+    Smooth,
+    LeaveSlow,
+    ArriveSlow,
+    Arc,
+    ArcOther,
+}
+
+impl SceneWalk {
+    pub(crate) const ALL: [Self; 6] = [
+        Self::Steady,
+        Self::Smooth,
+        Self::LeaveSlow,
+        Self::ArriveSlow,
+        Self::Arc,
+        Self::ArcOther,
+    ];
+
+    fn easing(self) -> Easing {
+        match self {
+            Self::Steady | Self::Arc | Self::ArcOther => Easing::Linear,
+            Self::Smooth => Easing::Smooth,
+            Self::LeaveSlow => Easing::EaseIn,
+            Self::ArriveSlow => Easing::EaseOut,
+        }
+    }
+
+    fn shape(self) -> RouteShape {
+        match self {
+            Self::Arc => RouteShape::Arc {
+                bulge: SCENE_ARC_BULGE,
+            },
+            Self::ArcOther => RouteShape::Arc {
+                bulge: -SCENE_ARC_BULGE,
+            },
+            _ => RouteShape::Straight,
+        }
+    }
+
+    fn matches(self, route: &drill_core::transition::Route) -> bool {
+        route.easing == self.easing() && route.shape == self.shape()
+    }
+}
+
+const SCENE_TEMPO_MIN: f32 = 40.0;
+const SCENE_TEMPO_MAX: f32 = 208.0;
+const SCENE_TEMPO_STEP: f32 = 4.0;
+
+/// What the selection bar says about the current picture and the move that
+/// leaves it. Two people: the gap between them. One person, or a larger
+/// group: how far the move goes. Empty when this scene has no next scene.
+pub(crate) fn selection_walk_summary(
+    document: &Document,
+    set_index: usize,
+    selected: &BTreeSet<usize>,
+    locale: Locale,
+) -> Option<String> {
+    if selected.is_empty() {
+        return None;
+    }
+    if selected.len() == 2 {
+        let mut picked = selected.iter().copied();
+        let a = picked.next()?;
+        let b = picked.next()?;
+        let steps = steps_between(document, set_index, a, b)?;
+        return Some(
+            i18n::registered(locale, "full-mode.086").replace("{0}", &format_quarter(steps)),
+        );
+    }
+    if selected.len() == 1 {
+        let index = *selected.iter().next()?;
+        return one_person_walk(document, set_index, index, locale);
+    }
+    let mut best: Option<(f32, usize, continuity::TravelDirection)> = None;
+    for &index in selected {
+        let Some(segment) = walk_segment(document, set_index, index) else {
+            continue;
+        };
+        let farther = match best {
+            None => true,
+            Some((steps, _, _)) => segment.distance_steps > steps,
+        };
+        if farther {
+            best = Some((segment.distance_steps, index, segment.direction_kind));
+        }
+    }
+    let (steps, index, kind) = best?;
+    if kind == continuity::TravelDirection::Hold {
+        return Some(i18n::registered(locale, "full-mode.089").to_owned());
+    }
+    Some(
+        i18n::registered(locale, "full-mode.087")
+            .replace("{0}", &person_label(document, index))
+            .replace("{1}", kind.text(locale))
+            .replace("{2}", &format_quarter(steps)),
+    )
+}
+
+fn one_person_walk(
+    document: &Document,
+    set_index: usize,
+    index: usize,
+    locale: Locale,
+) -> Option<String> {
+    let segment = walk_segment(document, set_index, index)?;
+    if segment.direction_kind == continuity::TravelDirection::Hold {
+        return Some(i18n::registered(locale, "full-mode.085").to_owned());
+    }
+    Some(
+        i18n::registered(locale, "full-mode.084")
+            .replace("{0}", segment.direction_kind.text(locale))
+            .replace("{1}", &format_quarter(segment.distance_steps)),
+    )
+}
+
+fn walk_segment(
+    document: &Document,
+    set_index: usize,
+    index: usize,
+) -> Option<continuity::ContinuitySegment> {
+    continuity::performer_continuity(document, index)
+        .into_iter()
+        .find(|segment| segment.from_set == set_index)
+}
+
+fn steps_between(document: &Document, set_index: usize, a: usize, b: usize) -> Option<f32> {
+    let set = document.sets.get(set_index)?;
+    let left = *set.positions.get(a)?;
+    let right = *set.positions.get(b)?;
+    let step = document.grid.horizontal_units / f32::from(document.grid.horizontal_steps.max(1));
+    if !step.is_finite() || step <= f32::EPSILON {
+        return None;
+    }
+    let raw = (right.x - left.x).hypot(right.y - left.y) / step;
+    raw.is_finite().then_some((raw * 4.0).round() / 4.0)
+}
+
+fn person_label(document: &Document, index: usize) -> String {
+    document
+        .performers
+        .get(index)
+        .map(|performer| performer.label.trim())
+        .filter(|label| !label.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| (index + 1).to_string())
+}
+
+fn format_quarter(steps: f32) -> String {
+    let quarter = (steps * 4.0).round() / 4.0;
+    if (quarter - quarter.round()).abs() < 0.01 {
+        format!("{}", quarter.round() as i32)
+    } else if (quarter * 2.0 - (quarter * 2.0).round()).abs() < 0.01 {
+        format!("{quarter:.1}")
+    } else {
+        format!("{quarter:.2}")
     }
 }
 
@@ -836,6 +1007,9 @@ pub(crate) struct DrillApp {
     /// Session-only. Keep those numbers up while a large cast is playing.
     /// Off by default so playback can skip a text layout per person.
     labels_while_playing: bool,
+    /// Session-only. Faint dots for where everyone stands in the next scene.
+    /// Not stored in the drill file.
+    show_next_places: bool,
     /// Session-only list of keyboard shortcuts. Not stored in the drill file.
     shortcut_help_open: bool,
     /// People who pass too close, and people whose step is too long for the
@@ -997,6 +1171,7 @@ impl Default for DrillApp {
             show_field_marks: true,
             show_dot_labels: true,
             labels_while_playing: false,
+            show_next_places: false,
             shortcut_help_open: false,
             move_check: rehearsal_checks::MoveCheck::default(),
             set_comparison: None,
@@ -3666,6 +3841,133 @@ impl DrillApp {
         }
     }
 
+    fn current_scene_walk(&self) -> Option<SceneWalk> {
+        let route = &self.document.sets.get(self.current_set)?.routes.default;
+        SceneWalk::ALL.into_iter().find(|walk| walk.matches(route))
+    }
+
+    /// Timing and shape of the move that leaves this scene. Drawn paths on
+    /// individual people are left alone. One undo. The picture itself does
+    /// not move.
+    fn apply_scene_walk(&mut self, walk: SceneWalk) {
+        if self.current_set + 1 >= self.document.sets.len() {
+            self.status = i18n::registered(self.locale, "full-mode.074").into();
+            return;
+        }
+        let set_id = self.document.sets[self.current_set].id;
+        let mut routes = self.document.sets[self.current_set].routes.clone();
+        let easing = walk.easing();
+        let shape = walk.shape();
+        routes.default.easing = easing;
+        routes.default.shape = shape.clone();
+        for route in routes.overrides.values_mut() {
+            route.easing = easing;
+            if matches!(route.shape, RouteShape::Straight | RouteShape::Arc { .. }) {
+                route.shape = shape.clone();
+            }
+        }
+        let default = routes.default.clone();
+        routes.overrides.retain(|_, route| route != &default);
+        if routes == self.document.sets[self.current_set].routes {
+            return;
+        }
+        if self.execute_edit(
+            Edit::SetRoutes { set_id, routes },
+            i18n::registered(self.locale, "full-mode.088"),
+        ) {
+            self.status = i18n::registered(self.locale, "full-mode.073").into();
+        }
+    }
+
+    fn scene_opening_bpm(&self) -> i32 {
+        let start = self.document.global_count(self.current_set, 0.0);
+        self.document.tempo.bpm_at(start).round() as i32
+    }
+
+    /// Four beats at a time, anchored at the start of this scene. The opening
+    /// tempo control stays the tempo at count 0. One undo. Positions stay put.
+    fn nudge_scene_tempo(&mut self, delta: f32) {
+        if !delta.is_finite() || delta == 0.0 {
+            return;
+        }
+        let start = self
+            .document
+            .global_count(self.current_set, 0.0)
+            .round()
+            .max(0.0);
+        let anchor = self
+            .document
+            .tempo
+            .events()
+            .iter()
+            .find(|event| (event.count - start).abs() < 0.51)
+            .map(|event| event.count)
+            .unwrap_or(start);
+        let current = self.document.tempo.bpm_at(anchor).round();
+        let next = (current + delta).clamp(SCENE_TEMPO_MIN, SCENE_TEMPO_MAX);
+        if (next - current).abs() < 0.5 {
+            return;
+        }
+        let mut tempo = self.document.tempo.clone();
+        if (anchor - start).abs() > f32::EPSILON {
+            tempo.remove(anchor);
+        }
+        tempo.set(start, next);
+        if self.execute_edit(
+            Edit::SetTempoMap { tempo },
+            i18n::registered(self.locale, "full-mode.079"),
+        ) && start == 0.0
+        {
+            self.tempo_bpm = next;
+        }
+    }
+
+    fn scene_tempo_slower(&mut self) {
+        self.nudge_scene_tempo(-SCENE_TEMPO_STEP);
+    }
+
+    fn scene_tempo_faster(&mut self) {
+        self.nudge_scene_tempo(SCENE_TEMPO_STEP);
+    }
+
+    fn selection_walk_line(&self) -> Option<String> {
+        selection_walk_summary(
+            &self.document,
+            self.current_set,
+            &self.selected,
+            self.locale,
+        )
+    }
+
+    fn zoom_to_selection(&mut self, size: Vec2) {
+        let mut min = Point {
+            x: f32::MAX,
+            y: f32::MAX,
+        };
+        let mut max = Point {
+            x: f32::MIN,
+            y: f32::MIN,
+        };
+        let mut any = false;
+        for &index in &self.selected {
+            let Some(point) = self.frame_positions.get(index).copied() else {
+                continue;
+            };
+            if !point.x.is_finite() || !point.y.is_finite() {
+                continue;
+            }
+            any = true;
+            min.x = min.x.min(point.x);
+            min.y = min.y.min(point.y);
+            max.x = max.x.max(point.x);
+            max.y = max.y.max(point.y);
+        }
+        if any {
+            self.field_viewport
+                .frame_bounds(&self.document.grid, size, min, max);
+        }
+    }
+
     fn select_section(&mut self, section: SectionId) {
         let indices = self
             .document
@@ -5460,5 +5762,112 @@ mod full_mode_tool_tests {
         assert_eq!(trail_sample_count(true, 80), 8);
         assert_eq!(trail_sample_count(false, 80), 24);
         assert_eq!(trail_sample_count(true, 12), 24);
+    }
+
+    #[test]
+    fn a_large_cast_skips_dots_outside_the_window() {
+        assert!(!cull_offscreen_dots(LIGHT_PLAYBACK_MIN - 1));
+        assert!(cull_offscreen_dots(LIGHT_PLAYBACK_MIN));
+    }
+
+    #[test]
+    fn scene_walk_changes_timing_and_curve_without_moving_the_picture() {
+        let mut app = DrillApp::default();
+        app.document.sets[0].positions[0] = Point { x: 10.0, y: 20.0 };
+        app.document.sets[1].positions[0] = Point { x: 30.0, y: 20.0 };
+        let picture = app.document.sets[0].positions.clone();
+        let old = app.document.to_json().expect("demo json");
+        assert!(
+            Document::from_json(&old).unwrap().sets[0]
+                .routes
+                .is_trivial()
+        );
+
+        app.apply_scene_walk(SceneWalk::LeaveSlow);
+        assert_eq!(app.document.sets[0].routes.default.easing, Easing::EaseIn);
+        assert_eq!(app.history.undo_kind(), Some(EditKind::Routes));
+        let mut mid = Vec::new();
+        app.document.positions_at_count(0, 4.0, &mut mid);
+        assert!((mid[0].x - 11.25).abs() < 0.05, "{}", mid[0].x);
+        assert_eq!(app.document.sets[0].positions, picture);
+
+        app.apply_scene_walk(SceneWalk::Arc);
+        app.document.positions_at_count(0, 8.0, &mut mid);
+        assert!(
+            (mid[0].y - 20.0).abs() > 1.0,
+            "arc stayed on the straight line: {}",
+            mid[0].y
+        );
+        let saved = app.document.to_json().expect("saved walk");
+        let loaded = Document::from_json(&saved).expect("load walk");
+        loaded.positions_at_count(0, 8.0, &mut mid);
+        assert!((mid[0].y - 20.0).abs() > 1.0);
+
+        assert!(app.history.undo(&mut app.document));
+        assert_eq!(app.document.sets[0].routes.default.easing, Easing::EaseIn);
+        app.current_set = 1;
+        app.apply_scene_walk(SceneWalk::Smooth);
+        assert!(app.document.sets[1].routes.is_trivial());
+        assert_eq!(app.status, "次の場面がないので、歩き方は変えられません");
+    }
+
+    #[test]
+    fn scene_tempo_starts_at_this_scene_and_leaves_the_opening_tempo() {
+        let mut app = DrillApp::default();
+        let positions = app.document.sets[0].positions.clone();
+        app.current_set = 1;
+        app.nudge_scene_tempo(4.0);
+        let start = app.document.global_count(1, 0.0);
+        assert!((app.document.tempo.bpm_at(start) - 124.0).abs() < 0.1);
+        assert!((app.document.tempo.bpm_at(0.0) - 120.0).abs() < 0.1);
+        assert!((app.tempo_bpm - 120.0).abs() < 0.1);
+        assert_eq!(app.history.undo_kind(), Some(EditKind::Tempo));
+        assert_eq!(app.document.sets[0].positions, positions);
+        assert!(app.history.undo(&mut app.document));
+        assert!((app.document.tempo.bpm_at(start) - 120.0).abs() < 0.1);
+
+        app.current_set = 0;
+        app.scene_tempo_slower();
+        assert!((app.tempo_bpm - 116.0).abs() < 0.1);
+        assert!((app.document.tempo.bpm_at(0.0) - 116.0).abs() < 0.1);
+        app.document.tempo.set(0.0, 208.0);
+        app.tempo_bpm = 208.0;
+        let revision = app.history.revision();
+        app.nudge_scene_tempo(4.0);
+        assert_eq!(app.history.revision(), revision);
+        assert!((app.document.tempo.bpm_at(0.0) - 208.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn selection_walk_line_reads_steps_between_people_and_to_the_next_scene() {
+        let mut app = DrillApp::default();
+        let step = app.document.grid.horizontal_units
+            / f32::from(app.document.grid.horizontal_steps.max(1));
+        app.document.sets[0].positions[0] = Point { x: 10.0, y: 20.0 };
+        app.document.sets[0].positions[1] = Point {
+            x: 10.0 + step * 8.0,
+            y: 20.0,
+        };
+        app.document.sets[1].positions[0] = Point {
+            x: 10.0 + step * 8.0,
+            y: 20.0,
+        };
+        app.document.sets[1].positions[1] = Point {
+            x: 10.0 + step * 8.0,
+            y: 20.0 - step * 16.0,
+        };
+        app.selected.insert(0);
+        let one = app.selection_walk_line().expect("one person");
+        assert!(one.contains("右"), "{one}");
+        assert!(one.contains('8'), "{one}");
+        app.selected.insert(1);
+        let pair = app.selection_walk_line().expect("two people");
+        assert!(pair.contains("あいだ"), "{pair}");
+        assert!(pair.contains('8'), "{pair}");
+        app.document.sets[0].positions[2] = Point { x: 10.0, y: 20.0 };
+        app.document.sets[1].positions[2] = Point { x: 10.0, y: 20.0 };
+        app.selected.insert(2);
+        let group = app.selection_walk_line().expect("group");
+        assert!(group.contains("いちばん遠い"), "{group}");
     }
 }

@@ -4733,6 +4733,7 @@ impl DrillApp {
             margin: 0.0,
             field_center: Some(self.field_viewport.center),
             field_zoom: self.field_viewport.zoom,
+            skip_offscreen: super::cull_offscreen_dots(self.document.performers.len()),
             ..drill_render::RenderOptions::default()
         };
         let scene = drill_render::Scene {

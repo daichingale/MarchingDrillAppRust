@@ -1234,6 +1234,9 @@ impl eframe::App for DrillApp {
                             ))
                             .strong(),
                         );
+                        if let Some(walk) = self.selection_walk_line() {
+                            ui.label(walk);
+                        }
                         ui.small(super::i18n::registered(self.locale, "app-ui.119"))
                             .on_hover_text(super::i18n::registered(self.locale, "app-ui.120"));
                         if ui
@@ -2085,6 +2088,23 @@ impl eframe::App for DrillApp {
                                             .clamp_center(&self.document.grid, viewport_size);
                                     }
                                 }
+                                if ui
+                                    .add_enabled(
+                                        !self.selected.is_empty(),
+                                        egui::Button::new(super::i18n::registered(
+                                            self.locale,
+                                            "full-mode.082",
+                                        ))
+                                        .small(),
+                                    )
+                                    .on_hover_text(super::i18n::registered(
+                                        self.locale,
+                                        "full-mode.083",
+                                    ))
+                                    .clicked()
+                                {
+                                    self.zoom_to_selection(viewport_size);
+                                }
                             });
                             ui.small(super::i18n::registered(self.locale, "core-edit.009"));
                         });
@@ -2099,6 +2119,7 @@ impl eframe::App for DrillApp {
                     field_center: Some(self.field_viewport.center),
                     field_zoom: self.field_viewport.zoom,
                     show_labels: self.show_dot_labels && !hide_labels,
+                    skip_offscreen: super::cull_offscreen_dots(self.document.performers.len()),
                     ..drill_render::RenderOptions::default()
                 };
                 let scene = drill_render::Scene {
@@ -2216,6 +2237,9 @@ impl eframe::App for DrillApp {
                 );
                 if self.show_field_marks {
                     self.paint_field_marks(&painter, rect, &field_map);
+                }
+                if self.show_next_places {
+                    self.paint_next_places(&painter, rect, &field_map);
                 }
                 // A/B comparison is a deliberately session-only visual aid:
                 // amber dots are the selected reference set, while cyan lines
@@ -3007,8 +3031,26 @@ impl DrillApp {
         }
     }
 
+    fn scene_walk_choice(
+        &mut self,
+        ui: &mut egui::Ui,
+        current: Option<super::SceneWalk>,
+        walk: super::SceneWalk,
+        label: &str,
+        hint: &str,
+    ) {
+        if ui
+            .selectable_label(current == Some(walk), label)
+            .on_hover_text(hint)
+            .clicked()
+        {
+            self.apply_scene_walk(walk);
+            ui.close();
+        }
+    }
+
     fn show_timeline_playback_bar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui
                 .button(if self.playing {
                     text(self.locale, Text::Pause)
@@ -3034,6 +3076,75 @@ impl DrillApp {
                 super::i18n::registered(self.locale, "full-mode.034")
                     .replace("{0}", &live_bpm.to_string()),
             );
+            let scene_bpm = self.scene_opening_bpm();
+            ui.label(
+                super::i18n::registered(self.locale, "full-mode.075")
+                    .replace("{0}", &scene_bpm.to_string()),
+            )
+            .on_hover_text(super::i18n::registered(self.locale, "full-mode.076"));
+            if ui
+                .button("−")
+                .on_hover_text(super::i18n::registered(self.locale, "full-mode.077"))
+                .clicked()
+            {
+                self.scene_tempo_slower();
+            }
+            if ui
+                .button("＋")
+                .on_hover_text(super::i18n::registered(self.locale, "full-mode.078"))
+                .clicked()
+            {
+                self.scene_tempo_faster();
+            }
+            let current_walk = self.current_scene_walk();
+            ui.menu_button(
+                super::i18n::registered(self.locale, "full-mode.059"),
+                |ui| {
+                    ui.small(super::i18n::registered(self.locale, "full-mode.060"));
+                    self.scene_walk_choice(
+                        ui,
+                        current_walk,
+                        super::SceneWalk::Steady,
+                        super::i18n::registered(self.locale, "full-mode.061"),
+                        super::i18n::registered(self.locale, "full-mode.062"),
+                    );
+                    self.scene_walk_choice(
+                        ui,
+                        current_walk,
+                        super::SceneWalk::Smooth,
+                        super::i18n::registered(self.locale, "full-mode.063"),
+                        super::i18n::registered(self.locale, "full-mode.064"),
+                    );
+                    self.scene_walk_choice(
+                        ui,
+                        current_walk,
+                        super::SceneWalk::LeaveSlow,
+                        super::i18n::registered(self.locale, "full-mode.065"),
+                        super::i18n::registered(self.locale, "full-mode.066"),
+                    );
+                    self.scene_walk_choice(
+                        ui,
+                        current_walk,
+                        super::SceneWalk::ArriveSlow,
+                        super::i18n::registered(self.locale, "full-mode.067"),
+                        super::i18n::registered(self.locale, "full-mode.068"),
+                    );
+                    self.scene_walk_choice(
+                        ui,
+                        current_walk,
+                        super::SceneWalk::Arc,
+                        super::i18n::registered(self.locale, "full-mode.069"),
+                        super::i18n::registered(self.locale, "full-mode.070"),
+                    );
+                    self.scene_walk_choice(
+                        ui,
+                        current_walk,
+                        super::SceneWalk::ArcOther,
+                        super::i18n::registered(self.locale, "full-mode.071"),
+                        super::i18n::registered(self.locale, "full-mode.072"),
+                    );
+                },
+            );
             ui.checkbox(
                 &mut self.count_in_enabled,
                 super::i18n::registered(self.locale, "full-mode.006"),
@@ -3044,6 +3155,11 @@ impl DrillApp {
                 super::i18n::registered(self.locale, "rehearsal.010"),
             )
             .on_hover_text(super::i18n::registered(self.locale, "rehearsal.011"));
+            ui.checkbox(
+                &mut self.show_next_places,
+                super::i18n::registered(self.locale, "full-mode.080"),
+            )
+            .on_hover_text(super::i18n::registered(self.locale, "full-mode.081"));
             if let Some(left) = self.count_in_remaining {
                 let shown = super::count_in_display(left);
                 ui.strong(
@@ -3159,6 +3275,45 @@ impl DrillApp {
                 continue;
             }
             painter.text(pos, align, mark.text, font.clone(), color);
+        }
+    }
+
+    fn paint_next_places(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        field_map: &drill_render::FieldMap,
+    ) {
+        let Some(next) = self.document.sets.get(self.current_set + 1) else {
+            return;
+        };
+        let to_screen = |point: Point| {
+            let mapped = field_map.map(point);
+            Pos2::new(rect.left() + mapped.x, rect.top() + mapped.y)
+        };
+        let dot = Color32::from_rgba_unmultiplied(76, 163, 255, 180);
+        let line = Color32::from_rgba_unmultiplied(76, 163, 255, 90);
+        let nearby = rect.expand(28.0);
+        for (index, &point) in next.positions.iter().enumerate() {
+            if self
+                .document
+                .performers
+                .get(index)
+                .is_some_and(|performer| self.hidden_performers.contains(&performer.id))
+            {
+                continue;
+            }
+            let dest = to_screen(point);
+            let from = self.frame_positions.get(index).copied().map(to_screen);
+            if !nearby.contains(dest) && from.is_none_or(|start| !nearby.contains(start)) {
+                continue;
+            }
+            if let Some(start) = from
+                && start.distance(dest) > 2.0
+            {
+                painter.line_segment([start, dest], Stroke::new(1.0, line));
+            }
+            painter.circle_stroke(dest, 6.0, Stroke::new(1.5, dot));
         }
     }
 
