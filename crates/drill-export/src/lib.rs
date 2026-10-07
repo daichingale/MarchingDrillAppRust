@@ -3,6 +3,7 @@
 pub mod page;
 pub mod pdf;
 pub mod report;
+pub mod scene_png;
 
 use drill_core::video::{EncoderBackend, VideoExportConfig};
 use drill_core::{Document, Point, Symbol};

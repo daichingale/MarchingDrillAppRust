@@ -507,6 +507,13 @@ impl DrillApp {
             }
         }
         if ui
+            .button(super::i18n::registered(self.locale, "rehearsal.005"))
+            .on_hover_text(super::i18n::registered(self.locale, "rehearsal.006"))
+            .clicked()
+        {
+            self.save_scene_diagram();
+        }
+        if ui
             .button(super::i18n::registered(self.locale, "inspector-media.061"))
             .clicked()
         {

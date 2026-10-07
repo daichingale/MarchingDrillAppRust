@@ -56,6 +56,8 @@ mod production_sheet_workspace;
 mod project_state;
 #[path = "recent_projects.rs"]
 mod recent_projects;
+#[path = "rehearsal_checks.rs"]
+mod rehearsal_checks;
 #[path = "section_manager.rs"]
 mod section_manager;
 #[path = "set_navigator.rs"]
@@ -785,6 +787,15 @@ pub(crate) struct DrillApp {
     /// the three caches above this is not cached -- it is recomputed from
     /// `frame_positions`-adjacent state every frame it is visible.
     trail_selection: drill_render::TrailSelection,
+    /// Session-only. When on, the field draws every person's path for the
+    /// move leaving the current scene, including while playback is running.
+    playback_paths: bool,
+    /// Session-only list of keyboard shortcuts. Not stored in the drill file.
+    shortcut_help_open: bool,
+    /// People who pass too close, and people whose step is too long for the
+    /// count, on the move leaving the current scene. Rebuilt each full-mode
+    /// frame. Never written into the document.
+    move_check: rehearsal_checks::MoveCheck,
     /// Optional translucent reference form for A/B visual checks.
     set_comparison: Option<SetComparison>,
     set_count_draft: Option<SetCountDraft>,
@@ -936,6 +947,9 @@ impl Default for DrillApp {
             smart_transition: smart_transition_state::SmartTransitionState::default(),
             heatmap_enabled: false,
             trail_selection: drill_render::TrailSelection::None,
+            playback_paths: false,
+            shortcut_help_open: false,
+            move_check: rehearsal_checks::MoveCheck::default(),
             set_comparison: None,
             set_count_draft: None,
             performer_draft: None,
