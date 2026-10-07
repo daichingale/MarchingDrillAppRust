@@ -1034,6 +1034,9 @@ impl DrillApp {
                 .take(8)
                 .map(|event| (event.performer, event.units_per_count, event.rating))
                 .collect::<Vec<_>>();
+            // After the report borrow ends, so the plain-language check can
+            // scan again with the same scratch buffer.
+            self.show_plain_move_warnings(ui);
             if !collision_focus.is_empty() || !stride_focus.is_empty() {
                 egui::CollapsingHeader::new(super::i18n::registered(
                     self.locale,

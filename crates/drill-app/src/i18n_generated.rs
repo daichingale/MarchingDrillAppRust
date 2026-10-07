@@ -3224,6 +3224,50 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         }
         (Locale::Ja, "full-mode.036") => "カウント {0}",
         (Locale::En, "full-mode.036") => "Count {0}",
+        (Locale::Ja, "rehearsal.001") => "この場面の図",
+        (Locale::En, "rehearsal.001") => "Picture of this scene",
+        (Locale::Ja, "rehearsal.002") => "客席側が下の図を、PNGで保存します",
+        (Locale::En, "rehearsal.002") => "Save a PNG. The audience side is at the bottom",
+        (Locale::Ja, "rehearsal.003") => "図を保存しました",
+        (Locale::En, "rehearsal.003") => "Saved the picture",
+        (Locale::Ja, "rehearsal.004") => "図を保存できませんでした",
+        (Locale::En, "rehearsal.004") => "Could not save the picture",
+        (Locale::Ja, "rehearsal.005") => "場面の図を保存",
+        (Locale::En, "rehearsal.005") => "Save a picture of this scene",
+        (Locale::Ja, "rehearsal.006") => "今の場面の並びを PNG 画像にします。客席側が下です",
+        (Locale::En, "rehearsal.006") => {
+            "Save where everyone stands as a PNG. The audience side is at the bottom"
+        }
+        (Locale::Ja, "rehearsal.007") => "キー操作",
+        (Locale::En, "rehearsal.007") => "Keyboard",
+        (Locale::Ja, "rehearsal.008") => "メニューと同じ操作です",
+        (Locale::En, "rehearsal.008") => "The same actions as the menus",
+        (Locale::Ja, "rehearsal.009") => "キー操作",
+        (Locale::En, "rehearsal.009") => "Keyboard",
+        (Locale::Ja, "rehearsal.010") => "道すじ",
+        (Locale::En, "rehearsal.010") => "Paths",
+        (Locale::Ja, "rehearsal.011") => "人が歩く線を、フィールドに出します",
+        (Locale::En, "rehearsal.011") => "Show the line each person walks",
+        (Locale::Ja, "rehearsal.012") => "{0} と {1} が、{2}拍目あたりで近すぎます",
+        (Locale::En, "rehearsal.012") => "{0} and {1} are too close around count {2}",
+        (Locale::Ja, "rehearsal.013") => "この二人を選びます",
+        (Locale::En, "rehearsal.013") => "Select these two",
+        (Locale::Ja, "rehearsal.014") => "{0}は {1}拍で {2}歩。大きすぎます",
+        (Locale::En, "rehearsal.014") => "{0} needs {2} steps in {1} counts. That is too far",
+        (Locale::Ja, "rehearsal.015") => "この人を選びます",
+        (Locale::En, "rehearsal.015") => "Select this person",
+        (Locale::Ja, "rehearsal.016") => "ほかに {0}件",
+        (Locale::En, "rehearsal.016") => "{0} more",
+        (Locale::Ja, "rehearsal.017") => "近すぎる人を選びました",
+        (Locale::En, "rehearsal.017") => "Selected the people who are too close",
+        (Locale::Ja, "rehearsal.018") => "歩幅の大きい人を選びました",
+        (Locale::En, "rehearsal.018") => "Selected the person with the long step",
+        (Locale::Ja, "rehearsal.019") => "歩き方の確認",
+        (Locale::En, "rehearsal.019") => "Check the move",
+        (Locale::Ja, "rehearsal.020") => "近すぎる人と、拍に対して歩数が大きい人です",
+        (Locale::En, "rehearsal.020") => {
+            "People who pass too close, and people who need too many steps for the count"
+        }
         _ => "[missing message]",
     }
 }

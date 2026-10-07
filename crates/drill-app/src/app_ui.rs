@@ -751,6 +751,13 @@ impl eframe::App for DrillApp {
                         ui.close();
                     }
                     if ui
+                        .button(super::i18n::registered(self.locale, "rehearsal.009"))
+                        .clicked()
+                    {
+                        self.shortcut_help_open = true;
+                        ui.close();
+                    }
+                    if ui
                         .button(super::i18n::registered(self.locale, "glossary.011"))
                         .clicked()
                     {
@@ -2092,14 +2099,15 @@ impl eframe::App for DrillApp {
                         drill_render::append_heatmap(occupancy, &field_map, &mut self.display_list);
                     }
                 }
-                // Movement trails for the transition leaving the current set,
-                // scoped by the Analytics panel's "Show for" selector. Cheap
-                // enough (warm thread-local scratch in `drill_render`) to
-                // resample every visible frame rather than cache.
-                if self.trail_selection != drill_render::TrailSelection::None
-                    && let Some(set) = self.document.sets.get(self.current_set)
-                {
-                    let trail_performer_ids: Vec<PerformerId> = match self.trail_selection {
+                // Movement trails for the transition leaving the current set.
+                // The playback path switch shows everyone. The analytics
+                // selector still narrows that to the selection when the switch
+                // is off. Cheap enough (warm thread-local scratch in
+                // `drill_render`) to resample every visible frame.
+                let trail_performer_ids: Vec<PerformerId> = if self.playback_paths {
+                    self.document.performers.iter().map(|p| p.id).collect()
+                } else {
+                    match self.trail_selection {
                         drill_render::TrailSelection::All => {
                             self.document.performers.iter().map(|p| p.id).collect()
                         }
@@ -2109,17 +2117,19 @@ impl eframe::App for DrillApp {
                             .filter_map(|&index| self.document.performers.get(index).map(|p| p.id))
                             .collect(),
                         drill_render::TrailSelection::None => Vec::new(),
-                    };
-                    if !trail_performer_ids.is_empty() {
-                        drill_render::append_trails(
-                            &self.document,
-                            set.id,
-                            &trail_performer_ids,
-                            &field_map,
-                            24,
-                            &mut self.display_list,
-                        );
                     }
+                };
+                if !trail_performer_ids.is_empty()
+                    && let Some(set) = self.document.sets.get(self.current_set)
+                {
+                    drill_render::append_trails(
+                        &self.document,
+                        set.id,
+                        &trail_performer_ids,
+                        &field_map,
+                        24,
+                        &mut self.display_list,
+                    );
                 }
                 if let Some(gpu) = self.gpu.as_ref().filter(|gpu| gpu.active()) {
                     gpu.update(&self.display_list);
@@ -2180,6 +2190,35 @@ impl eframe::App for DrillApp {
                             7.0,
                             Stroke::new(1.5, Color32::from_rgba_unmultiplied(255, 190, 75, 220)),
                         );
+                    }
+                }
+                self.refresh_move_check();
+                let long_steps: Vec<usize> =
+                    self.move_check.big.iter().map(|step| step.index).collect();
+                let close_pairs: Vec<(usize, usize)> = self
+                    .move_check
+                    .close
+                    .iter()
+                    .map(|call| (call.a, call.b))
+                    .collect();
+                for index in long_steps {
+                    if let Some(&point) = self.frame_positions.get(index) {
+                        painter.circle_stroke(
+                            comparison_to_screen(point),
+                            11.0,
+                            Stroke::new(2.0, Color32::from_rgb(196, 122, 32)),
+                        );
+                    }
+                }
+                for (left, right) in close_pairs {
+                    for index in [left, right] {
+                        if let Some(&point) = self.frame_positions.get(index) {
+                            painter.circle_stroke(
+                                comparison_to_screen(point),
+                                12.0,
+                                Stroke::new(2.5, Color32::from_rgb(196, 58, 48)),
+                            );
+                        }
                     }
                 }
                 egui::Area::new("set-comparison-controls".into())
@@ -2889,6 +2928,7 @@ impl eframe::App for DrillApp {
         self.show_close_guard(ui.ctx());
         self.show_document_open_guard(ui.ctx());
         self.show_recent_projects(ui.ctx());
+        self.show_shortcut_help(ui.ctx());
         if let Some(message) = self.presence.show(ui.ctx(), self.locale) {
             self.status = message;
         }
@@ -2943,6 +2983,11 @@ impl DrillApp {
                 super::i18n::registered(self.locale, "full-mode.006"),
             )
             .on_hover_text(super::i18n::registered(self.locale, "full-mode.007"));
+            ui.checkbox(
+                &mut self.playback_paths,
+                super::i18n::registered(self.locale, "rehearsal.010"),
+            )
+            .on_hover_text(super::i18n::registered(self.locale, "rehearsal.011"));
             if let Some(left) = self.count_in_remaining {
                 let shown = super::count_in_display(left);
                 ui.strong(
