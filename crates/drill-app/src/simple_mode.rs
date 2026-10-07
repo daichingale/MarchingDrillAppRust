@@ -258,6 +258,9 @@ pub(crate) struct SimpleModeState {
     /// Where everyone stands in this scene. Nothing is written.
     place_sheet_open: bool,
     place_sheet_copied: bool,
+    /// Every scene's places, to paste into one message. Nothing is written.
+    show_sheet_open: bool,
+    show_sheet_copied: bool,
     /// Watch only the move of the current scene, then start that move again.
     scene_loop: bool,
     /// Draft for the current scene's name. A stock "セット 1" shows as empty.
@@ -492,6 +495,8 @@ impl DrillApp {
             self.simple_mode.memo_copied = false;
             self.simple_mode.place_sheet_open = false;
             self.simple_mode.place_sheet_copied = false;
+            self.simple_mode.show_sheet_open = false;
+            self.simple_mode.show_sheet_copied = false;
         }
     }
 
@@ -634,7 +639,7 @@ impl DrillApp {
     /// `empty`, `placed`, `play`, `glossary`, `selected`, `recent`, `full`,
     /// `move`, `save`, `done`, `line`, `step`, `circle`, `nudge`, `walk`,
     /// `shows`, `hints`, `memo`, `numbers`, `shape`, `block`, `count`,
-    /// `places`, or `pair`.
+    /// `places`, `pair`, `order`, `sheet`, or `recover`.
     pub(crate) fn apply_qa_simple_fixture(&mut self) {
         let Ok(stage) = std::env::var("DRILLFORGE_QA_SIMPLE") else {
             return;
@@ -866,6 +871,52 @@ impl DrillApp {
             self.nav_glide.settle();
             self.replace_selection([0_usize, 1].into_iter().collect());
         }
+        if stage == "order" || stage == "sheet" {
+            self.place_performer_at(Point { x: 8.0, y: 28.0 }, true);
+            self.place_performer_at(Point { x: 30.0, y: 8.0 }, true);
+            self.duplicate_current_set();
+            let step = self.document.grid.horizontal_units
+                / f32::from(self.document.grid.horizontal_steps.max(1));
+            let origin = self.document.sets[self.current_set].positions[0];
+            let set_id = self.document.sets[self.current_set].id;
+            let performer_id = self.document.performers[0].id;
+            let _ = self.execute_edit(
+                Edit::MovePerformers {
+                    set_id,
+                    performer_ids: vec![performer_id],
+                    positions: vec![Point {
+                        x: origin.x + step * 4.0,
+                        y: origin.y,
+                    }],
+                },
+                "qa",
+            );
+            self.simple_rename_scene("サビ");
+            self.duplicate_current_set();
+            self.navigate_to_set(1);
+            self.nav_glide.settle();
+        }
+        if stage == "sheet" {
+            self.simple_mode.show_sheet_open = true;
+        }
+        if stage == "order" || stage == "recover" {
+            self.project_state
+                .recoveries
+                .push(drill_project::recovery::RecoveryCandidate {
+                    root: std::path::PathBuf::from("recovery/qa"),
+                    autosave: std::path::PathBuf::from("recovery/qa/autosave.drill.json"),
+                    meta: drill_project::recovery::SessionMeta {
+                        session_id: "qa".into(),
+                        app_version: "qa".into(),
+                        started_unix_ms: 0,
+                        heartbeat_unix_ms: 0,
+                        document_title: "文化祭".into(),
+                        origin_name: None,
+                    },
+                    autosave_bytes: 2048,
+                    stale_for: Duration::from_secs(90),
+                });
+        }
         // The harness grabs pass 2, before a 260ms ease would finish.
         // Show the settled chrome instead of a half-played ring.
         self.simple_mode.seen_people = self.document.performers.len();
@@ -915,6 +966,7 @@ impl DrillApp {
                 .inner_margin(egui::Margin::symmetric(20, 0))
                 .show(ui, |ui| {
                     self.simple_header(ui);
+                    self.simple_recovery_banner(ui);
                     self.simple_scene_name_row(ui);
                     ui.add_space(8.0);
                     self.simple_cue(ui);
@@ -978,6 +1030,7 @@ impl DrillApp {
         self.simple_name_sheet(ui.ctx());
         self.simple_memo_sheet(ui.ctx());
         self.simple_place_sheet(ui.ctx());
+        self.simple_show_sheet(ui.ctx());
         self.glossary.show(ui.ctx(), self.locale);
         self.onboarding.help_ui(ui.ctx(), self.locale);
         self.onboarding.persist_if_changed();
@@ -1115,6 +1168,70 @@ impl DrillApp {
         height
     }
 
+    /// A crashed session's autosave. Opening it fills the field and asks for
+    /// a name on the next save, so the recovery folder is not the show file.
+    fn simple_recovery_banner(&mut self, ui: &mut egui::Ui) {
+        if !self.simple_mode.enabled || self.project_state.recoveries.is_empty() {
+            return;
+        }
+        let title = self.project_state.recoveries[0]
+            .meta
+            .document_title
+            .trim()
+            .to_string();
+        ui.add_space(4.0);
+        let mut open = false;
+        let mut dismiss = false;
+        egui::Frame::new()
+            .fill(super::app_theme::ACCENT_SOFT)
+            .inner_margin(egui::Margin::symmetric(16, 10))
+            .corner_radius(16)
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = egui::Vec2::new(8.0, 8.0);
+                    ui.label(
+                        egui::RichText::new(i18n::registered(self.locale, "simple-mode.262"))
+                            .size(15.0)
+                            .color(SIMPLE_INK),
+                    );
+                    if !title.is_empty() {
+                        ui.label(
+                            egui::RichText::new(title)
+                                .size(15.0)
+                                .strong()
+                                .color(SIMPLE_INK),
+                        );
+                    }
+                    if simple_choice_button(
+                        ui,
+                        i18n::registered(self.locale, "simple-mode.263"),
+                        !self.project_state.busy(),
+                        true,
+                    )
+                    .clicked()
+                    {
+                        open = true;
+                    }
+                    if simple_choice_button(
+                        ui,
+                        i18n::registered(self.locale, "simple-mode.264"),
+                        true,
+                        false,
+                    )
+                    .clicked()
+                    {
+                        dismiss = true;
+                    }
+                });
+            });
+        if open {
+            self.project_state.load_recovery(0);
+        }
+        if dismiss {
+            self.project_state.ignore_recovery(0);
+        }
+    }
+
     fn simple_header(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 10.0;
@@ -1124,7 +1241,7 @@ impl DrillApp {
                     .color(super::app_theme::SECONDARY_TEXT),
             );
             let set_count = self.document.sets.len();
-            let chips_w = (56.0 * set_count as f32).min((ui.available_width() - 180.0).max(56.0));
+            let chips_w = (96.0 * set_count as f32).min((ui.available_width() - 180.0).max(56.0));
             ui.allocate_ui_with_layout(
                 egui::Vec2::new(chips_w, 48.0),
                 egui::Layout::left_to_right(egui::Align::Center),
@@ -1196,8 +1313,8 @@ impl DrillApp {
             self.simple_mode.scene_name_for = Some(self.current_set);
         }
         ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 8.0;
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::Vec2::new(8.0, 8.0);
             ui.label(
                 egui::RichText::new(i18n::registered(self.locale, "simple-mode.203"))
                     .size(15.0)
@@ -1218,6 +1335,32 @@ impl DrillApp {
                 && let Some(set) = self.document.sets.get(self.current_set)
             {
                 self.simple_mode.scene_name = simple_scene_name_draft(&set.name);
+            }
+            if self.document.sets.len() >= 2 {
+                let earlier = self.current_set > 0;
+                if simple_choice_button(
+                    ui,
+                    i18n::registered(self.locale, "simple-mode.268"),
+                    earlier,
+                    false,
+                )
+                .on_hover_text(i18n::registered(self.locale, "simple-mode.269"))
+                .clicked()
+                {
+                    self.simple_shift_scene(false);
+                }
+                let later = self.current_set + 1 < self.document.sets.len();
+                if simple_choice_button(
+                    ui,
+                    i18n::registered(self.locale, "simple-mode.270"),
+                    later,
+                    false,
+                )
+                .on_hover_text(i18n::registered(self.locale, "simple-mode.271"))
+                .clicked()
+                {
+                    self.simple_shift_scene(true);
+                }
             }
         });
     }
@@ -1261,23 +1404,49 @@ impl DrillApp {
 
     fn simple_scene_chip(&mut self, ui: &mut egui::Ui, index: usize) {
         let current = index == self.current_set;
-        let label = format!("{}", index + 1);
-        let (rect, response) = ui.allocate_exact_size(egui::Vec2::new(48.0, 48.0), Sense::click());
+        let stored = self
+            .document
+            .sets
+            .get(index)
+            .map(|set| set.name.as_str())
+            .unwrap_or("");
+        let label = simple_chip_caption(stored, index);
+        let named = simple_scene_name_draft(stored);
+        let width = if named.is_empty() {
+            48.0
+        } else {
+            (28.0 + label.chars().count() as f32 * 15.0).clamp(72.0, 148.0)
+        };
+        let (rect, response) = ui.allocate_exact_size(egui::Vec2::new(width, 48.0), Sense::click());
         let fill = if current { SIMPLE_BLUE } else { Color32::WHITE };
         let ink = if current { Color32::WHITE } else { SIMPLE_INK };
-        ui.painter().circle_filled(rect.center(), 22.0, fill);
-        if !current {
-            ui.painter().circle_stroke(
-                rect.center(),
-                22.0,
-                Stroke::new(1.0, super::app_theme::HAIRLINE),
-            );
+        if named.is_empty() {
+            ui.painter().circle_filled(rect.center(), 22.0, fill);
+            if !current {
+                ui.painter().circle_stroke(
+                    rect.center(),
+                    22.0,
+                    Stroke::new(1.0, super::app_theme::HAIRLINE),
+                );
+            }
+        } else {
+            let pill = rect.shrink(2.0);
+            ui.painter().rect_filled(pill, 22.0, fill);
+            if !current {
+                ui.painter().rect_stroke(
+                    pill,
+                    22.0,
+                    Stroke::new(1.0, super::app_theme::HAIRLINE),
+                    StrokeKind::Inside,
+                );
+            }
+            response.clone().on_hover_text(named);
         }
         ui.painter().text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
             label,
-            egui::FontId::proportional(16.0),
+            egui::FontId::proportional(15.0),
             ink,
         );
         if response.clicked() && !current {
@@ -1490,6 +1659,14 @@ impl DrillApp {
                         .color(super::app_theme::SECONDARY_TEXT),
                 );
             }
+            if let Some(whole) = self.simple_show_length_label() {
+                ui.label(
+                    egui::RichText::new(whole)
+                        .size(15.0)
+                        .strong()
+                        .color(SIMPLE_BLUE),
+                );
+            }
             ui.label(
                 egui::RichText::new(self.simple_music_caption())
                     .size(15.0)
@@ -1507,6 +1684,14 @@ impl DrillApp {
     fn simple_scene_seconds_label(&self) -> Option<String> {
         let seconds = simple_transition_seconds(&self.document, self.current_set)?;
         Some(i18n::registered(self.locale, "simple-mode.225").replace("{0}", &seconds.to_string()))
+    }
+
+    fn simple_show_length_label(&self) -> Option<String> {
+        if self.document.sets.len() < 2 {
+            return None;
+        }
+        simple_show_seconds(&self.document)
+            .map(|seconds| simple_show_length_text(self.locale, seconds))
     }
 
     fn simple_music_caption(&self) -> String {
@@ -1998,6 +2183,54 @@ impl DrillApp {
         self.bump_simple_motion(ChromeMotion::Move);
     }
 
+    /// Moves this scene one place earlier or later. Stock names stay with the
+    /// slot. A typed name stays with the picture. One undo.
+    fn simple_shift_scene(&mut self, later: bool) {
+        if self.playing || !self.is_editable_set_start() || self.document.sets.len() < 2 {
+            return;
+        }
+        let from = self.current_set;
+        let Some(to) = (if later {
+            from.checked_add(1)
+                .filter(|index| *index < self.document.sets.len())
+        } else {
+            from.checked_sub(1)
+        }) else {
+            return;
+        };
+        let mut next = self.document.clone();
+        next.sets.swap(from, to);
+        simple_restock_scene_names(&mut next, self.locale);
+        let previous_total = self.document.timeline_counts();
+        let revision = self.history.revision();
+        let changed = self.execute_edit(
+            Edit::ReplaceDocument {
+                document: Box::new(next),
+            },
+            i18n::registered(self.locale, "simple-mode.273"),
+        );
+        if !changed {
+            return;
+        }
+        self.current_set = to;
+        self.count_position = 0.0;
+        self.simple_mode.finished_playback = false;
+        self.simple_mode.hold_count = false;
+        self.sync_playback_range_to_timeline(previous_total);
+        if self.simple_mode.scene_loop {
+            self.simple_apply_watch_range();
+        }
+        self.simple_mark(
+            revision,
+            if later {
+                "simple-mode.270"
+            } else {
+                "simple-mode.268"
+            },
+        );
+        self.bump_simple_motion(ChromeMotion::Set);
+    }
+
     fn simple_add_scene(&mut self) {
         if !self.is_editable_set_start()
             || self.document.performers.is_empty()
@@ -2164,6 +2397,7 @@ impl DrillApp {
                 ui.spacing_mut().item_spacing = egui::Vec2::new(8.0, 8.0);
                 self.simple_memo_button(ui);
                 self.simple_place_button(ui);
+                self.simple_show_sheet_button(ui);
             });
             return;
         }
@@ -2383,6 +2617,7 @@ impl DrillApp {
             }
             self.simple_memo_button(ui);
             self.simple_place_button(ui);
+            self.simple_show_sheet_button(ui);
         });
         if self.selected.len() >= 2 && editable {
             ui.label(
@@ -2860,6 +3095,7 @@ impl DrillApp {
             || self.simple_mode.naming
             || self.simple_mode.memo_open
             || self.simple_mode.place_sheet_open
+            || self.simple_mode.show_sheet_open
             || self.show_recent_projects
             || self.selected.is_empty()
             || !self.is_editable_set_start()
@@ -2956,8 +3192,32 @@ impl DrillApp {
             if self.simple_mode.memo_open {
                 self.simple_mode.place_sheet_open = false;
                 self.simple_mode.place_sheet_copied = false;
+                self.simple_mode.show_sheet_open = false;
+                self.simple_mode.show_sheet_copied = false;
             } else {
                 self.simple_mode.memo_copied = false;
+            }
+        }
+    }
+
+    fn simple_show_sheet_button(&mut self, ui: &mut egui::Ui) {
+        if simple_choice_button(
+            ui,
+            i18n::registered(self.locale, "simple-mode.274"),
+            true,
+            self.simple_mode.show_sheet_open,
+        )
+        .on_hover_text(i18n::registered(self.locale, "simple-mode.275"))
+        .clicked()
+        {
+            self.simple_mode.show_sheet_open = !self.simple_mode.show_sheet_open;
+            if self.simple_mode.show_sheet_open {
+                self.simple_mode.memo_open = false;
+                self.simple_mode.memo_copied = false;
+                self.simple_mode.place_sheet_open = false;
+                self.simple_mode.place_sheet_copied = false;
+            } else {
+                self.simple_mode.show_sheet_copied = false;
             }
         }
     }
@@ -2976,6 +3236,8 @@ impl DrillApp {
             if self.simple_mode.place_sheet_open {
                 self.simple_mode.memo_open = false;
                 self.simple_mode.memo_copied = false;
+                self.simple_mode.show_sheet_open = false;
+                self.simple_mode.show_sheet_copied = false;
             } else {
                 self.simple_mode.place_sheet_copied = false;
             }
@@ -3028,6 +3290,55 @@ impl DrillApp {
         if !open {
             self.simple_mode.place_sheet_open = false;
             self.simple_mode.place_sheet_copied = false;
+        }
+    }
+
+    fn simple_show_sheet(&mut self, ctx: &egui::Context) {
+        if !self.simple_mode.show_sheet_open {
+            return;
+        }
+        let sheet = simple_show_sheet_text(&self.document, self.locale);
+        let mut open = true;
+        let mut copy = false;
+        let copied = self.simple_mode.show_sheet_copied;
+        egui::Window::new(i18n::registered(self.locale, "simple-mode.277"))
+            .id(egui::Id::new("simple-show-sheet"))
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.set_min_width(300.0);
+                ui.set_max_width(440.0);
+                egui::ScrollArea::vertical()
+                    .max_height(360.0)
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new(&sheet).size(16.0).color(SIMPLE_INK));
+                    });
+                ui.add_space(12.0);
+                let copy_id = if copied {
+                    "simple-mode.180"
+                } else {
+                    "simple-mode.179"
+                };
+                let button = egui::Button::new(
+                    egui::RichText::new(i18n::registered(self.locale, copy_id))
+                        .size(16.0)
+                        .color(Color32::WHITE),
+                )
+                .fill(SIMPLE_BLUE)
+                .corner_radius(18.0);
+                if ui.add_sized([160.0, 40.0], button).clicked() {
+                    copy = true;
+                }
+            });
+        if copy {
+            ctx.copy_text(sheet);
+            self.simple_mode.show_sheet_copied = true;
+        }
+        if !open {
+            self.simple_mode.show_sheet_open = false;
+            self.simple_mode.show_sheet_copied = false;
         }
     }
 
@@ -3684,6 +3995,8 @@ impl DrillApp {
         self.simple_mode.memo_copied = false;
         self.simple_mode.place_sheet_open = false;
         self.simple_mode.place_sheet_copied = false;
+        self.simple_mode.show_sheet_open = false;
+        self.simple_mode.show_sheet_copied = false;
         self.simple_mode.scene_loop = false;
         self.simple_mode.empty_pan = false;
         self.simple_mode.saved_note_until = None;
@@ -3833,6 +4146,34 @@ impl DrillApp {
                 .unwrap_or_else(|| self.simple_default_show_name());
         }
         self.simple_mode.naming = true;
+    }
+
+    /// True when this open is a crash copy. The show then has no file name
+    /// yet, so the next save asks for one instead of writing into recovery.
+    pub(super) fn prepare_simple_recovery(&mut self, path: &std::path::Path) -> bool {
+        if !self.simple_mode.enabled || !path_is_session_autosave(path) {
+            return false;
+        }
+        self.project_state
+            .recoveries
+            .retain(|candidate| candidate.autosave != path);
+        self.simple_mode.memo_open = false;
+        self.simple_mode.memo_copied = false;
+        self.simple_mode.place_sheet_open = false;
+        self.simple_mode.place_sheet_copied = false;
+        self.simple_mode.show_sheet_open = false;
+        self.simple_mode.show_sheet_copied = false;
+        self.simple_mode.naming = false;
+        self.simple_mode.naming_pending = false;
+        self.simple_mode.finished_playback = false;
+        self.simple_mode.hold_count = false;
+        self.simple_mode.scene_loop = false;
+        self.simple_mode.scene_name.clear();
+        self.simple_mode.scene_name_for = None;
+        self.simple_mode.person_name.clear();
+        self.simple_mode.person_name_for = None;
+        self.simple_mode.overlap_note = false;
+        true
     }
 
     pub(crate) fn note_simple_playback_finished(&mut self) {
@@ -5346,6 +5687,81 @@ fn simple_transition_seconds(document: &drill_core::Document, set_index: usize) 
 }
 
 /// Plain text of where everyone stands, to paste into a message. Nothing is written.
+fn simple_chip_caption(name: &str, index: usize) -> String {
+    let number = (index + 1).to_string();
+    let custom = simple_scene_name_draft(name);
+    if custom.is_empty() {
+        number
+    } else {
+        let short: String = custom.chars().take(6).collect();
+        format!("{number} {short}")
+    }
+}
+
+fn simple_restock_scene_names(document: &mut drill_core::Document, locale: drill_core::Locale) {
+    for (index, set) in document.sets.iter_mut().enumerate() {
+        if simple_stock_scene_name(&set.name) {
+            set.name = match locale {
+                drill_core::Locale::Ja => format!("セット {}", index + 1),
+                drill_core::Locale::En => format!("Set {}", index + 1),
+            };
+        }
+    }
+}
+
+fn path_is_session_autosave(path: &std::path::Path) -> bool {
+    let file = path
+        .file_name()
+        .is_some_and(|name| name == "autosave.drill.json");
+    let folder = path
+        .ancestors()
+        .any(|dir| dir.file_name().is_some_and(|name| name == "recovery"));
+    file && folder
+}
+
+fn simple_show_seconds(document: &drill_core::Document) -> Option<u32> {
+    let total = document.timeline_counts();
+    if total == 0 {
+        return None;
+    }
+    let seconds = document.tempo.seconds_at(total as f32);
+    if !seconds.is_finite() || seconds < 0.0 {
+        return None;
+    }
+    let whole = if seconds < 0.5 {
+        1
+    } else {
+        seconds.round() as u32
+    };
+    Some(whole)
+}
+
+fn simple_show_length_text(locale: drill_core::Locale, seconds: u32) -> String {
+    let minutes = seconds / 60;
+    let rest = seconds % 60;
+    if minutes == 0 {
+        i18n::registered(locale, "simple-mode.265").replace("{0}", &seconds.to_string())
+    } else if rest == 0 {
+        i18n::registered(locale, "simple-mode.266").replace("{0}", &minutes.to_string())
+    } else {
+        i18n::registered(locale, "simple-mode.267")
+            .replace("{0}", &minutes.to_string())
+            .replace("{1}", &rest.to_string())
+    }
+}
+
+fn simple_show_sheet_text(document: &drill_core::Document, locale: drill_core::Locale) -> String {
+    let mut lines = vec![i18n::registered(locale, "simple-mode.276").to_string()];
+    if let Some(seconds) = simple_show_seconds(document) {
+        lines.push(simple_show_length_text(locale, seconds));
+    }
+    for index in 0..document.sets.len() {
+        lines.push(String::new());
+        lines.push(simple_position_sheet(document, index, locale));
+    }
+    lines.join("\n")
+}
+
 fn simple_position_sheet(
     document: &drill_core::Document,
     set_index: usize,
@@ -8173,5 +8589,168 @@ mod tests {
         app.simple_return_scene();
         assert_eq!(app.document.sets.len(), 2);
         assert_eq!(app.history.revision(), revision);
+    }
+
+    #[test]
+    fn whole_show_length_adds_every_move() {
+        let mut doc = drill_core::Document::blank(2);
+        let mut second = doc.sets[0].clone();
+        second.id = doc.next_set_id().expect("id");
+        second.name = "セット 2".into();
+        doc.sets.push(second);
+        assert_eq!(simple_show_seconds(&doc), Some(8));
+        assert_eq!(
+            simple_show_length_text(drill_core::Locale::Ja, 8),
+            "全体 約 8秒"
+        );
+        assert_eq!(
+            simple_show_length_text(drill_core::Locale::Ja, 60),
+            "全体 約 1分"
+        );
+        assert_eq!(
+            simple_show_length_text(drill_core::Locale::Ja, 80),
+            "全体 約 1分20秒"
+        );
+        assert_eq!(
+            simple_show_length_text(drill_core::Locale::En, 80),
+            "Whole show, about 1 min 20 sec"
+        );
+        doc.sets[0].counts = 160;
+        assert_eq!(simple_show_seconds(&doc), Some(80));
+        assert_eq!(simple_chip_caption("セット 3", 0), "1");
+        assert_eq!(simple_chip_caption("サビ", 1), "2 サビ");
+        assert_eq!(
+            simple_chip_caption("とても長い場面の名前", 2),
+            "3 とても長い場"
+        );
+    }
+
+    #[test]
+    fn shifting_a_scene_keeps_the_typed_name_and_undoes() {
+        let mut app = moved_pair();
+        app.simple_rename_scene("サビ");
+        let first = app.document.sets[0].positions.clone();
+        let second = app.document.sets[1].positions.clone();
+        assert_ne!(first, second);
+        app.simple_sync_history_notes();
+        app.simple_shift_scene(false);
+        assert_eq!(app.current_set, 0);
+        assert_eq!(app.document.sets[0].positions, second);
+        assert_eq!(app.document.sets[1].positions, first);
+        assert_eq!(app.document.sets[0].name, "サビ");
+        assert!(simple_stock_scene_name(&app.document.sets[1].name));
+        app.simple_sync_history_notes();
+        let lines = app.simple_history_lines();
+        assert!(
+            lines.iter().any(|line| line.contains("前と入れ替え")),
+            "{lines:?}"
+        );
+        let json = app.document.to_json().expect("json");
+        let loaded = drill_core::Document::from_json(&json).expect("reload");
+        assert_eq!(loaded.sets[0].name, "サビ");
+        assert_eq!(loaded.sets[0].positions, second);
+        assert!(app.history.undo(&mut app.document));
+        assert_eq!(app.document.sets[0].positions, first);
+        assert_eq!(app.document.sets[1].positions, second);
+        assert_eq!(app.document.sets[1].name, "サビ");
+
+        app.navigate_to_set(0);
+        app.nav_glide.settle();
+        let revision = app.history.revision();
+        app.simple_shift_scene(false);
+        assert_eq!(app.history.revision(), revision);
+
+        app.count_position = 4.0;
+        app.simple_shift_scene(true);
+        assert_eq!(app.history.revision(), revision);
+        assert_eq!(app.document.sets[0].positions, first);
+    }
+
+    #[test]
+    fn the_whole_show_sheet_lists_every_scene() {
+        let mut app = moved_pair();
+        app.simple_rename_scene("サビ");
+        let sheet = simple_show_sheet_text(&app.document, drill_core::Locale::Ja);
+        assert!(sheet.contains("全体の位置表"), "{sheet}");
+        assert!(sheet.contains("全体 約"), "{sheet}");
+        assert!(sheet.contains("サビ"), "{sheet}");
+        assert!(sheet.contains('1'), "{sheet}");
+        assert!(sheet.contains('2'), "{sheet}");
+        assert!(sheet.matches("場面").count() >= 2, "{sheet}");
+    }
+
+    fn loaded_copy(document: drill_core::Document) -> drill_project::container::LoadedProject {
+        drill_project::container::LoadedProject {
+            document,
+            manifest: drill_project::container::Manifest {
+                container_version: 1,
+                document_schema_version: drill_core::SCHEMA_VERSION,
+                document_entry: "document.json".into(),
+                app_version: "test".into(),
+                created_utc: String::new(),
+                modified_utc: String::new(),
+                summary: Default::default(),
+                assets: Vec::new(),
+            },
+            embedded: std::collections::BTreeMap::new(),
+            warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn simple_recovery_opens_without_keeping_the_autosave_path() {
+        let dir = std::env::temp_dir().join(format!(
+            "drillforge-recover-{}-{}",
+            std::process::id(),
+            "copy"
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let mut app = empty_simple_app();
+        app.simple_mode.draft_path_override = Some(dir.join("simple-draft.drill.json"));
+        app.place_performer_at(Point { x: 8.0, y: 6.0 }, true);
+        app.current_path = Some(std::path::PathBuf::from("文化祭.drill.json"));
+        let recovered = drill_core::Document::blank(3);
+        let path = std::path::PathBuf::from("recovery/session/autosave.drill.json");
+        app.project_state
+            .recoveries
+            .push(drill_project::recovery::RecoveryCandidate {
+                root: std::path::PathBuf::from("recovery/session"),
+                autosave: path.clone(),
+                meta: drill_project::recovery::SessionMeta {
+                    session_id: "session".into(),
+                    app_version: "test".into(),
+                    started_unix_ms: 0,
+                    heartbeat_unix_ms: 0,
+                    document_title: "文化祭".into(),
+                    origin_name: None,
+                },
+                autosave_bytes: 128,
+                stale_for: std::time::Duration::from_secs(40),
+            });
+        app.apply_loaded_project(path, Box::new(loaded_copy(recovered)));
+        assert!(app.current_path.is_none());
+        assert!(app.dirty);
+        assert!(app.project_state.recoveries.is_empty());
+        assert_eq!(app.document.performers.len(), 3);
+
+        let named = std::path::PathBuf::from("shows/文化祭.drill.json");
+        app.apply_loaded_project(
+            named.clone(),
+            Box::new(loaded_copy(drill_core::Document::blank(1))),
+        );
+        assert_eq!(app.current_path.as_ref(), Some(&named));
+        assert!(!app.dirty);
+        assert_eq!(app.document.performers.len(), 1);
+
+        app.set_simple_mode(false);
+        let autosave = std::path::PathBuf::from("recovery/session/autosave.drill.json");
+        app.apply_loaded_project(
+            autosave.clone(),
+            Box::new(loaded_copy(drill_core::Document::blank(2))),
+        );
+        assert_eq!(app.current_path.as_ref(), Some(&autosave));
+        assert!(!app.dirty);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

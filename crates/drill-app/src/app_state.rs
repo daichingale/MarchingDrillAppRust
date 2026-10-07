@@ -4359,8 +4359,13 @@ impl DrillApp {
         self.camera_program_preview = true;
         self.section_manager.clear_drafts();
         self.project_warnings = project.warnings;
-        self.recent_projects.remember(path.clone());
-        self.current_path = Some(path);
+        let recovered = self.prepare_simple_recovery(&path);
+        if recovered {
+            self.current_path = None;
+        } else {
+            self.recent_projects.remember(path.clone());
+            self.current_path = Some(path);
+        }
         self.current_set = 0;
         self.count_position = 0.0;
         self.playing = false;
@@ -4375,7 +4380,7 @@ impl DrillApp {
         self.playback_start = 0;
         self.playback_end = self.document.timeline_counts();
         self.history = History::with_limit(500);
-        self.dirty = false;
+        self.dirty = recovered;
         self.status = i18n::registered(self.locale, "app-ui.069").into();
         if let Some((bytes, name)) = embedded_audio {
             self.audio_state.start_decode_bytes(bytes, &name);
