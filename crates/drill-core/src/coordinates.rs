@@ -524,6 +524,34 @@ pub fn performer_sheet_localized(doc: &Document, performer_index: usize, locale:
 pub fn coordinates_csv(doc: &Document) -> String {
     coordinates_csv_localized(doc, Locale::Ja)
 }
+
+/// CSV of one set, with the same columns as [`coordinates_csv_localized`].
+/// An out-of-range set index returns the header only.
+pub fn set_coordinates_csv(doc: &Document, set_index: usize, locale: Locale) -> String {
+    let mut out = String::from("performer,label,set,counts,x,y,side_to_side,front_to_back");
+    let Some(set) = doc.sets.get(set_index) else {
+        return out;
+    };
+    for (i, performer) in doc.performers.iter().enumerate() {
+        let p = set.positions.get(i).copied().unwrap_or_default();
+        let sts = side_to_side_localized(p, &doc.grid, locale);
+        let ftb = front_to_back_localized(p, &doc.grid, locale);
+        out.push('\n');
+        out.push_str(&format!(
+            "{},{},{},{},{},{},{},{}",
+            performer.id,
+            csv_escape(&performer.label),
+            csv_escape(&set.name),
+            set.counts,
+            fmt_num(p.x),
+            fmt_num(p.y),
+            csv_escape(&sts),
+            csv_escape(&ftb),
+        ));
+    }
+    out
+}
+
 pub fn coordinates_csv_localized(doc: &Document, locale: Locale) -> String {
     let mut out = String::from("performer,label,set,counts,x,y,side_to_side,front_to_back");
     for (i, performer) in doc.performers.iter().enumerate() {
@@ -686,6 +714,23 @@ mod tests {
         doc.performers[0].label = "Smith, Jr".into();
         let csv = coordinates_csv(&doc);
         assert!(csv.contains("\"Smith, Jr\""));
+    }
+
+    #[test]
+    fn set_csv_is_one_scene_and_keeps_the_same_columns() {
+        let mut doc = Document::demo(2, 2);
+        doc.performers[0].label = "Smith, Jr".into();
+        let csv = set_coordinates_csv(&doc, 0, Locale::Ja);
+        let lines: Vec<&str> = csv.lines().collect();
+        assert_eq!(lines.len(), doc.performers.len() + 1);
+        assert_eq!(
+            lines[0],
+            "performer,label,set,counts,x,y,side_to_side,front_to_back"
+        );
+        assert!(csv.contains("\"Smith, Jr\""));
+        assert!(csv.contains(&doc.sets[0].name));
+        assert!(!csv.contains(&doc.sets[1].name));
+        assert_eq!(set_coordinates_csv(&doc, 9, Locale::En).lines().count(), 1);
     }
 
     #[test]
