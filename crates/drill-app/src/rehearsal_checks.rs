@@ -80,22 +80,42 @@ impl DrillApp {
     }
 
     pub(super) fn show_plain_move_warnings(&mut self, ui: &mut egui::Ui) {
-        if ui
-            .button(i18n::registered(self.locale, "rehearsal.001"))
-            .on_hover_text(i18n::registered(self.locale, "rehearsal.002"))
-            .clicked()
-        {
-            self.save_scene_diagram();
-        }
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(8.0, 6.0);
+            if ui
+                .button(i18n::registered(self.locale, "rehearsal.001"))
+                .on_hover_text(i18n::registered(self.locale, "rehearsal.002"))
+                .clicked()
+            {
+                self.save_scene_diagram();
+            }
+            if ui
+                .button(i18n::registered(self.locale, "rehearsal.021"))
+                .on_hover_text(i18n::registered(self.locale, "rehearsal.022"))
+                .clicked()
+            {
+                let sheet =
+                    super::simple_mode::rehearsal_walk_sheet(&self.document, self.locale, None);
+                self.export_text(
+                    "rehearsal.txt",
+                    "Text",
+                    "txt",
+                    super::simple_mode::rehearsal_walk_file(&sheet),
+                );
+            }
+        });
         self.refresh_move_check();
         let close = self.move_check.close.clone();
         let big = self.move_check.big.clone();
-        if close.is_empty() && big.is_empty() {
+        let outside = super::simple_mode::outside_contest_indices(&self.document, self.current_set);
+        if close.is_empty() && big.is_empty() && outside.is_empty() {
             return;
         }
         ui.add_space(4.0);
-        ui.label(egui::RichText::new(i18n::registered(self.locale, "rehearsal.019")).strong());
-        ui.small(i18n::registered(self.locale, "rehearsal.020"));
+        if !close.is_empty() || !big.is_empty() {
+            ui.label(egui::RichText::new(i18n::registered(self.locale, "rehearsal.019")).strong());
+            ui.small(i18n::registered(self.locale, "rehearsal.020"));
+        }
         let locale = self.locale;
         let close_lines: Vec<(usize, usize, String)> = close
             .iter()
@@ -140,6 +160,36 @@ impl DrillApp {
         }
         if big_extra > 0 {
             ui.small(more_text(self.locale, big_extra));
+        }
+        let outside_lines: Vec<(usize, String)> = outside
+            .iter()
+            .take(SHOWN_LINES)
+            .map(|&index| {
+                let label = self
+                    .document
+                    .performers
+                    .get(index)
+                    .map(|person| person.label.as_str())
+                    .unwrap_or("");
+                (
+                    index,
+                    i18n::registered(locale, "rehearsal.023").replace("{0}", label),
+                )
+            })
+            .collect();
+        let outside_extra = outside.len().saturating_sub(SHOWN_LINES);
+        for (index, line) in outside_lines {
+            if ui
+                .button(egui::RichText::new(line).color(egui::Color32::from_rgb(176, 64, 48)))
+                .on_hover_text(i18n::registered(self.locale, "rehearsal.024"))
+                .clicked()
+            {
+                self.focus_checked_people(&[index]);
+                self.status = i18n::registered(self.locale, "rehearsal.025").into();
+            }
+        }
+        if outside_extra > 0 {
+            ui.small(more_text(self.locale, outside_extra));
         }
     }
 

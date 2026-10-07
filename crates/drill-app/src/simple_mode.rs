@@ -261,6 +261,19 @@ pub(crate) struct SimpleModeState {
     /// Every scene's places, to paste into one message. Nothing is written.
     show_sheet_open: bool,
     show_sheet_copied: bool,
+    /// One person's places and walks. Nothing is written until they save a file.
+    path_sheet_open: bool,
+    path_sheet_for: Option<drill_core::PerformerId>,
+    path_sheet_copied: bool,
+    /// Every scene's walks, to print and hand out.
+    walk_sheet_open: bool,
+    walk_sheet_copied: bool,
+    walk_sheet_saved: bool,
+    walk_sheet_failed: bool,
+    /// One person to watch. Others are washed out. Session only, not the file.
+    focus: Option<drill_core::PerformerId>,
+    /// People sitting out of today's rehearsal. The drill file still has them.
+    away: std::collections::BTreeSet<drill_core::PerformerId>,
     /// Watch only the move of the current scene, then start that move again.
     scene_loop: bool,
     /// Draft for the current scene's name. A stock "セット 1" shows as empty.
@@ -491,13 +504,31 @@ impl DrillApp {
             self.simple_mode.redo_notes.clear();
             self.simple_mode.seen_cursor = None;
             self.simple_mode.seen_redo = None;
-            self.simple_mode.memo_open = false;
-            self.simple_mode.memo_copied = false;
-            self.simple_mode.place_sheet_open = false;
-            self.simple_mode.place_sheet_copied = false;
-            self.simple_mode.show_sheet_open = false;
-            self.simple_mode.show_sheet_copied = false;
+            self.simple_close_readouts();
         }
+    }
+
+    /// Drops the session-only watch state when a different show is loaded.
+    pub(super) fn simple_reset_session_view(&mut self) {
+        self.simple_mode.focus = None;
+        self.simple_mode.away.clear();
+        self.simple_close_readouts();
+    }
+
+    fn simple_close_readouts(&mut self) {
+        self.simple_mode.memo_open = false;
+        self.simple_mode.memo_copied = false;
+        self.simple_mode.place_sheet_open = false;
+        self.simple_mode.place_sheet_copied = false;
+        self.simple_mode.show_sheet_open = false;
+        self.simple_mode.show_sheet_copied = false;
+        self.simple_mode.path_sheet_open = false;
+        self.simple_mode.path_sheet_for = None;
+        self.simple_mode.path_sheet_copied = false;
+        self.simple_mode.walk_sheet_open = false;
+        self.simple_mode.walk_sheet_copied = false;
+        self.simple_mode.walk_sheet_saved = false;
+        self.simple_mode.walk_sheet_failed = false;
     }
 
     /// First launch lands on an empty field. Later launches stay on whichever
@@ -974,11 +1005,13 @@ impl DrillApp {
                     self.simple_beat_row(ui);
                     self.simple_music_row(ui);
                     self.simple_rehearsal_row(ui);
+                    self.simple_watch_row(ui);
                     self.simple_arrange_row(ui);
                     self.simple_touch_row(ui);
                     if !self.playing {
                         self.simple_caution_row(ui);
                     }
+                    self.simple_outside_row(ui);
                     if !self.playing
                         && !simple_move_paths(&self.document, self.current_set).is_empty()
                     {
@@ -1031,6 +1064,8 @@ impl DrillApp {
         self.simple_memo_sheet(ui.ctx());
         self.simple_place_sheet(ui.ctx());
         self.simple_show_sheet(ui.ctx());
+        self.simple_path_sheet(ui.ctx());
+        self.simple_walk_sheet(ui.ctx());
         self.glossary.show(ui.ctx(), self.locale);
         self.onboarding.help_ui(ui.ctx(), self.locale);
         self.onboarding.persist_if_changed();
@@ -2245,6 +2280,139 @@ impl DrillApp {
         self.simple_mark(revision, "simple-mode.129");
     }
 
+    /// Watch one person, or mark someone sitting out. Neither writes the file.
+    fn simple_watch_row(&mut self, ui: &mut egui::Ui) {
+        let one = self.simple_single_selected();
+        let away = self.simple_away_count();
+        if one.is_none() && away == 0 {
+            return;
+        }
+        ui.add_space(4.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::Vec2::new(8.0, 8.0);
+            if one.is_some() {
+                if simple_choice_button(
+                    ui,
+                    i18n::registered(self.locale, "simple-mode.278"),
+                    true,
+                    self.simple_focus_index().is_some(),
+                )
+                .on_hover_text(i18n::registered(self.locale, "simple-mode.279"))
+                .clicked()
+                {
+                    self.simple_toggle_focus();
+                }
+                if simple_choice_button(
+                    ui,
+                    i18n::registered(self.locale, "simple-mode.280"),
+                    true,
+                    self.simple_mode.path_sheet_open,
+                )
+                .on_hover_text(i18n::registered(self.locale, "simple-mode.281"))
+                .clicked()
+                {
+                    self.simple_open_path_sheet();
+                }
+                let sitting = one.is_some_and(|index| self.simple_is_away(index));
+                if simple_choice_button(
+                    ui,
+                    i18n::registered(self.locale, "simple-mode.287"),
+                    true,
+                    sitting,
+                )
+                .on_hover_text(i18n::registered(self.locale, "simple-mode.288"))
+                .clicked()
+                {
+                    self.simple_toggle_away();
+                }
+            }
+            if away > 0 {
+                ui.label(
+                    egui::RichText::new(
+                        i18n::registered(self.locale, "simple-mode.290")
+                            .replace("{0}", &away.to_string()),
+                    )
+                    .size(15.0)
+                    .strong()
+                    .color(SIMPLE_INK),
+                );
+            }
+        });
+    }
+
+    fn simple_single_selected(&self) -> Option<usize> {
+        if self.selected.len() != 1 {
+            return None;
+        }
+        self.selected.iter().copied().next()
+    }
+
+    fn simple_focus_index(&self) -> Option<usize> {
+        let id = self.simple_mode.focus?;
+        let index = self
+            .document
+            .performers
+            .iter()
+            .position(|performer| performer.id == id)?;
+        (self.selected.len() == 1 && self.selected.contains(&index)).then_some(index)
+    }
+
+    fn simple_toggle_focus(&mut self) {
+        let Some(index) = self.simple_single_selected() else {
+            return;
+        };
+        let Some(id) = self.document.performers.get(index).map(|person| person.id) else {
+            return;
+        };
+        if self.simple_mode.focus == Some(id) {
+            self.simple_mode.focus = None;
+        } else {
+            self.simple_mode.focus = Some(id);
+        }
+    }
+
+    fn simple_is_away(&self, index: usize) -> bool {
+        self.document
+            .performers
+            .get(index)
+            .is_some_and(|person| self.simple_mode.away.contains(&person.id))
+    }
+
+    fn simple_away_count(&self) -> usize {
+        self.document
+            .performers
+            .iter()
+            .filter(|person| self.simple_mode.away.contains(&person.id))
+            .count()
+    }
+
+    fn simple_toggle_away(&mut self) {
+        let Some(index) = self.simple_single_selected() else {
+            return;
+        };
+        let Some(id) = self.document.performers.get(index).map(|person| person.id) else {
+            return;
+        };
+        if !self.simple_mode.away.remove(&id) {
+            self.simple_mode.away.insert(id);
+        }
+    }
+
+    fn simple_open_path_sheet(&mut self) {
+        let Some(index) = self.simple_single_selected() else {
+            return;
+        };
+        let Some(id) = self.document.performers.get(index).map(|person| person.id) else {
+            return;
+        };
+        let open = !self.simple_mode.path_sheet_open || self.simple_mode.path_sheet_for != Some(id);
+        self.simple_close_readouts();
+        self.simple_mode.path_sheet_open = open;
+        if open {
+            self.simple_mode.path_sheet_for = Some(id);
+        }
+    }
+
     fn simple_rehearsal_row(&mut self, ui: &mut egui::Ui) {
         if !self.show_has_motion() {
             return;
@@ -2398,6 +2566,7 @@ impl DrillApp {
                 self.simple_memo_button(ui);
                 self.simple_place_button(ui);
                 self.simple_show_sheet_button(ui);
+                self.simple_walk_button(ui);
             });
             return;
         }
@@ -2618,6 +2787,7 @@ impl DrillApp {
             self.simple_memo_button(ui);
             self.simple_place_button(ui);
             self.simple_show_sheet_button(ui);
+            self.simple_walk_button(ui);
         });
         if self.selected.len() >= 2 && editable {
             ui.label(
@@ -3178,6 +3348,38 @@ impl DrillApp {
         }
     }
 
+    /// People standing outside the contest line, at this picture or the next.
+    fn simple_outside_row(&mut self, ui: &mut egui::Ui) {
+        let outside = outside_contest_indices(&self.document, self.current_set);
+        if outside.is_empty() {
+            return;
+        }
+        let button_id = if outside.len() > 1 {
+            "simple-mode.299"
+        } else {
+            "simple-mode.298"
+        };
+        ui.add_space(4.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::Vec2::new(8.0, 8.0);
+            ui.label(
+                egui::RichText::new(
+                    i18n::registered(self.locale, "simple-mode.297")
+                        .replace("{0}", &outside.len().to_string()),
+                )
+                .size(15.0)
+                .strong()
+                .color(SIMPLE_INK),
+            );
+            if simple_choice_button(ui, i18n::registered(self.locale, button_id), true, false)
+                .on_hover_text(i18n::registered(self.locale, "simple-mode.300"))
+                .clicked()
+            {
+                self.replace_selection(outside.into_iter().collect());
+            }
+        });
+    }
+
     fn simple_memo_button(&mut self, ui: &mut egui::Ui) {
         if simple_choice_button(
             ui,
@@ -3188,15 +3390,9 @@ impl DrillApp {
         .on_hover_text(i18n::registered(self.locale, "simple-mode.178"))
         .clicked()
         {
-            self.simple_mode.memo_open = !self.simple_mode.memo_open;
-            if self.simple_mode.memo_open {
-                self.simple_mode.place_sheet_open = false;
-                self.simple_mode.place_sheet_copied = false;
-                self.simple_mode.show_sheet_open = false;
-                self.simple_mode.show_sheet_copied = false;
-            } else {
-                self.simple_mode.memo_copied = false;
-            }
+            let open = !self.simple_mode.memo_open;
+            self.simple_close_readouts();
+            self.simple_mode.memo_open = open;
         }
     }
 
@@ -3210,15 +3406,25 @@ impl DrillApp {
         .on_hover_text(i18n::registered(self.locale, "simple-mode.275"))
         .clicked()
         {
-            self.simple_mode.show_sheet_open = !self.simple_mode.show_sheet_open;
-            if self.simple_mode.show_sheet_open {
-                self.simple_mode.memo_open = false;
-                self.simple_mode.memo_copied = false;
-                self.simple_mode.place_sheet_open = false;
-                self.simple_mode.place_sheet_copied = false;
-            } else {
-                self.simple_mode.show_sheet_copied = false;
-            }
+            let open = !self.simple_mode.show_sheet_open;
+            self.simple_close_readouts();
+            self.simple_mode.show_sheet_open = open;
+        }
+    }
+
+    fn simple_walk_button(&mut self, ui: &mut egui::Ui) {
+        if simple_choice_button(
+            ui,
+            i18n::registered(self.locale, "simple-mode.291"),
+            true,
+            self.simple_mode.walk_sheet_open,
+        )
+        .on_hover_text(i18n::registered(self.locale, "simple-mode.292"))
+        .clicked()
+        {
+            let open = !self.simple_mode.walk_sheet_open;
+            self.simple_close_readouts();
+            self.simple_mode.walk_sheet_open = open;
         }
     }
 
@@ -3232,15 +3438,9 @@ impl DrillApp {
         .on_hover_text(i18n::registered(self.locale, "simple-mode.227"))
         .clicked()
         {
-            self.simple_mode.place_sheet_open = !self.simple_mode.place_sheet_open;
-            if self.simple_mode.place_sheet_open {
-                self.simple_mode.memo_open = false;
-                self.simple_mode.memo_copied = false;
-                self.simple_mode.show_sheet_open = false;
-                self.simple_mode.show_sheet_copied = false;
-            } else {
-                self.simple_mode.place_sheet_copied = false;
-            }
+            let open = !self.simple_mode.place_sheet_open;
+            self.simple_close_readouts();
+            self.simple_mode.place_sheet_open = open;
         }
     }
 
@@ -3339,6 +3539,157 @@ impl DrillApp {
         if !open {
             self.simple_mode.show_sheet_open = false;
             self.simple_mode.show_sheet_copied = false;
+        }
+    }
+
+    fn simple_path_sheet(&mut self, ctx: &egui::Context) {
+        if !self.simple_mode.path_sheet_open {
+            return;
+        }
+        let Some(index) = self.simple_mode.path_sheet_for.and_then(|id| {
+            self.document
+                .performers
+                .iter()
+                .position(|person| person.id == id)
+        }) else {
+            self.simple_mode.path_sheet_open = false;
+            self.simple_mode.path_sheet_for = None;
+            return;
+        };
+        let sheet = simple_person_path_text(&self.document, index, self.locale);
+        let mut open = true;
+        let mut copy = false;
+        let copied = self.simple_mode.path_sheet_copied;
+        egui::Window::new(i18n::registered(self.locale, "simple-mode.282"))
+            .id(egui::Id::new("simple-path-sheet"))
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.set_min_width(300.0);
+                ui.set_max_width(440.0);
+                egui::ScrollArea::vertical()
+                    .max_height(360.0)
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new(&sheet).size(16.0).color(SIMPLE_INK));
+                    });
+                ui.add_space(12.0);
+                if ui
+                    .add_sized([160.0, 40.0], simple_copy_button(self.locale, copied))
+                    .clicked()
+                {
+                    copy = true;
+                }
+            });
+        if copy {
+            ctx.copy_text(sheet);
+            self.simple_mode.path_sheet_copied = true;
+        }
+        if !open {
+            self.simple_mode.path_sheet_open = false;
+            self.simple_mode.path_sheet_for = None;
+            self.simple_mode.path_sheet_copied = false;
+        }
+    }
+
+    fn simple_walk_sheet(&mut self, ctx: &egui::Context) {
+        if !self.simple_mode.walk_sheet_open {
+            return;
+        }
+        let sheet = self.simple_walk_text();
+        let mut open = true;
+        let mut copy = false;
+        let mut save = false;
+        let copied = self.simple_mode.walk_sheet_copied;
+        let save_id = if self.simple_mode.walk_sheet_failed {
+            "simple-mode.296"
+        } else if self.simple_mode.walk_sheet_saved {
+            "simple-mode.295"
+        } else {
+            "simple-mode.294"
+        };
+        egui::Window::new(i18n::registered(self.locale, "simple-mode.293"))
+            .id(egui::Id::new("simple-walk-sheet"))
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.set_min_width(300.0);
+                ui.set_max_width(440.0);
+                egui::ScrollArea::vertical()
+                    .max_height(360.0)
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new(&sheet).size(16.0).color(SIMPLE_INK));
+                    });
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = egui::Vec2::new(8.0, 8.0);
+                    if ui
+                        .add_sized([120.0, 40.0], simple_copy_button(self.locale, copied))
+                        .clicked()
+                    {
+                        copy = true;
+                    }
+                    let save_button = egui::Button::new(
+                        egui::RichText::new(i18n::registered(self.locale, save_id))
+                            .size(16.0)
+                            .color(SIMPLE_BLUE),
+                    )
+                    .fill(Color32::WHITE)
+                    .stroke(Stroke::new(1.5, SIMPLE_BLUE))
+                    .corner_radius(18.0);
+                    if ui.add_sized([160.0, 40.0], save_button).clicked() {
+                        save = true;
+                    }
+                });
+            });
+        if copy {
+            ctx.copy_text(sheet);
+            self.simple_mode.walk_sheet_copied = true;
+        }
+        if save {
+            self.simple_save_walk_file();
+        }
+        if !open {
+            self.simple_mode.walk_sheet_open = false;
+            self.simple_mode.walk_sheet_copied = false;
+            self.simple_mode.walk_sheet_saved = false;
+            self.simple_mode.walk_sheet_failed = false;
+        }
+    }
+
+    fn simple_walk_text(&self) -> String {
+        rehearsal_walk_sheet(
+            &self.document,
+            self.locale,
+            self.simple_show_title().as_deref(),
+        )
+    }
+
+    fn simple_save_walk_file(&mut self) {
+        let text = rehearsal_walk_file(&self.simple_walk_text());
+        let stem = self
+            .simple_show_title()
+            .unwrap_or_else(|| self.document.title.clone());
+        let name = format!("{}-walk.txt", simple_show_file_stem(&stem));
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Text", &["txt"])
+            .set_file_name(name)
+            .save_file()
+        else {
+            return;
+        };
+        match std::fs::write(&path, text.as_bytes()) {
+            Ok(()) => {
+                self.simple_mode.walk_sheet_saved = true;
+                self.simple_mode.walk_sheet_failed = false;
+            }
+            Err(_) => {
+                self.simple_mode.walk_sheet_saved = false;
+                self.simple_mode.walk_sheet_failed = true;
+            }
         }
     }
 
@@ -3991,12 +4342,7 @@ impl DrillApp {
         self.simple_mode.person_name_for = None;
         self.simple_mode.scene_name.clear();
         self.simple_mode.scene_name_for = None;
-        self.simple_mode.memo_open = false;
-        self.simple_mode.memo_copied = false;
-        self.simple_mode.place_sheet_open = false;
-        self.simple_mode.place_sheet_copied = false;
-        self.simple_mode.show_sheet_open = false;
-        self.simple_mode.show_sheet_copied = false;
+        self.simple_close_readouts();
         self.simple_mode.scene_loop = false;
         self.simple_mode.empty_pan = false;
         self.simple_mode.saved_note_until = None;
@@ -4422,6 +4768,10 @@ impl DrillApp {
         self.paint_simple_paths(&painter, &to_screen);
         self.paint_simple_audience(&painter, rect, &to_screen);
         self.paint_simple_sides(&painter, rect, &to_screen);
+        self.paint_simple_floor(&painter, rect, &to_screen);
+        self.paint_simple_focus_wash(&painter, &to_screen);
+        self.paint_simple_outside_rings(&painter, &to_screen);
+        self.paint_simple_away(&painter, &to_screen);
         let from_screen = |pos: Pos2| {
             field_map.unmap(drill_render::Vec2 {
                 x: pos.x - rect.left(),
@@ -4597,12 +4947,81 @@ impl DrillApp {
         if self.drag_preview.is_some() {
             return;
         }
+        let only = self.simple_focus_index();
         let ink = Color32::from_rgba_unmultiplied(20, 96, 200, 180);
-        for (start, end) in simple_move_paths(&self.document, self.current_set) {
+        for (index, start, end) in simple_indexed_paths(&self.document, self.current_set) {
+            if only.is_some_and(|focus| focus != index) {
+                continue;
+            }
             let from = to_screen(start);
             let to = to_screen(end);
             painter.line_segment([from, to], Stroke::new(2.5, ink));
             painter.circle_stroke(to, 8.0, Stroke::new(1.5, ink));
+        }
+    }
+
+    fn paint_simple_floor(
+        &self,
+        painter: &egui::Painter,
+        rect: egui::Rect,
+        to_screen: &impl Fn(Point) -> Pos2,
+    ) {
+        let Some((point, label)) = simple_floor_mark(&self.document.grid, self.locale) else {
+            return;
+        };
+        paint_simple_chip(painter, rect, to_screen(point), &label);
+    }
+
+    fn paint_simple_focus_wash(&self, painter: &egui::Painter, to_screen: &impl Fn(Point) -> Pos2) {
+        let Some(focus) = self.simple_focus_index() else {
+            return;
+        };
+        for (index, point) in self.frame_positions.iter().enumerate() {
+            if index == focus {
+                continue;
+            }
+            painter.circle_filled(to_screen(*point), 16.0, Color32::from_white_alpha(220));
+        }
+    }
+
+    fn paint_simple_outside_rings(
+        &self,
+        painter: &egui::Painter,
+        to_screen: &impl Fn(Point) -> Pos2,
+    ) {
+        let focus = self.simple_focus_index();
+        let ink = Color32::from_rgb(176, 64, 48);
+        for (index, point) in self.frame_positions.iter().enumerate() {
+            if focus.is_some_and(|focus| focus != index) {
+                continue;
+            }
+            if !point_outside_contest(&self.document.grid, *point) {
+                continue;
+            }
+            painter.circle_stroke(to_screen(*point), 14.0, Stroke::new(2.5, ink));
+        }
+    }
+
+    fn paint_simple_away(&self, painter: &egui::Painter, to_screen: &impl Fn(Point) -> Pos2) {
+        if self.simple_mode.away.is_empty() {
+            return;
+        }
+        let label = i18n::registered(self.locale, "simple-mode.289");
+        let ink = Color32::from_rgb(90, 98, 112);
+        for (index, point) in self.frame_positions.iter().enumerate() {
+            if !self.simple_is_away(index) {
+                continue;
+            }
+            let pos = to_screen(*point);
+            painter.circle_filled(pos, 12.0, Color32::from_white_alpha(235));
+            painter.circle_stroke(pos, 11.0, Stroke::new(2.0, ink));
+            painter.text(
+                pos,
+                egui::Align2::CENTER_CENTER,
+                label,
+                egui::FontId::proportional(11.0),
+                ink,
+            );
         }
     }
 
@@ -4927,6 +5346,16 @@ fn simple_travel_note(
 /// The move leaving this scene, or the move arriving at the last scene.
 /// A person who stays put is left out. Reading this never writes the document.
 fn simple_move_paths(document: &drill_core::Document, set_index: usize) -> Vec<(Point, Point)> {
+    simple_indexed_paths(document, set_index)
+        .into_iter()
+        .map(|(_, start, end)| (start, end))
+        .collect()
+}
+
+fn simple_indexed_paths(
+    document: &drill_core::Document,
+    set_index: usize,
+) -> Vec<(usize, Point, Point)> {
     let sets = document.sets.len();
     if sets < 2 || set_index >= sets {
         return Vec::new();
@@ -4941,10 +5370,11 @@ fn simple_move_paths(document: &drill_core::Document, set_index: usize) -> Vec<(
     start
         .iter()
         .zip(end.iter())
-        .filter(|&(from_point, to_point)| {
+        .enumerate()
+        .filter(|&(_, (from_point, to_point))| {
             (from_point.x - to_point.x).hypot(from_point.y - to_point.y) > 0.05
         })
-        .map(|(from_point, to_point)| (*from_point, *to_point))
+        .map(|(index, (from_point, to_point))| (index, *from_point, *to_point))
         .collect()
 }
 
@@ -5805,6 +6235,172 @@ fn simple_position_sheet(
         }
     }
     lines.join("\n")
+}
+
+fn simple_copy_button(locale: drill_core::Locale, copied: bool) -> egui::Button<'static> {
+    let id = if copied {
+        "simple-mode.180"
+    } else {
+        "simple-mode.179"
+    };
+    egui::Button::new(
+        egui::RichText::new(i18n::registered(locale, id))
+            .size(16.0)
+            .color(Color32::WHITE),
+    )
+    .fill(SIMPLE_BLUE)
+    .corner_radius(18.0)
+}
+
+/// One person's place at every picture, and the walk to the next picture.
+fn simple_person_path_text(
+    document: &drill_core::Document,
+    index: usize,
+    locale: drill_core::Locale,
+) -> String {
+    let label = document
+        .performers
+        .get(index)
+        .map(|person| person.label.as_str())
+        .unwrap_or("");
+    let mut lines = vec![i18n::registered(locale, "simple-mode.283").replace("{0}", label)];
+    for set_index in 0..document.sets.len() {
+        lines.push(String::new());
+        let mut heading = i18n::registered(locale, "simple-mode.286")
+            .replace("{0}", &(set_index + 1).to_string());
+        if let Some(set) = document.sets.get(set_index)
+            && !simple_stock_scene_name(&set.name)
+        {
+            heading.push(' ');
+            heading.push_str(&set.name);
+        }
+        lines.push(heading);
+        if let Some(point) = document
+            .sets
+            .get(set_index)
+            .and_then(|set| set.positions.get(index).copied())
+            && let Some(detail) = simple_place_detail(&document.grid, point, locale)
+        {
+            lines.push(detail);
+        }
+        if set_index + 1 >= document.sets.len() {
+            continue;
+        }
+        let Some(travel) = simple_person_travel(document, index, set_index, set_index + 1) else {
+            continue;
+        };
+        if travel.kind == drill_core::continuity::TravelDirection::Hold {
+            lines.push(i18n::registered(locale, "simple-mode.285").to_string());
+        } else {
+            lines.push(
+                i18n::registered(locale, "simple-mode.284")
+                    .replace("{0}", travel.kind.text(locale))
+                    .replace("{1}", &format_step_count(travel.steps)),
+            );
+        }
+    }
+    lines.join("\n")
+}
+
+/// Plain text of every scene's walk, for a printed handout. `heading` replaces
+/// the document title when the show already has a file name.
+pub(crate) fn rehearsal_walk_sheet(
+    document: &drill_core::Document,
+    locale: drill_core::Locale,
+    heading: Option<&str>,
+) -> String {
+    let mut lines = Vec::new();
+    let heading = heading.map(str::trim).filter(|text| !text.is_empty());
+    if let Some(heading) = heading {
+        lines.push(heading.to_string());
+    } else {
+        let title = document.title.trim();
+        if !title.is_empty() {
+            lines.push(title.to_string());
+        }
+    }
+    if let Some(seconds) = simple_show_seconds(document) {
+        lines.push(simple_show_length_text(locale, seconds));
+    }
+    for index in 0..document.sets.len() {
+        lines.push(String::new());
+        lines.push(simple_scene_memo(document, index, locale));
+    }
+    lines.join("\n")
+}
+
+/// UTF-8 with a BOM so Windows Notepad opens the handout as Japanese.
+pub(crate) fn rehearsal_walk_file(sheet: &str) -> String {
+    format!("\u{FEFF}{sheet}")
+}
+
+/// The outer contest line, when the grid has one. People on the line count
+/// as inside. A field with no contest line has nothing to flag.
+pub(crate) fn outside_contest_indices(
+    document: &drill_core::Document,
+    set_index: usize,
+) -> Vec<usize> {
+    if document.grid.reference_frame_bounds().is_empty() {
+        return Vec::new();
+    }
+    let mut indices = Vec::new();
+    let mut consider = |index: usize| {
+        let Some(positions) = document.sets.get(index).map(|set| &set.positions) else {
+            return;
+        };
+        for (person, point) in positions.iter().enumerate() {
+            if point_outside_contest(&document.grid, *point) && !indices.contains(&person) {
+                indices.push(person);
+            }
+        }
+    };
+    consider(set_index);
+    if let Some((from, to)) = simple_transition_ends(document, set_index) {
+        consider(from);
+        consider(to);
+    }
+    indices.sort_unstable();
+    indices
+}
+
+fn point_outside_contest(grid: &drill_core::GridConfig, point: Point) -> bool {
+    let Some((min_x, min_y, max_x, max_y)) = grid.reference_frame_bounds().into_iter().next()
+    else {
+        return false;
+    };
+    const EDGE: f32 = 0.05;
+    point.x < min_x - EDGE
+        || point.x > max_x + EDGE
+        || point.y < min_y - EDGE
+        || point.y > max_y + EDGE
+}
+
+/// Front edge of the outer contest line, labeled with its side length.
+fn simple_floor_mark(
+    grid: &drill_core::GridConfig,
+    locale: drill_core::Locale,
+) -> Option<(Point, String)> {
+    let side = *grid.reference_frames.first()?;
+    if !side.is_finite() || side < 1.0 {
+        return None;
+    }
+    let (min_x, min_y, max_x, _) = grid.reference_frame_bounds().into_iter().next()?;
+    let distance = if (side - side.round()).abs() < 0.05 {
+        format!("{}", side.round() as i32)
+    } else {
+        format!("{side:.1}")
+    };
+    let id = match grid.unit {
+        drill_core::Unit::Meters => "simple-mode.301",
+        drill_core::Unit::Yards => "simple-mode.302",
+    };
+    Some((
+        Point {
+            x: (min_x + max_x) * 0.5,
+            y: min_y,
+        },
+        i18n::registered(locale, id).replace("{0}", &distance),
+    ))
 }
 
 fn simple_show_file_stem(raw: &str) -> String {
@@ -8752,5 +9348,103 @@ mod tests {
         assert_eq!(app.current_path.as_ref(), Some(&autosave));
         assert!(!app.dirty);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn contest_line_flags_the_edge_and_ignores_a_field_without_one() {
+        let grid = drill_core::GridConfig::japan_floor();
+        let (min_x, min_y, _max_x, max_y) = grid.reference_frame_bounds()[0];
+        let mid_y = (min_y + max_y) * 0.5;
+        assert!(!point_outside_contest(&grid, Point { x: min_x, y: mid_y }));
+        assert!(point_outside_contest(
+            &grid,
+            Point {
+                x: min_x - 0.2,
+                y: mid_y,
+            }
+        ));
+        assert!(outside_contest_indices(&drill_core::Document::demo(1, 2), 0).is_empty());
+
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 23.0, y: 20.0 }, true);
+        app.place_performer_at(Point { x: 1.0, y: 20.0 }, true);
+        let outside = outside_contest_indices(&app.document, 0);
+        assert_eq!(outside, vec![1]);
+        let mark = simple_floor_mark(&app.document.grid, drill_core::Locale::Ja).expect("30m");
+        assert_eq!(mark.1, "30m");
+
+        app.duplicate_current_set();
+        let set_id = app.document.sets[0].id;
+        let inside = app.document.performers[0].id;
+        assert!(app.execute_edit(
+            Edit::MovePerformers {
+                set_id,
+                performer_ids: vec![inside],
+                positions: vec![Point { x: 1.0, y: 20.0 }],
+            },
+            "edge",
+        ));
+        app.navigate_to_set(1);
+        app.nav_glide.settle();
+        let leaving = outside_contest_indices(&app.document, 1);
+        assert!(leaving.contains(&0));
+    }
+
+    #[test]
+    fn one_person_path_names_each_scene_and_the_walk() {
+        let app = moved_pair();
+        let path = simple_person_path_text(&app.document, 0, drill_core::Locale::Ja);
+        assert!(path.contains("1 の道"));
+        assert!(path.contains("場面 1"));
+        assert!(path.contains("場面 2"));
+        assert!(path.contains("次まで"));
+        assert!(path.contains("歩"));
+        let still = simple_person_path_text(&app.document, 1, drill_core::Locale::Ja);
+        assert!(still.contains("動きません"));
+        assert!(!still.contains("次まで"));
+        let english = simple_person_path_text(&app.document, 0, drill_core::Locale::En);
+        assert!(english.contains("path"));
+        assert_ne!(path, english);
+    }
+
+    #[test]
+    fn walk_sheet_lists_every_scene_without_writing() {
+        let app = moved_pair();
+        let before = app.document.clone();
+        let sheet = rehearsal_walk_sheet(&app.document, drill_core::Locale::Ja, Some("文化祭"));
+        assert!(sheet.starts_with("文化祭\n"));
+        assert!(sheet.contains("全体"));
+        assert!(sheet.matches("場面").count() >= 2);
+        assert_eq!(app.document, before);
+        let file = rehearsal_walk_file(&sheet);
+        assert!(file.starts_with('\u{FEFF}'));
+        assert!(file.contains("文化祭"));
+        let plain = rehearsal_walk_sheet(&app.document, drill_core::Locale::En, None);
+        assert!(plain.contains(&app.document.title));
+        assert!(plain.contains("Scene"));
+    }
+
+    #[test]
+    fn focus_and_away_stay_out_of_the_show_file() {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 12.0, y: 16.0 }, true);
+        app.place_performer_at(Point { x: 20.0, y: 16.0 }, true);
+        let before = app.document.to_json().expect("json");
+        let revision = app.history.revision();
+        app.simple_toggle_focus();
+        app.simple_toggle_away();
+        assert!(app.simple_focus_index().is_some());
+        assert_eq!(app.simple_away_count(), 1);
+        assert!(app.simple_is_away(app.simple_single_selected().expect("one")));
+        assert_eq!(app.document.to_json().expect("json"), before);
+        assert_eq!(app.history.revision(), revision);
+        app.simple_toggle_focus();
+        assert!(app.simple_focus_index().is_none());
+        app.simple_toggle_away();
+        assert_eq!(app.simple_away_count(), 0);
+        app.simple_toggle_away();
+        app.begin_simple_show();
+        assert!(app.simple_mode.focus.is_none());
+        assert!(app.simple_mode.away.is_empty());
     }
 }
