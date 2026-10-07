@@ -274,6 +274,9 @@ pub struct RenderOptions {
     /// so existing callers built via `..RenderOptions::default()` keep
     /// today's behavior (no trails) unchanged.
     pub show_trails_for: TrailSelection,
+    /// Skip dots and labels that fall outside the viewport. Off by default
+    /// so exports and small casts still draw every person.
+    pub skip_offscreen: bool,
 }
 
 impl Default for RenderOptions {
@@ -289,6 +292,7 @@ impl Default for RenderOptions {
             field_center: None,
             field_zoom: 1.0,
             show_trails_for: TrailSelection::None,
+            skip_offscreen: false,
         }
     }
 }
@@ -868,8 +872,20 @@ pub fn build_field_2d(scene: &Scene<'_>, _scratch: &mut BuildScratch, out: &mut 
     }
 
     start = out.commands.len();
+    let skip_offscreen = scene.options.skip_offscreen;
+    let view = scene.viewport.size;
+    let pad = scene.options.dot_radius * scene.viewport.ui_scale.max(0.1)
+        + scene.options.label_size
+        + 16.0;
+    let shown = |point: Point| {
+        if !skip_offscreen {
+            return true;
+        }
+        let at = field_map.map(point);
+        at.x >= -pad && at.y >= -pad && at.x <= view.x + pad && at.y <= view.y + pad
+    };
     for (performer, point) in scene.document.performers.iter().zip(scene.positions) {
-        if point.x.is_finite() && point.y.is_finite() {
+        if point.x.is_finite() && point.y.is_finite() && shown(*point) {
             out.commands.push(DrawCmd::Dot {
                 center: map(*point),
                 radius: scene.options.dot_radius * scene.viewport.ui_scale.max(0.1),
@@ -893,7 +909,7 @@ pub fn build_field_2d(scene: &Scene<'_>, _scratch: &mut BuildScratch, out: &mut 
     start = out.commands.len();
     if scene.options.show_labels {
         for (performer, point) in scene.document.performers.iter().zip(scene.positions) {
-            if point.x.is_finite() && point.y.is_finite() {
+            if point.x.is_finite() && point.y.is_finite() && shown(*point) {
                 let text = out.push_text(&performer.label);
                 let at = map(*point);
                 out.commands.push(DrawCmd::Text {
@@ -1424,6 +1440,57 @@ mod tests {
         assert_eq!(out.layer(Layer::FieldFill).len(), 1);
         assert_eq!(out.stats().dots_emitted, 40);
         assert_eq!(out.stats().labels_emitted, 40);
+    }
+
+    #[test]
+    fn skip_offscreen_drops_dots_outside_a_zoomed_window() {
+        let mut doc = Document::demo(1, 2);
+        doc.sets[0].positions[0] = Point { x: 10.0, y: 10.0 };
+        doc.sets[0].positions[1] = Point { x: 90.0, y: 40.0 };
+        let positions = doc.sets[0].positions.clone();
+        let viewport = Viewport {
+            size: Vec2 { x: 400.0, y: 300.0 },
+            ui_scale: 1.0,
+        };
+        let options = RenderOptions {
+            margin: 0.0,
+            field_center: Some(Point { x: 10.0, y: 10.0 }),
+            field_zoom: 8.0,
+            show_labels: true,
+            ..RenderOptions::default()
+        };
+        let mut all = DisplayList::new();
+        build_field_2d(
+            &Scene {
+                positions: &positions,
+                document: &doc,
+                viewport,
+                options: &options,
+                theme: &Theme::SCREEN_DARK,
+            },
+            &mut BuildScratch,
+            &mut all,
+        );
+        assert_eq!(all.stats().dots_emitted, 2);
+        assert_eq!(all.stats().labels_emitted, 2);
+        let culled_options = RenderOptions {
+            skip_offscreen: true,
+            ..options
+        };
+        let mut culled = DisplayList::new();
+        build_field_2d(
+            &Scene {
+                positions: &positions,
+                document: &doc,
+                viewport,
+                options: &culled_options,
+                theme: &Theme::SCREEN_DARK,
+            },
+            &mut BuildScratch,
+            &mut culled,
+        );
+        assert_eq!(culled.stats().dots_emitted, 1);
+        assert_eq!(culled.stats().labels_emitted, 1);
     }
 
     #[test]

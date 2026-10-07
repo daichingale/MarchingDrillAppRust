@@ -378,6 +378,33 @@ impl FieldViewport {
         self.zoom_anchor = None;
     }
 
+    /// Center on a field rectangle and zoom until it fills most of the window.
+    /// A single dot still gets a readable margin instead of the maximum zoom.
+    pub(crate) fn frame_bounds(&mut self, grid: &GridConfig, size: Vec2, min: Point, max: Point) {
+        if size.x < 1.0 || size.y < 1.0 || !min.x.is_finite() || !max.x.is_finite() {
+            return;
+        }
+        let step = grid.horizontal_units / f32::from(grid.horizontal_steps.max(1));
+        let min_span = (step * 8.0).max(1.0);
+        let width = (max.x - min.x).abs().max(min_span);
+        let height = (max.y - min.y).abs().max(min_span);
+        let fit = (size.x / grid.width.max(f32::EPSILON))
+            .min(size.y / grid.height.max(f32::EPSILON))
+            .max(f32::EPSILON);
+        let pad = 1.35;
+        let zoom = (size.x / (fit * width * pad)).min(size.y / (fit * height * pad));
+        if !zoom.is_finite() {
+            return;
+        }
+        self.center = Point {
+            x: (min.x + max.x) * 0.5,
+            y: (min.y + max.y) * 0.5,
+        };
+        self.set_zoom(zoom);
+        self.stop_glide();
+        self.clamp_center(grid, size);
+    }
+
     /// Accumulate a wheel notch into the zoom target and pin the field point
     /// currently under the cursor for the whole gesture.
     pub(crate) fn zoom_toward(
@@ -1382,5 +1409,21 @@ mod viewport_tests {
         }
         assert_eq!(view.dot_lift(), 0.0);
         assert_eq!(view.dot_settle_phase(), 0.0);
+    }
+
+    #[test]
+    fn frame_bounds_zooms_in_on_a_small_group() {
+        let grid = grid();
+        let size = Vec2::new(800.0, 600.0);
+        let mut view = FieldViewport::fit(&grid);
+        view.frame_bounds(
+            &grid,
+            size,
+            Point { x: 45.0, y: 20.0 },
+            Point { x: 55.0, y: 30.0 },
+        );
+        assert!(view.zoom > 2.0, "zoom stayed wide: {}", view.zoom);
+        assert!((view.center.x - 50.0).abs() < 1.0, "{}", view.center.x);
+        assert!((view.center.y - 25.0).abs() < 2.0, "{}", view.center.y);
     }
 }
