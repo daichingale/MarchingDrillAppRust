@@ -9,13 +9,26 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+/// Why a save or open stopped. `code` is a stable `JobErrorCode` name, or
+/// `Cancelled`. The UI turns it into a sentence; the file format is untouched.
+pub(crate) struct ProjectFailure {
+    pub saving: bool,
+    pub code: String,
+}
+
+impl std::fmt::Display for ProjectFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.code)
+    }
+}
+
 pub(crate) enum ProjectEvent {
     Saved(PathBuf),
     Loaded {
         path: PathBuf,
         project: Box<LoadedProject>,
     },
-    Failed(String),
+    Failed(ProjectFailure),
 }
 
 struct Startup {
@@ -254,8 +267,14 @@ impl ProjectState {
             self.save = None;
             return Some(match message {
                 JobMsg::Done(path) => ProjectEvent::Saved(path),
-                JobMsg::Failed(e) => ProjectEvent::Failed(e.to_string()),
-                JobMsg::Cancelled => ProjectEvent::Failed("保存をキャンセルしました".into()),
+                JobMsg::Failed(error) => ProjectEvent::Failed(ProjectFailure {
+                    saving: true,
+                    code: error.to_string(),
+                }),
+                JobMsg::Cancelled => ProjectEvent::Failed(ProjectFailure {
+                    saving: true,
+                    code: "Cancelled".into(),
+                }),
             });
         }
         if let Some(message) = self.load.as_mut().and_then(Job::poll) {
@@ -265,8 +284,14 @@ impl ProjectState {
                     path,
                     project: Box::new(project),
                 },
-                JobMsg::Failed(e) => ProjectEvent::Failed(e.to_string()),
-                JobMsg::Cancelled => ProjectEvent::Failed("読込をキャンセルしました".into()),
+                JobMsg::Failed(error) => ProjectEvent::Failed(ProjectFailure {
+                    saving: false,
+                    code: error.to_string(),
+                }),
+                JobMsg::Cancelled => ProjectEvent::Failed(ProjectFailure {
+                    saving: false,
+                    code: "Cancelled".into(),
+                }),
             });
         }
         None

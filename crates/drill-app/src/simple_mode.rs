@@ -279,6 +279,26 @@ pub(crate) struct SimpleModeState {
     /// Draft for the current scene's name. A stock "セット 1" shows as empty.
     scene_name: String,
     scene_name_for: Option<usize>,
+    /// Pasted names, one person per line. Nothing is written until they apply.
+    roster_open: bool,
+    roster_draft: String,
+    /// One card per person, to cut apart and hand out.
+    cards_open: bool,
+    cards_copied: bool,
+    cards_saved: bool,
+    cards_failed: bool,
+    /// Last save or open that stopped. Session only; the file is unchanged.
+    file_problem: Option<SimpleFileProblem>,
+    /// They hid "前に保存した作品" for this visit.
+    recent_offer_hidden: bool,
+}
+
+/// A save or open that stopped, kept only so the simple-mode banner can say
+/// why. `code` matches `JobErrorCode`'s name, or `Cancelled`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SimpleFileProblem {
+    saving: bool,
+    code: String,
 }
 
 /// One short chrome animation. Cleared as soon as it settles so the window
@@ -512,6 +532,7 @@ impl DrillApp {
     pub(super) fn simple_reset_session_view(&mut self) {
         self.simple_mode.focus = None;
         self.simple_mode.away.clear();
+        self.simple_mode.file_problem = None;
         self.simple_close_readouts();
     }
 
@@ -529,6 +550,11 @@ impl DrillApp {
         self.simple_mode.walk_sheet_copied = false;
         self.simple_mode.walk_sheet_saved = false;
         self.simple_mode.walk_sheet_failed = false;
+        self.simple_mode.roster_open = false;
+        self.simple_mode.cards_open = false;
+        self.simple_mode.cards_copied = false;
+        self.simple_mode.cards_saved = false;
+        self.simple_mode.cards_failed = false;
     }
 
     /// First launch lands on an empty field. Later launches stay on whichever
@@ -670,7 +696,8 @@ impl DrillApp {
     /// `empty`, `placed`, `play`, `glossary`, `selected`, `recent`, `full`,
     /// `move`, `save`, `done`, `line`, `step`, `circle`, `nudge`, `walk`,
     /// `shows`, `hints`, `memo`, `numbers`, `shape`, `block`, `count`,
-    /// `places`, `pair`, `order`, `sheet`, or `recover`.
+    /// `places`, `pair`, `order`, `sheet`, `recover`, `again`, `roster`,
+    /// `cards`, or `broken`.
     pub(crate) fn apply_qa_simple_fixture(&mut self) {
         let Ok(stage) = std::env::var("DRILLFORGE_QA_SIMPLE") else {
             return;
@@ -679,6 +706,18 @@ impl DrillApp {
         self.simple_mode.enabled = true;
         self.begin_simple_show();
         if stage == "empty" {
+            return;
+        }
+        if stage == "again" {
+            let dir = std::env::temp_dir().join("drillforge-qa-again");
+            let _ = std::fs::create_dir_all(&dir);
+            let path = dir.join("春のドリル.drill.json");
+            let _ = std::fs::write(&path, b"{}\n");
+            self.recent_projects
+                .preview_paths_for_screenshot(vec![path]);
+            self.simple_mode.seen_people = 0;
+            self.simple_mode.empty_greeted = true;
+            self.simple_mode.motion = None;
             return;
         }
         self.place_performer_at(Point { x: 12.0, y: 16.0 }, true);
@@ -930,6 +969,20 @@ impl DrillApp {
         if stage == "sheet" {
             self.simple_mode.show_sheet_open = true;
         }
+        if stage == "roster" {
+            self.simple_mode.roster_open = true;
+            self.simple_mode.roster_draft = "山田\n佐藤\n鈴木".into();
+        }
+        if stage == "cards" {
+            self.simple_apply_roster("山田\n佐藤");
+            self.duplicate_current_set();
+            self.navigate_to_set(0);
+            self.nav_glide.settle();
+            self.simple_mode.cards_open = true;
+        }
+        if stage == "broken" {
+            self.note_simple_file_failed(false, "Decode".into());
+        }
         if stage == "order" || stage == "recover" {
             self.project_state
                 .recoveries
@@ -998,6 +1051,8 @@ impl DrillApp {
                 .show(ui, |ui| {
                     self.simple_header(ui);
                     self.simple_recovery_banner(ui);
+                    self.simple_file_problem_banner(ui);
+                    self.simple_recent_banner(ui);
                     self.simple_scene_name_row(ui);
                     ui.add_space(8.0);
                     self.simple_cue(ui);
@@ -1066,6 +1121,8 @@ impl DrillApp {
         self.simple_show_sheet(ui.ctx());
         self.simple_path_sheet(ui.ctx());
         self.simple_walk_sheet(ui.ctx());
+        self.simple_roster_sheet(ui.ctx());
+        self.simple_cards_sheet(ui.ctx());
         self.glossary.show(ui.ctx(), self.locale);
         self.onboarding.help_ui(ui.ctx(), self.locale);
         self.onboarding.persist_if_changed();
@@ -1265,6 +1322,114 @@ impl DrillApp {
         if dismiss {
             self.project_state.ignore_recovery(0);
         }
+    }
+
+    fn simple_file_problem_banner(&mut self, ui: &mut egui::Ui) {
+        let Some(problem) = self.simple_mode.file_problem.clone() else {
+            return;
+        };
+        let message = plain_file_failure(self.locale, problem.saving, &problem.code);
+        ui.add_space(4.0);
+        let mut dismiss = false;
+        egui::Frame::new()
+            .fill(super::app_theme::ACCENT_SOFT)
+            .inner_margin(egui::Margin::symmetric(16, 10))
+            .corner_radius(16)
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = egui::Vec2::new(8.0, 8.0);
+                    ui.label(egui::RichText::new(message).size(15.0).color(SIMPLE_INK));
+                    if simple_choice_button(
+                        ui,
+                        i18n::registered(self.locale, "simple-mode.317"),
+                        true,
+                        true,
+                    )
+                    .clicked()
+                    {
+                        dismiss = true;
+                    }
+                });
+            });
+        if dismiss {
+            self.simple_mode.file_problem = None;
+        }
+    }
+
+    fn simple_recent_banner(&mut self, ui: &mut egui::Ui) {
+        let Some(path) = self.simple_recent_offer() else {
+            return;
+        };
+        let title = simple_recent_caption(&path);
+        ui.add_space(4.0);
+        let mut open = false;
+        let mut dismiss = false;
+        egui::Frame::new()
+            .fill(super::app_theme::ACCENT_SOFT)
+            .inner_margin(egui::Margin::symmetric(16, 10))
+            .corner_radius(16)
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = egui::Vec2::new(8.0, 8.0);
+                    ui.label(
+                        egui::RichText::new(i18n::registered(self.locale, "simple-mode.313"))
+                            .size(15.0)
+                            .color(SIMPLE_INK),
+                    );
+                    if !title.is_empty() {
+                        ui.label(
+                            egui::RichText::new(title)
+                                .size(15.0)
+                                .strong()
+                                .color(SIMPLE_INK),
+                        );
+                    }
+                    if simple_choice_button(
+                        ui,
+                        i18n::registered(self.locale, "simple-mode.314"),
+                        !self.project_state.busy(),
+                        true,
+                    )
+                    .on_hover_text(i18n::registered(self.locale, "simple-mode.316"))
+                    .clicked()
+                    {
+                        open = true;
+                    }
+                    if simple_choice_button(
+                        ui,
+                        i18n::registered(self.locale, "simple-mode.315"),
+                        true,
+                        false,
+                    )
+                    .clicked()
+                    {
+                        dismiss = true;
+                    }
+                });
+            });
+        if open {
+            self.request_open_recent(path);
+        }
+        if dismiss {
+            self.simple_mode.recent_offer_hidden = true;
+        }
+    }
+
+    fn simple_recent_offer(&self) -> Option<std::path::PathBuf> {
+        if !self.simple_mode.enabled
+            || self.simple_mode.recent_offer_hidden
+            || !self.document.performers.is_empty()
+            || self.current_path.is_some()
+            || !self.project_state.recoveries.is_empty()
+            || self.playing
+        {
+            return None;
+        }
+        self.recent_projects
+            .paths()
+            .iter()
+            .find(|path| path.is_file())
+            .cloned()
     }
 
     fn simple_header(&mut self, ui: &mut egui::Ui) {
@@ -1555,6 +1720,16 @@ impl DrillApp {
                 .strong()
                 .color(SIMPLE_INK),
         );
+        if self.simple_guide() == SimpleGuide::Place {
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(simple_first_steps(self.locale))
+                    .size(16.0)
+                    .color(super::app_theme::SECONDARY_TEXT),
+            );
+            ui.add_space(6.0);
+            self.simple_roster_button(ui);
+        }
     }
 
     fn simple_step_counts(&mut self, delta: i32) {
@@ -2563,6 +2738,8 @@ impl DrillApp {
             ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = egui::Vec2::new(8.0, 8.0);
+                self.simple_roster_button(ui);
+                self.simple_cards_button(ui);
                 self.simple_memo_button(ui);
                 self.simple_place_button(ui);
                 self.simple_show_sheet_button(ui);
@@ -2784,6 +2961,8 @@ impl DrillApp {
             {
                 self.simple_renumber();
             }
+            self.simple_roster_button(ui);
+            self.simple_cards_button(ui);
             self.simple_memo_button(ui);
             self.simple_place_button(ui);
             self.simple_show_sheet_button(ui);
@@ -3380,6 +3559,40 @@ impl DrillApp {
         });
     }
 
+    fn simple_roster_button(&mut self, ui: &mut egui::Ui) {
+        let enabled = !self.playing && self.is_editable_set_start();
+        if simple_choice_button(
+            ui,
+            i18n::registered(self.locale, "simple-mode.304"),
+            enabled,
+            self.simple_mode.roster_open,
+        )
+        .on_hover_text(i18n::registered(self.locale, "simple-mode.305"))
+        .clicked()
+        {
+            self.simple_mode.roster_open = !self.simple_mode.roster_open;
+        }
+    }
+
+    fn simple_cards_button(&mut self, ui: &mut egui::Ui) {
+        if self.document.performers.is_empty() {
+            return;
+        }
+        let open = !self.simple_mode.cards_open;
+        if simple_choice_button(
+            ui,
+            i18n::registered(self.locale, "simple-mode.310"),
+            true,
+            self.simple_mode.cards_open,
+        )
+        .on_hover_text(i18n::registered(self.locale, "simple-mode.311"))
+        .clicked()
+        {
+            self.simple_close_readouts();
+            self.simple_mode.cards_open = open;
+        }
+    }
+
     fn simple_memo_button(&mut self, ui: &mut egui::Ui) {
         if simple_choice_button(
             ui,
@@ -3666,6 +3879,280 @@ impl DrillApp {
             self.locale,
             self.simple_show_title().as_deref(),
         )
+    }
+
+    fn simple_roster_sheet(&mut self, ctx: &egui::Context) {
+        if !self.simple_mode.roster_open {
+            return;
+        }
+        let mut apply = false;
+        let mut cancel = false;
+        egui::Window::new(i18n::registered(self.locale, "simple-mode.306"))
+            .id(egui::Id::new("simple-roster-sheet"))
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.set_min_width(320.0);
+                ui.set_max_width(440.0);
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(i18n::registered(self.locale, "simple-mode.307"))
+                        .size(14.0)
+                        .color(super::app_theme::SECONDARY_TEXT),
+                );
+                ui.add_space(8.0);
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.simple_mode.roster_draft)
+                        .desired_rows(8)
+                        .desired_width(f32::INFINITY),
+                );
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = egui::Vec2::new(8.0, 8.0);
+                    let apply_button = egui::Button::new(
+                        egui::RichText::new(i18n::registered(self.locale, "simple-mode.308"))
+                            .size(16.0)
+                            .color(Color32::WHITE),
+                    )
+                    .fill(SIMPLE_BLUE)
+                    .corner_radius(18.0);
+                    if ui.add_sized([120.0, 40.0], apply_button).clicked() {
+                        apply = true;
+                    }
+                    if ui
+                        .add_sized(
+                            [100.0, 40.0],
+                            egui::Button::new(i18n::registered(self.locale, "simple-mode.309"))
+                                .corner_radius(18.0),
+                        )
+                        .clicked()
+                    {
+                        cancel = true;
+                    }
+                });
+            });
+        if cancel {
+            self.simple_mode.roster_open = false;
+        }
+        if apply {
+            let draft = self.simple_mode.roster_draft.clone();
+            self.simple_apply_roster(&draft);
+        }
+    }
+
+    fn simple_cards_sheet(&mut self, ctx: &egui::Context) {
+        if !self.simple_mode.cards_open {
+            return;
+        }
+        if self.document.performers.is_empty() {
+            self.simple_mode.cards_open = false;
+            return;
+        }
+        let sheet = self.simple_cards_text();
+        let mut open = true;
+        let mut copy = false;
+        let mut save = false;
+        let copied = self.simple_mode.cards_copied;
+        let save_id = if self.simple_mode.cards_failed {
+            "simple-mode.322"
+        } else if self.simple_mode.cards_saved {
+            "simple-mode.321"
+        } else {
+            "simple-mode.320"
+        };
+        egui::Window::new(i18n::registered(self.locale, "simple-mode.312"))
+            .id(egui::Id::new("simple-cards-sheet"))
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.set_min_width(300.0);
+                ui.set_max_width(440.0);
+                egui::ScrollArea::vertical()
+                    .max_height(360.0)
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new(&sheet).size(16.0).color(SIMPLE_INK));
+                    });
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = egui::Vec2::new(8.0, 8.0);
+                    if ui
+                        .add_sized([120.0, 40.0], simple_copy_button(self.locale, copied))
+                        .clicked()
+                    {
+                        copy = true;
+                    }
+                    let save_button = egui::Button::new(
+                        egui::RichText::new(i18n::registered(self.locale, save_id))
+                            .size(16.0)
+                            .color(SIMPLE_BLUE),
+                    )
+                    .fill(Color32::WHITE)
+                    .stroke(Stroke::new(1.5, SIMPLE_BLUE))
+                    .corner_radius(18.0);
+                    if ui.add_sized([160.0, 40.0], save_button).clicked() {
+                        save = true;
+                    }
+                });
+            });
+        if copy {
+            ctx.copy_text(sheet);
+            self.simple_mode.cards_copied = true;
+        }
+        if save {
+            self.simple_save_cards_file();
+        }
+        if !open {
+            self.simple_mode.cards_open = false;
+            self.simple_mode.cards_copied = false;
+            self.simple_mode.cards_saved = false;
+            self.simple_mode.cards_failed = false;
+        }
+    }
+
+    fn simple_cards_text(&self) -> String {
+        performer_cards_text(
+            &self.document,
+            self.locale,
+            self.simple_show_title().as_deref(),
+        )
+    }
+
+    fn simple_save_cards_file(&mut self) {
+        let text = rehearsal_walk_file(&self.simple_cards_text());
+        let stem = self
+            .simple_show_title()
+            .unwrap_or_else(|| self.document.title.clone());
+        let name = format!("{}-cards.txt", simple_show_file_stem(&stem));
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Text", &["txt"])
+            .set_file_name(name)
+            .save_file()
+        else {
+            return;
+        };
+        match std::fs::write(&path, text.as_bytes()) {
+            Ok(()) => {
+                self.simple_mode.cards_saved = true;
+                self.simple_mode.cards_failed = false;
+            }
+            Err(_) => {
+                self.simple_mode.cards_saved = false;
+                self.simple_mode.cards_failed = true;
+            }
+        }
+    }
+
+    /// Names people from the audience's left, and adds anyone left over.
+    /// A line that is only a number keeps the name. One undo.
+    fn simple_apply_roster(&mut self, raw: &str) {
+        if self.playing || !self.is_editable_set_start() {
+            return;
+        }
+        let entries = simple_roster_entries(raw);
+        if entries.is_empty() {
+            return;
+        }
+        let Some(points) = self
+            .document
+            .sets
+            .get(self.current_set)
+            .map(|set| set.positions.clone())
+        else {
+            return;
+        };
+        if points.len() != self.document.performers.len() {
+            return;
+        }
+        let Some(section) = self.document.sections.first().map(|section| section.id) else {
+            return;
+        };
+        let order = simple_renumber_order(&points);
+        let mut next = self.document.clone();
+        let mut changed = false;
+        let mut select = None;
+        for (slot, entry) in entries.iter().enumerate() {
+            let Some(index) = order.get(slot).copied() else {
+                break;
+            };
+            let Some(performer) = next.performers.get_mut(index) else {
+                continue;
+            };
+            let label = simple_roster_label(&performer.label, entry, (slot + 1) as u32);
+            if performer.label != label {
+                performer.label = label;
+                changed = true;
+                if select.is_none() {
+                    select = Some(index);
+                }
+            }
+        }
+        let before_len = next.performers.len();
+        if entries.len() > before_len {
+            let spots = simple_open_spots(&next.grid, &points, entries.len() - before_len);
+            for (offset, entry) in entries.iter().enumerate().skip(before_len) {
+                let Some(spot) = spots.get(offset - before_len).copied() else {
+                    break;
+                };
+                let Some(id) = next.next_performer_id() else {
+                    break;
+                };
+                let label = simple_roster_label("", entry, (offset + 1) as u32);
+                let len_before = next.performers.len();
+                if next
+                    .add_performer(
+                        Performer {
+                            id,
+                            label,
+                            section,
+                            symbol: Symbol::Cross,
+                            color: None.into(),
+                            height_m: 1.7,
+                            kind: PerformerKind::Wind,
+                        },
+                        spot,
+                    )
+                    .is_err()
+                {
+                    if next.performers.len() > len_before {
+                        next.performers.pop();
+                        for set in &mut next.sets {
+                            if set.positions.len() > len_before {
+                                set.positions.pop();
+                            }
+                        }
+                    }
+                    break;
+                }
+                changed = true;
+                if select.is_none() {
+                    select = Some(len_before);
+                }
+            }
+        }
+        if !changed {
+            return;
+        }
+        let revision = self.history.revision();
+        if !self.execute_edit(
+            Edit::ReplaceDocument {
+                document: Box::new(next),
+            },
+            i18n::registered(self.locale, "simple-mode.323"),
+        ) {
+            return;
+        }
+        self.simple_mark(revision, "simple-mode.318");
+        self.simple_mode.roster_open = false;
+        self.simple_mode.person_name_for = None;
+        if let Some(index) = select.filter(|&index| index < self.document.performers.len()) {
+            self.replace_selection(std::iter::once(index).collect());
+        }
+        if self.document.performers.len() > before_len {
+            self.bump_simple_motion(ChromeMotion::Place);
+        }
     }
 
     fn simple_save_walk_file(&mut self) {
@@ -4346,6 +4833,7 @@ impl DrillApp {
         self.simple_mode.scene_loop = false;
         self.simple_mode.empty_pan = false;
         self.simple_mode.saved_note_until = None;
+        self.simple_mode.file_problem = None;
         if !self.write_simple_draft() {
             return false;
         }
@@ -4432,6 +4920,16 @@ impl DrillApp {
             .show(ctx, |ui| {
                 ui.set_min_width(320.0);
                 ui.add_space(4.0);
+                if let Some(problem) = &self.simple_mode.file_problem
+                    && problem.saving
+                {
+                    ui.label(
+                        egui::RichText::new(plain_file_failure(self.locale, true, &problem.code))
+                            .size(15.0)
+                            .color(SIMPLE_INK),
+                    );
+                    ui.add_space(8.0);
+                }
                 let edit = ui.add(
                     egui::TextEdit::singleline(&mut self.simple_mode.name_draft)
                         .desired_width(f32::INFINITY),
@@ -4477,21 +4975,29 @@ impl DrillApp {
         }
         self.simple_mode.naming_pending = false;
         self.simple_mode.naming = false;
+        self.simple_mode.file_problem = None;
         self.simple_mode.saved_note_until = Some(Instant::now() + Duration::from_secs(3));
         self.recent_projects.remember(path.to_path_buf());
     }
 
-    pub(crate) fn note_simple_save_failed(&mut self) {
-        if !self.simple_mode.enabled || !self.simple_mode.naming_pending {
+    /// Shows a plain sentence for a save or open that stopped. A failed save
+    /// that was waiting on a name asks for the name again. Cancelling does not.
+    pub(crate) fn note_simple_file_failed(&mut self, saving: bool, code: String) {
+        if !self.simple_mode.enabled {
             return;
         }
+        let cancelled = code == "Cancelled";
+        let reopen = saving && self.simple_mode.naming_pending && !cancelled;
         self.simple_mode.naming_pending = false;
-        if self.simple_mode.name_draft.trim().is_empty() {
-            self.simple_mode.name_draft = self
-                .simple_show_title()
-                .unwrap_or_else(|| self.simple_default_show_name());
+        self.simple_mode.file_problem = Some(SimpleFileProblem { saving, code });
+        if reopen {
+            if self.simple_mode.name_draft.trim().is_empty() {
+                self.simple_mode.name_draft = self
+                    .simple_show_title()
+                    .unwrap_or_else(|| self.simple_default_show_name());
+            }
+            self.simple_mode.naming = true;
         }
-        self.simple_mode.naming = true;
     }
 
     /// True when this open is a crash copy. The show then has no file name
@@ -6251,6 +6757,163 @@ fn simple_copy_button(locale: drill_core::Locale, copied: bool) -> egui::Button<
     )
     .fill(SIMPLE_BLUE)
     .corner_radius(18.0)
+}
+
+fn simple_first_steps(locale: drill_core::Locale) -> &'static str {
+    i18n::registered(locale, "simple-mode.303")
+}
+
+/// A sentence a beginner can read when a save or open stops. `code` is a
+/// `JobErrorCode` name, or `Cancelled`. The same words are used in both modes.
+pub(crate) fn plain_file_failure(locale: drill_core::Locale, saving: bool, code: &str) -> String {
+    let id = match (saving, code) {
+        (true, "Cancelled") => "file-problem.001",
+        (false, "Cancelled") => "file-problem.002",
+        (true, "Io" | "NotFound") => "file-problem.003",
+        (false, "NotFound") => "file-problem.004",
+        (false, "Decode" | "Validation" | "InvalidInput" | "Unsupported") => "file-problem.005",
+        (true, "TooLarge") => "file-problem.011",
+        (false, "TooLarge") => "file-problem.006",
+        (_, "Busy" | "Stale") => "file-problem.007",
+        (false, "Io") => "file-problem.009",
+        (true, _) => "file-problem.008",
+        (false, _) => "file-problem.010",
+    };
+    i18n::registered(locale, id).to_string()
+}
+
+fn simple_recent_caption(path: &std::path::Path) -> String {
+    let raw = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    raw.strip_suffix(".drill.json")
+        .or_else(|| raw.strip_suffix(".json"))
+        .or_else(|| raw.strip_suffix(".drillproj"))
+        .unwrap_or(raw)
+        .to_string()
+}
+
+struct RosterEntry {
+    number: Option<String>,
+    name: String,
+}
+
+/// One non-empty line. A leading number is the label number. Anything else,
+/// including a name with a space, is the whole name. At most 80 people.
+fn simple_roster_entries(raw: &str) -> Vec<RosterEntry> {
+    let mut entries = Vec::new();
+    for line in raw.lines() {
+        let collapsed = line.split_whitespace().collect::<Vec<_>>().join(" ");
+        if collapsed.is_empty() {
+            continue;
+        }
+        let (first, rest) = split_performer_label(&collapsed);
+        let (number, name) = if first.parse::<u32>().is_ok() {
+            (
+                Some(first.chars().take(4).collect::<String>()),
+                rest.chars().take(24).collect::<String>(),
+            )
+        } else {
+            (None, collapsed.chars().take(24).collect::<String>())
+        };
+        if number.is_none() && name.is_empty() {
+            continue;
+        }
+        entries.push(RosterEntry { number, name });
+        if entries.len() == 80 {
+            break;
+        }
+    }
+    entries
+}
+
+/// A number-only line keeps the existing name. A name-only line keeps the
+/// existing number. A brand-new person with no number uses `fallback`.
+fn simple_roster_label(existing: &str, entry: &RosterEntry, fallback: u32) -> String {
+    let name = if entry.name.is_empty() {
+        simple_kept_name(existing)
+    } else {
+        entry.name.clone()
+    };
+    let number = if let Some(number) = &entry.number {
+        number.clone()
+    } else {
+        let (old, _) = split_performer_label(existing);
+        if old.parse::<u32>().is_ok() {
+            old
+        } else {
+            fallback.to_string()
+        }
+    };
+    join_performer_label(&number, &name)
+}
+
+/// Open spots for people added from a roster. An empty field gets a centered
+/// row. Extra people stand just in front of the current front rank.
+fn simple_open_spots(
+    grid: &drill_core::GridConfig,
+    existing: &[Point],
+    count: usize,
+) -> Vec<Point> {
+    if count == 0 {
+        return Vec::new();
+    }
+    let step = grid.horizontal_units / f32::from(grid.horizontal_steps.max(1));
+    let gap = (step * 2.0).max(0.5);
+    let fit = ((grid.width * 0.84) / gap).floor().max(1.0) as usize;
+    let cols = count.min(fit).max(1);
+    let rows = count.div_ceil(cols);
+    let span_x = gap * cols.saturating_sub(1) as f32;
+    let left = ((grid.width - span_x) * 0.5).max(0.0);
+    let front = existing
+        .iter()
+        .map(|point| point.y)
+        .fold(grid.height * 0.5, f32::min);
+    let mut top = if existing.is_empty() {
+        (grid.height - gap * rows.saturating_sub(1) as f32) * 0.5
+    } else {
+        front - gap * (rows as f32 + 0.5)
+    };
+    if top < 0.0 {
+        let back = existing.iter().map(|point| point.y).fold(0.0, f32::max);
+        top = back + gap * 1.5;
+    }
+    let max_y = grid.max_y();
+    top = top.clamp(0.0, max_y);
+    (0..count)
+        .map(|index| {
+            let col = index % cols;
+            let row = index / cols;
+            Point {
+                x: (left + gap * col as f32).clamp(0.0, grid.max_x()),
+                y: (top + gap * row as f32).clamp(0.0, max_y),
+            }
+        })
+        .collect()
+}
+
+/// Every person's places and walks, with a cut line between cards.
+fn performer_cards_text(
+    document: &drill_core::Document,
+    locale: drill_core::Locale,
+    heading: Option<&str>,
+) -> String {
+    let mut lines = Vec::new();
+    if let Some(heading) = heading.map(str::trim).filter(|text| !text.is_empty()) {
+        lines.push(heading.to_string());
+        lines.push(String::new());
+    }
+    lines.push(i18n::registered(locale, "simple-mode.319").to_string());
+    for (nth, index) in simple_roster_order(document).into_iter().enumerate() {
+        if nth > 0 {
+            lines.push(String::new());
+            lines.push("--------".to_string());
+        }
+        lines.push(String::new());
+        lines.push(simple_person_path_text(document, index, locale));
+    }
+    lines.join("\n")
 }
 
 /// One person's place at every picture, and the walk to the next picture.
@@ -9447,5 +10110,170 @@ mod tests {
         app.begin_simple_show();
         assert!(app.simple_mode.focus.is_none());
         assert!(app.simple_mode.away.is_empty());
+    }
+
+    #[test]
+    fn an_empty_field_explains_the_first_three_steps() {
+        let app = empty_simple_app();
+        assert_eq!(app.simple_guide(), SimpleGuide::Place);
+        assert_eq!(
+            simple_first_steps(drill_core::Locale::Ja),
+            "1. 場をタップ　2. 名前を書く　3. 下の保存"
+        );
+        let english = simple_first_steps(drill_core::Locale::En);
+        assert!(english.contains("Tap the field"));
+        assert_ne!(english, simple_first_steps(drill_core::Locale::Ja));
+    }
+
+    #[test]
+    fn a_pasted_roster_names_from_the_audience_left_and_undoes_once() {
+        let mut app = empty_simple_app();
+        app.simple_sync_history_notes();
+        app.simple_apply_roster("山田\n\n  \n佐藤");
+        assert_eq!(app.document.performers.len(), 2);
+        assert_eq!(app.document.performers[0].label, "1 山田");
+        assert_eq!(app.document.performers[1].label, "2 佐藤");
+        let left = app.document.sets[0].positions[0];
+        let right = app.document.sets[0].positions[1];
+        assert!(left.x < right.x, "{left:?} {right:?}");
+        assert!(app.history.can_undo());
+        app.simple_sync_history_notes();
+        let lines = app.simple_history_lines();
+        assert!(lines.iter().any(|line| line.contains("名簿")), "{lines:?}");
+        let json = app.document.to_json().expect("json");
+        let loaded = drill_core::Document::from_json(&json).expect("old files still open");
+        assert_eq!(loaded.performers[0].label, "1 山田");
+        assert!(app.history.undo(&mut app.document));
+        assert!(app.document.performers.is_empty());
+
+        app.place_performer_at(Point { x: 20.0, y: 16.0 }, true);
+        app.place_performer_at(Point { x: 8.0, y: 16.0 }, true);
+        app.replace_selection(std::iter::once(0).collect());
+        app.simple_rename_selected("佐藤");
+        app.replace_selection(std::iter::once(1).collect());
+        app.simple_rename_selected("山田");
+        app.simple_apply_roster("8\n3 鈴木");
+        assert_eq!(app.document.performers[1].label, "8 山田");
+        assert_eq!(app.document.performers[0].label, "3 鈴木");
+        let revision = app.history.revision();
+        app.count_position = 4.0;
+        app.simple_apply_roster("太郎");
+        assert_eq!(app.history.revision(), revision);
+        assert_eq!(app.document.performers[0].label, "3 鈴木");
+
+        app.count_position = 0.0;
+        app.simple_apply_roster("山田\n佐藤\n高橋");
+        assert_eq!(app.document.performers.len(), 3);
+        assert!(app.document.performers[2].label.contains("高橋"));
+        assert!(app.history.undo(&mut app.document));
+        assert_eq!(app.document.performers.len(), 2);
+        assert_eq!(app.document.performers[1].label, "8 山田");
+    }
+
+    #[test]
+    fn performer_cards_separate_each_person_for_handing_out() {
+        let mut app = moved_pair();
+        app.navigate_to_set(0);
+        app.nav_glide.settle();
+        app.simple_rename_scene("サビ");
+        let before = app.document.clone();
+        let sheet = performer_cards_text(&app.document, drill_core::Locale::Ja, Some("文化祭"));
+        assert!(sheet.contains("文化祭"), "{sheet}");
+        assert!(sheet.contains("一人ずつのカード"), "{sheet}");
+        assert!(sheet.contains("--------"), "{sheet}");
+        assert!(sheet.contains("サビ"), "{sheet}");
+        assert!(sheet.contains('1'), "{sheet}");
+        assert!(sheet.contains('2'), "{sheet}");
+        assert_eq!(app.document, before);
+        let english = performer_cards_text(&app.document, drill_core::Locale::En, None);
+        assert!(english.contains("A card for each person"));
+        assert!(english.contains("--------"));
+        assert!(!english.contains("一人"));
+    }
+
+    #[test]
+    fn file_failures_are_plain_sentences_in_both_languages() {
+        let save = plain_file_failure(drill_core::Locale::Ja, true, "Io");
+        assert!(save.contains("保存できませんでした"), "{save}");
+        assert!(!save.contains("Io"));
+        let broken = plain_file_failure(drill_core::Locale::Ja, false, "Decode");
+        assert!(broken.contains("開けません"), "{broken}");
+        assert!(!broken.contains("Decode"));
+        let missing = plain_file_failure(drill_core::Locale::Ja, false, "NotFound");
+        assert!(missing.contains("見つかりません"), "{missing}");
+        let cancelled = plain_file_failure(drill_core::Locale::En, false, "Cancelled");
+        assert!(cancelled.contains("cancelled"));
+        assert!(
+            !cancelled
+                .chars()
+                .any(|ch| { matches!(ch, '\u{3040}'..='\u{30ff}' | '\u{4e00}'..='\u{9fff}') })
+        );
+        assert_ne!(
+            plain_file_failure(drill_core::Locale::Ja, true, "TooLarge"),
+            plain_file_failure(drill_core::Locale::Ja, false, "TooLarge")
+        );
+
+        let mut app = empty_simple_app();
+        app.simple_mode.naming_pending = true;
+        app.simple_mode.name_draft.clear();
+        app.note_simple_file_failed(true, "Cancelled".into());
+        assert!(!app.simple_mode.naming);
+        assert!(app.simple_mode.file_problem.is_some());
+        app.simple_mode.naming_pending = true;
+        app.note_simple_file_failed(true, "Io".into());
+        assert!(app.simple_mode.naming);
+        assert!(!app.simple_mode.name_draft.trim().is_empty());
+        app.note_simple_save_finished(std::path::Path::new("文化祭.drill.json"));
+        assert!(app.simple_mode.file_problem.is_none());
+
+        app.note_simple_file_failed(false, "Decode".into());
+        assert!(app.simple_mode.file_problem.is_some());
+        app.simple_reset_session_view();
+        assert!(app.simple_mode.file_problem.is_none());
+        app.set_simple_mode(false);
+        app.note_simple_file_failed(false, "Decode".into());
+        assert!(app.simple_mode.file_problem.is_none());
+    }
+
+    #[test]
+    fn an_empty_field_offers_the_last_saved_show() {
+        let dir = std::env::temp_dir().join(format!(
+            "drillforge-recent-{}-{}",
+            std::process::id(),
+            "offer"
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("春のドリル.drill.json");
+        std::fs::write(&path, b"{}\n").expect("file");
+        let mut app = empty_simple_app();
+        app.recent_projects
+            .preview_paths_for_screenshot(vec![path.clone()]);
+        assert_eq!(app.simple_recent_offer().as_ref(), Some(&path));
+        assert_eq!(simple_recent_caption(&path), "春のドリル");
+        app.simple_mode.recent_offer_hidden = true;
+        assert!(app.simple_recent_offer().is_none());
+        app.simple_mode.recent_offer_hidden = false;
+        app.project_state
+            .recoveries
+            .push(drill_project::recovery::RecoveryCandidate {
+                root: std::path::PathBuf::from("recovery/session"),
+                autosave: std::path::PathBuf::from("recovery/session/autosave.drill.json"),
+                meta: drill_project::recovery::SessionMeta {
+                    session_id: "session".into(),
+                    app_version: "test".into(),
+                    started_unix_ms: 0,
+                    heartbeat_unix_ms: 0,
+                    document_title: "文化祭".into(),
+                    origin_name: None,
+                },
+                autosave_bytes: 32,
+                stale_for: std::time::Duration::from_secs(40),
+            });
+        assert!(app.simple_recent_offer().is_none());
+        app.project_state.recoveries.clear();
+        app.place_performer_at(Point { x: 8.0, y: 6.0 }, true);
+        assert!(app.simple_recent_offer().is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

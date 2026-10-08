@@ -3474,6 +3474,82 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "full-mode.088") => "Could not change how they walk",
         (Locale::Ja, "full-mode.089") => "動きません",
         (Locale::En, "full-mode.089") => "Stays still",
+        (Locale::Ja, "simple-mode.303") => "1. 場をタップ　2. 名前を書く　3. 下の保存",
+        (Locale::En, "simple-mode.303") => "1. Tap the field  2. Type a name  3. Save below",
+        (Locale::Ja, "simple-mode.304") => "名簿",
+        (Locale::En, "simple-mode.304") => "Roster",
+        (Locale::Ja, "simple-mode.305") => {
+            "1行に1人。客席から見て左から付きます。番号だけなら、名前は残します。多いと、人を足します"
+        }
+        (Locale::En, "simple-mode.305") => {
+            "One person per line, from the audience's left. A number alone keeps the name. Extra lines add people"
+        }
+        (Locale::Ja, "simple-mode.306") => "名簿を貼る",
+        (Locale::En, "simple-mode.306") => "Paste a roster",
+        (Locale::Ja, "simple-mode.307") => "山田　または　1 山田　または　1",
+        (Locale::En, "simple-mode.307") => "Alex, or 1 Alex, or 1",
+        (Locale::Ja, "simple-mode.308") => "付ける",
+        (Locale::En, "simple-mode.308") => "Apply",
+        (Locale::Ja, "simple-mode.309") => "やめる",
+        (Locale::En, "simple-mode.309") => "Cancel",
+        (Locale::Ja, "simple-mode.310") => "みんなのカード",
+        (Locale::En, "simple-mode.310") => "Cards",
+        (Locale::Ja, "simple-mode.311") => "一人ずつ、場所と歩き方です。切って配れます",
+        (Locale::En, "simple-mode.311") => {
+            "Each person's places and walk, to cut apart and hand out"
+        }
+        (Locale::Ja, "simple-mode.312") => "みんなのカード",
+        (Locale::En, "simple-mode.312") => "Cards for everyone",
+        (Locale::Ja, "simple-mode.313") => "前に保存した作品",
+        (Locale::En, "simple-mode.313") => "A show you saved before",
+        (Locale::Ja, "simple-mode.314") => "開く",
+        (Locale::En, "simple-mode.314") => "Open",
+        (Locale::Ja, "simple-mode.315") => "今はやめる",
+        (Locale::En, "simple-mode.315") => "Not now",
+        (Locale::Ja, "simple-mode.316") => "その作品を開きます",
+        (Locale::En, "simple-mode.316") => "Open that show",
+        (Locale::Ja, "simple-mode.317") => "わかった",
+        (Locale::En, "simple-mode.317") => "OK",
+        (Locale::Ja, "simple-mode.318") => "名簿",
+        (Locale::En, "simple-mode.318") => "Roster",
+        (Locale::Ja, "simple-mode.319") => "一人ずつのカード",
+        (Locale::En, "simple-mode.319") => "A card for each person",
+        (Locale::Ja, "simple-mode.320") => "ファイルに保存",
+        (Locale::En, "simple-mode.320") => "Save a file",
+        (Locale::Ja, "simple-mode.321") => "保存しました",
+        (Locale::En, "simple-mode.321") => "Saved",
+        (Locale::Ja, "simple-mode.322") => "保存できませんでした",
+        (Locale::En, "simple-mode.322") => "Could not save",
+        (Locale::Ja, "simple-mode.323") => "名前を付けられませんでした",
+        (Locale::En, "simple-mode.323") => "Could not apply the names",
+        (Locale::Ja, "file-problem.001") => "保存をやめました",
+        (Locale::En, "file-problem.001") => "Save was cancelled",
+        (Locale::Ja, "file-problem.002") => "開くのをやめました",
+        (Locale::En, "file-problem.002") => "Open was cancelled",
+        (Locale::Ja, "file-problem.003") => {
+            "保存できませんでした。フォルダを確認して、もう一度試してください"
+        }
+        (Locale::En, "file-problem.003") => "Could not save. Check the folder, then try again",
+        (Locale::Ja, "file-problem.004") => "ファイルが見つかりません。場所を確認してください",
+        (Locale::En, "file-problem.004") => "That file is missing. Check where it is",
+        (Locale::Ja, "file-problem.005") => {
+            "このファイルは開けません。ドリルの保存ファイルか、確認してください"
+        }
+        (Locale::En, "file-problem.005") => {
+            "This file cannot be opened. Check that it is a drill file"
+        }
+        (Locale::Ja, "file-problem.006") => "ファイルが大きすぎて、開けません",
+        (Locale::En, "file-problem.006") => "This file is too large to open",
+        (Locale::Ja, "file-problem.007") => "ほかの作業が終わるまで待って、もう一度試してください",
+        (Locale::En, "file-problem.007") => "Wait for the other task to finish, then try again",
+        (Locale::Ja, "file-problem.008") => "保存できませんでした。もう一度試してください",
+        (Locale::En, "file-problem.008") => "Could not save. Try again",
+        (Locale::Ja, "file-problem.009") => "ファイルを読めませんでした。場所を確認してください",
+        (Locale::En, "file-problem.009") => "Could not read the file. Check where it is",
+        (Locale::Ja, "file-problem.010") => "開けませんでした。もう一度試してください",
+        (Locale::En, "file-problem.010") => "Could not open it. Try again",
+        (Locale::Ja, "file-problem.011") => "保存するには、大きすぎます",
+        (Locale::En, "file-problem.011") => "This is too large to save",
         _ => "[missing message]",
     }
 }

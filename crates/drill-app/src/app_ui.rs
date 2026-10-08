@@ -101,7 +101,7 @@ impl eframe::App for DrillApp {
                 project_state::ProjectEvent::Loaded { path, project } => {
                     self.apply_loaded_project(path, project);
                 }
-                project_state::ProjectEvent::Failed(error) => {
+                project_state::ProjectEvent::Failed(failure) => {
                     // A failed save must return the close sheet to its choice
                     // state. Leaving it as `Saving` would trap the user behind
                     // a spinner even though the worker has already finished.
@@ -114,11 +114,12 @@ impl eframe::App for DrillApp {
                             state => state,
                         };
                     }
-                    self.status = format!(
-                        "{}: {error}",
-                        super::i18n::registered(self.locale, "app-ui.070")
+                    self.status = super::simple_mode::plain_file_failure(
+                        self.locale,
+                        failure.saving,
+                        &failure.code,
                     );
-                    self.note_simple_save_failed();
+                    self.note_simple_file_failed(failure.saving, failure.code);
                 }
             }
         }
