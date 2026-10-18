@@ -6,6 +6,12 @@
 //! (directly or via existing helpers like `commit_layout`/`commit_shape`), the
 //! same as the full UI. This module never touches `self.document` fields
 //! directly. See `ui_qa.rs` for the guard test that scans this file too.
+//!
+//! Previous-scene ghosts are a view preference, not drill content. The eye
+//! toggle sits in the set-dot overlay (same row, no extra layout line) and
+//! remembers on/off per show file (see `previous_ghost_store_path`). The
+//! drill JSON, undo stack, and schema do not change. A show with no saved
+//! choice starts off.
 use super::*;
 use drill_jobs::{Job, JobErrorCode, JobFailure, JobKind, JobMsg};
 
@@ -279,6 +285,23 @@ pub(crate) struct SimpleModeState {
     /// Draft for the current scene's name. A stock "セット 1" shows as empty.
     scene_name: String,
     scene_name_for: Option<usize>,
+    /// Draw the previous scene's formation as faint gray dots. Remembered
+    /// per show file, outside the drill JSON. Missing entry means off.
+    show_previous: bool,
+    /// Show-file key `show_previous` was loaded for. `None` until the first
+    /// lookup, so opening another show reads that show's choice.
+    previous_key: Option<String>,
+    /// `previous_key` names the unnamed draft rather than `current_path`.
+    previous_key_is_draft: bool,
+    /// `draft_path_override` captured when `previous_key` was last computed.
+    previous_key_draft: Option<std::path::PathBuf>,
+    previous_store_loaded: bool,
+    previous_shows: std::collections::BTreeMap<String, bool>,
+    /// Tests redirect the preference file away from real app data.
+    previous_store_override: Option<std::path::PathBuf>,
+    /// One mesh for every previous-scene ghost. Reused across frames so a
+    /// hundred performers do not allocate a new dot list each paint.
+    ghost_mesh: Option<std::sync::Arc<egui::Mesh>>,
     /// First-run pictogram hints, one step at a time. Session only.
     hint_closed: bool,
     hint_place_done: bool,
@@ -349,6 +372,15 @@ const SIMPLE_BEATS_PER_MEASURE: u16 = 4;
 const SIMPLE_TEMPO_STEP: i32 = 4;
 const SIMPLE_TEMPO_MIN: i32 = 40;
 const SIMPLE_TEMPO_MAX: i32 = 208;
+/// Same reach as the simple-field pointer. Ghost dots are not in this test.
+const SIMPLE_DOT_HIT_RADIUS: f32 = 18.0;
+const PREVIOUS_GHOST_RADIUS: f32 = 4.0;
+const PREVIOUS_GHOST_SEGMENTS: usize = 8;
+const PREVIOUS_TOGGLE_HEIGHT: f32 = 48.0;
+
+fn previous_ghost_color() -> Color32 {
+    Color32::from_rgba_unmultiplied(120, 126, 136, 140)
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum DockAction {
@@ -773,10 +805,14 @@ impl DrillApp {
     }
 
     /// Drops the session-only watch state when a different show is loaded.
+    /// The previous-scene eye is per show, so the cached key is dropped and
+    /// the next simple-mode frame reads the newly opened file's choice.
     pub(super) fn simple_reset_session_view(&mut self) {
         self.simple_mode.focus = None;
         self.simple_mode.away.clear();
         self.simple_close_readouts();
+        self.simple_mode.previous_key = None;
+        self.simple_mode.previous_key_is_draft = false;
     }
 
     fn simple_close_readouts(&mut self) {
@@ -949,7 +985,7 @@ impl DrillApp {
     /// `empty`, `placed`, `play`, `glossary`, `selected`, `recent`, `full`,
     /// `move`, `save`, `done`, `line`, `step`, `circle`, `nudge`, `walk`,
     /// `shows`, `hints`, `memo`, `numbers`, `shape`, `block`, `count`,
-    /// `places`, `pair`, `order`, `sheet`, `recover`, `guide-place`,
+    /// `places`, `pair`, `order`, `sheet`, `recover`, `ghosts`, `guide-place`,
     /// `guide-move`, `guide-play`, `guide-playing`, or `guide-collapsed`.
     pub(crate) fn apply_qa_simple_fixture(&mut self) {
         let Ok(stage) = std::env::var("DRILLFORGE_QA_SIMPLE") else {
@@ -1214,6 +1250,46 @@ impl DrillApp {
         if stage == "sheet" {
             self.simple_mode.show_sheet_open = true;
         }
+        if stage == "ghosts" {
+            self.onboarding.simple_pictogram_done = true;
+            self.simple_mode.hint_closed = true;
+            let performer_ids: Vec<_> = self
+                .document
+                .performers
+                .iter()
+                .map(|person| person.id)
+                .collect();
+            let _ = self.execute_edit(
+                Edit::MovePerformers {
+                    set_id: self.document.sets[0].id,
+                    performer_ids: performer_ids.clone(),
+                    positions: vec![Point { x: 36.0, y: 30.0 }, Point { x: 48.0, y: 30.0 }],
+                },
+                "qa",
+            );
+            self.duplicate_current_set();
+            let _ = self.execute_edit(
+                Edit::MovePerformers {
+                    set_id: self.document.sets[self.current_set].id,
+                    performer_ids,
+                    positions: vec![Point { x: 52.0, y: 38.0 }, Point { x: 64.0, y: 38.0 }],
+                },
+                "qa",
+            );
+            self.nav_glide.settle();
+            self.playing = false;
+            self.count_position = 0.0;
+            self.document
+                .positions_at(self.current_set, 0.0, &mut self.frame_positions);
+            // Keep the eye on without writing the real preference file.
+            // `simple_ui` reloads a missing entry as off unless this cache
+            // already matches the open draft.
+            self.simple_mode.show_previous = true;
+            self.simple_mode.previous_key_is_draft = true;
+            self.simple_mode.previous_key =
+                Some(self.simple_draft_path().to_string_lossy().into_owned());
+            self.simple_mode.previous_key_draft = self.simple_mode.draft_path_override.clone();
+        }
         if stage == "order" || stage == "recover" {
             self.project_state
                 .recoveries
@@ -1360,6 +1436,7 @@ impl DrillApp {
     /// every state change still flows through `execute_edit`/`commit_layout`/
     /// `commit_shape`, so undo, autosave and validation all keep working.
     pub(crate) fn simple_ui(&mut self, ui: &mut egui::Ui) {
+        self.sync_previous_ghost_pref();
         // Keep edits on the set's arrival picture. A set-to-set glide is the
         // exception: snapping here would erase the motion the shared loop
         // just computed. Stepping one count is the other exception, so a
@@ -1807,6 +1884,83 @@ impl DrillApp {
                 }
             });
         });
+    }
+
+    /// Eye pictogram beside the set dots. Same overlay row, so the field
+    /// stays full-window. The hit target is at least 48px on both sides.
+    fn simple_previous_toggle(&mut self, ui: &mut egui::Ui) {
+        let label = i18n::registered(self.locale, "simple-mode.330");
+        let width = simple_previous_toggle_width(label);
+        let enabled = simple_previous_toggle_enabled(self.current_set);
+        let sense = if enabled {
+            Sense::click()
+        } else {
+            Sense::hover()
+        };
+        let (rect, response) =
+            ui.allocate_exact_size(egui::Vec2::new(width, PREVIOUS_TOGGLE_HEIGHT), sense);
+        let mut on = self.simple_mode.show_previous;
+        if enabled && response.clicked() {
+            on = !on;
+            self.set_show_previous(on);
+        }
+        let hovered = enabled && response.hovered();
+        let fill = if on && enabled {
+            SIMPLE_BLUE
+        } else if on {
+            SIMPLE_BLUE.gamma_multiply(0.35)
+        } else if hovered {
+            super::app_theme::ACCENT_SOFT
+        } else {
+            Color32::WHITE
+        };
+        let ink = if on && enabled {
+            Color32::WHITE
+        } else if enabled {
+            SIMPLE_BLUE
+        } else {
+            SIMPLE_BLUE.gamma_multiply(0.35)
+        };
+        let label_ink = if on && enabled {
+            Color32::WHITE
+        } else if enabled {
+            super::app_theme::SECONDARY_TEXT
+        } else {
+            super::app_theme::SECONDARY_TEXT.gamma_multiply(0.45)
+        };
+        ui.painter().rect_filled(rect, 16.0, fill);
+        if !on || !enabled {
+            ui.painter().rect_stroke(
+                rect,
+                16.0,
+                Stroke::new(1.0, super::app_theme::HAIRLINE),
+                StrokeKind::Inside,
+            );
+        }
+        paint_eye_icon(
+            ui.painter(),
+            Pos2::new(rect.left() + 24.0, rect.center().y),
+            on,
+            ink,
+        );
+        ui.painter().text(
+            Pos2::new(rect.left() + 40.0, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            label,
+            egui::FontId::proportional(12.0),
+            label_ink,
+        );
+        let _ = response.on_hover_text(self.simple_previous_hover_text());
+    }
+
+    fn simple_previous_hover_text(&self) -> &'static str {
+        if !simple_previous_toggle_enabled(self.current_set) {
+            i18n::registered(self.locale, "simple-mode.332")
+        } else if self.playing {
+            i18n::registered(self.locale, "simple-mode.333")
+        } else {
+            i18n::registered(self.locale, "simple-mode.331")
+        }
     }
 
     #[allow(dead_code)]
@@ -4887,6 +5041,7 @@ impl DrillApp {
                             for index in 0..set_count {
                                 self.simple_scene_chip(ui, index);
                             }
+                            self.simple_previous_toggle(ui);
                         });
                     });
             });
@@ -5707,7 +5862,11 @@ impl DrillApp {
         if keep_unnamed && !self.simple_archive_unnamed_show() {
             return false;
         }
+        let previous_was_on = self.simple_mode.show_previous;
         self.begin_simple_show();
+        if previous_was_on {
+            self.set_show_previous(false);
+        }
         self.simple_mode.overlap_note = false;
         self.simple_mode.finished_playback = false;
         self.simple_mode.hold_count = false;
@@ -5748,8 +5907,149 @@ impl DrillApp {
         if drill_project::atomic_write(&path, json.as_bytes(), None).is_err() {
             return false;
         }
+        if self.simple_mode.show_previous {
+            self.remember_previous_ghost_at(&path);
+        }
         self.recent_projects.remember(path);
         true
+    }
+
+    /// Preference file for the previous-scene eye. One map of show path to
+    /// "on". The drill file stays untouched, so undo and schema do not see it.
+    fn previous_ghost_store_path(&self) -> std::path::PathBuf {
+        if let Some(path) = &self.simple_mode.previous_store_override {
+            return path.clone();
+        }
+        if let Some(draft) = &self.simple_mode.draft_path_override {
+            let mut path = draft.clone();
+            path.set_extension("previous.json");
+            return path;
+        }
+        super::project_state::app_data_dir().join("simple-previous-set.json")
+    }
+
+    fn previous_ghost_key(&self) -> String {
+        self.current_path
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_else(|| self.simple_draft_path().to_string_lossy().into_owned())
+    }
+
+    fn previous_ghost_cache_fresh(&self) -> bool {
+        let Some(cached) = self.simple_mode.previous_key.as_deref() else {
+            return false;
+        };
+        if let Some(path) = &self.current_path {
+            return !self.simple_mode.previous_key_is_draft && path == std::path::Path::new(cached);
+        }
+        self.simple_mode.previous_key_is_draft
+            && self.simple_mode.previous_key_draft == self.simple_mode.draft_path_override
+    }
+
+    fn sync_previous_ghost_pref(&mut self) {
+        if self.previous_ghost_cache_fresh() {
+            return;
+        }
+        self.ensure_previous_ghost_store();
+        let key = self.previous_ghost_key();
+        self.simple_mode.show_previous = self
+            .simple_mode
+            .previous_shows
+            .get(&key)
+            .copied()
+            .unwrap_or(false);
+        self.remember_previous_ghost_cache(key);
+    }
+
+    fn remember_previous_ghost_cache(&mut self, key: String) {
+        self.simple_mode.previous_key_is_draft = self.current_path.is_none();
+        self.simple_mode.previous_key_draft = self.simple_mode.draft_path_override.clone();
+        self.simple_mode.previous_key = Some(key);
+    }
+
+    fn ensure_previous_ghost_store(&mut self) {
+        if self.simple_mode.previous_store_loaded {
+            return;
+        }
+        self.simple_mode.previous_store_loaded = true;
+        let Ok(text) = std::fs::read_to_string(self.previous_ghost_store_path()) else {
+            return;
+        };
+        let Ok(store) = serde_json::from_str::<PreviousGhostStore>(&text) else {
+            return;
+        };
+        self.simple_mode.previous_shows = store.shows.into_iter().filter(|(_, on)| *on).collect();
+    }
+
+    fn write_previous_ghost_store(&self) {
+        let path = self.previous_ghost_store_path();
+        if let Some(parent) = path.parent()
+            && std::fs::create_dir_all(parent).is_err()
+        {
+            return;
+        }
+        let store = PreviousGhostStore {
+            shows: self.simple_mode.previous_shows.clone(),
+        };
+        let Ok(json) = serde_json::to_string(&store) else {
+            return;
+        };
+        let _ = std::fs::write(path, json);
+    }
+
+    fn set_show_previous(&mut self, on: bool) {
+        self.ensure_previous_ghost_store();
+        let key = self.previous_ghost_key();
+        self.simple_mode.show_previous = on;
+        if on {
+            self.simple_mode.previous_shows.insert(key.clone(), true);
+        } else {
+            self.simple_mode.previous_shows.remove(&key);
+        }
+        self.remember_previous_ghost_cache(key);
+        self.write_previous_ghost_store();
+    }
+
+    fn remember_previous_ghost_at(&mut self, path: &std::path::Path) {
+        self.ensure_previous_ghost_store();
+        self.simple_mode
+            .previous_shows
+            .insert(path.to_string_lossy().into_owned(), true);
+        self.write_previous_ghost_store();
+    }
+
+    /// Naming a show moves the eye choice onto that file. The draft key is
+    /// dropped so the next empty field does not inherit it. Saving with the
+    /// eye off clears a choice that file may have kept from an older session.
+    fn rekey_previous_ghost(&mut self, path: &std::path::Path) {
+        self.ensure_previous_ghost_store();
+        let new_key = path.to_string_lossy().into_owned();
+        if self.simple_mode.previous_key.as_deref() == Some(new_key.as_str())
+            && !self.simple_mode.previous_key_is_draft
+        {
+            return;
+        }
+        let mut changed = false;
+        if let Some(old) = self.simple_mode.previous_key.clone()
+            && old != new_key
+            && self.simple_mode.previous_shows.remove(&old).is_some()
+        {
+            changed = true;
+        }
+        if self.simple_mode.show_previous {
+            self.simple_mode
+                .previous_shows
+                .insert(new_key.clone(), true);
+            changed = true;
+        } else if self.simple_mode.previous_shows.remove(&new_key).is_some() {
+            changed = true;
+        }
+        if changed {
+            self.write_previous_ghost_store();
+        }
+        self.simple_mode.previous_key_is_draft = false;
+        self.simple_mode.previous_key_draft = self.simple_mode.draft_path_override.clone();
+        self.simple_mode.previous_key = Some(new_key);
     }
 
     fn simple_open_shows(&mut self) {
@@ -5855,6 +6155,7 @@ impl DrillApp {
         self.simple_mode.naming = false;
         self.simple_flash_check();
         self.recent_projects.remember(path.to_path_buf());
+        self.rekey_previous_ghost(path);
     }
 
     pub(crate) fn note_simple_save_failed(&mut self) {
@@ -6150,7 +6451,6 @@ impl DrillApp {
             theme: &drill_render::Theme::PRINT_LIGHT,
         };
         drill_render::build_field_2d(&scene, &mut self.render_scratch, &mut self.display_list);
-        egui_backend::paint(&painter, rect.min, &self.display_list);
         let field_map = drill_render::FieldMap::with_view(
             self.document.grid.width,
             self.document.grid.height,
@@ -6166,6 +6466,9 @@ impl DrillApp {
             let v = field_map.map(point);
             Pos2::new(rect.left() + v.x, rect.top() + v.y)
         };
+        egui_backend::paint_below_dots(&painter, rect.min, &self.display_list);
+        self.paint_previous_ghosts(&painter, &to_screen);
+        egui_backend::paint_dots_and_above(&painter, rect.min, &self.display_list);
         self.paint_simple_paths(&painter, &to_screen);
         self.paint_simple_audience(&painter, rect, &to_screen);
         self.paint_simple_sides(&painter, rect, &to_screen);
@@ -6208,11 +6511,14 @@ impl DrillApp {
             }
             let hover_on_dot = !block_pointer
                 && response.hover_pos().is_some_and(|pos| {
-                    self.frame_positions
-                        .iter()
-                        .enumerate()
-                        .filter(|(index, _)| self.is_selectable_index(*index))
-                        .any(|(_, point)| to_screen(*point).distance(pos) < 18.0)
+                    simple_hit_index(
+                        pos,
+                        &self.frame_positions,
+                        &to_screen,
+                        SIMPLE_DOT_HIT_RADIUS,
+                        |index| self.is_selectable_index(index),
+                    )
+                    .is_some()
                 });
             if response.hovered() && !block_pointer {
                 let editable = self.is_editable_set_start();
@@ -6309,18 +6615,13 @@ impl DrillApp {
         let Some(pointer) = response.interact_pointer_pos().or(response.hover_pos()) else {
             return;
         };
-        let nearest = self
-            .frame_positions
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| self.is_selectable_index(*index))
-            .min_by(|(_, a), (_, b)| {
-                to_screen(**a)
-                    .distance(pointer)
-                    .total_cmp(&to_screen(**b).distance(pointer))
-            })
-            .filter(|(_, p)| to_screen(**p).distance(pointer) < 18.0)
-            .map(|(index, _)| index);
+        let nearest = simple_hit_index(
+            pointer,
+            &self.frame_positions,
+            &to_screen,
+            SIMPLE_DOT_HIT_RADIUS,
+            |index| self.is_selectable_index(index),
+        );
         let shift_held = ui.input(|input| input.modifiers.shift);
         let snap_now = self.document.grid.snap_enabled && !shift_held;
         if let Some(pointer) = response.interact_pointer_pos() {
@@ -6331,7 +6632,19 @@ impl DrillApp {
                 self.simple_click(from_screen(pointer), nearest, snap_now, additive);
             }
             if response.drag_started() {
-                self.simple_start_drag(nearest, pointer);
+                // Circle hits and box hits share the live positions only.
+                // A previous-scene ghost inside the rectangle is not a dot
+                // in `frame_positions`, so it cannot start a drag.
+                let drag_target = nearest.filter(|&index| {
+                    let dot = to_screen(self.frame_positions[index]);
+                    let rect =
+                        Rect::from_center_size(dot, Vec2::splat(SIMPLE_DOT_HIT_RADIUS * 2.0));
+                    simple_box_hits(rect, &self.frame_positions, &to_screen, |candidate| {
+                        self.is_selectable_index(candidate)
+                    })
+                    .contains(&index)
+                });
+                self.simple_start_drag(drag_target, pointer);
             }
             if response.dragged() && self.is_editable_set_start() && self.drag_before.is_some() {
                 self.update_field_drag(pointer, field_map.scale, snap_now);
@@ -6344,6 +6657,49 @@ impl DrillApp {
                 self.simple_mark_hint(SimpleGuide::Move);
             }
         }
+    }
+
+    #[cfg(test)]
+    fn simple_previous_positions(&self) -> Option<&[Point]> {
+        if !simple_previous_ghosts_visible(
+            self.simple_mode.show_previous,
+            self.playing,
+            self.current_set,
+        ) {
+            return None;
+        }
+        self.document
+            .sets
+            .get(self.current_set - 1)
+            .map(|set| set.positions.as_slice())
+    }
+
+    fn paint_previous_ghosts(
+        &mut self,
+        painter: &egui::Painter,
+        to_screen: &impl Fn(Point) -> Pos2,
+    ) {
+        if !simple_previous_ghosts_visible(
+            self.simple_mode.show_previous,
+            self.playing,
+            self.current_set,
+        ) {
+            return;
+        }
+        let Some(points) = self
+            .document
+            .sets
+            .get(self.current_set - 1)
+            .map(|set| set.positions.as_slice())
+        else {
+            return;
+        };
+        let Some(mesh) =
+            prepare_previous_ghost_mesh(&mut self.simple_mode.ghost_mesh, points, to_screen)
+        else {
+            return;
+        };
+        painter.add(mesh);
     }
 
     fn paint_simple_paths(&self, painter: &egui::Painter, to_screen: &impl Fn(Point) -> Pos2) {
@@ -7833,6 +8189,166 @@ fn simple_show_file_stem(raw: &str) -> String {
         "show".to_string()
     } else {
         trimmed.chars().take(40).collect()
+    }
+}
+
+/// Previous-scene ghosts are remembered per show path. Only `true` is stored.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+struct PreviousGhostStore {
+    #[serde(default)]
+    shows: std::collections::BTreeMap<String, bool>,
+}
+
+fn simple_previous_toggle_enabled(set_index: usize) -> bool {
+    set_index > 0
+}
+
+fn simple_previous_ghosts_visible(enabled: bool, playing: bool, set_index: usize) -> bool {
+    enabled && !playing && simple_previous_toggle_enabled(set_index)
+}
+
+fn simple_previous_toggle_width(label: &str) -> f32 {
+    (36.0 + label.chars().count() as f32 * 12.0 + 16.0).max(PREVIOUS_TOGGLE_HEIGHT)
+}
+
+/// Closest live dot inside `radius`. Ghost positions are not in `live`.
+fn simple_hit_index(
+    pointer: Pos2,
+    live: &[Point],
+    to_screen: &impl Fn(Point) -> Pos2,
+    radius: f32,
+    selectable: impl Fn(usize) -> bool,
+) -> Option<usize> {
+    let mut best: Option<(usize, f32)> = None;
+    for (index, point) in live.iter().enumerate() {
+        if !selectable(index) {
+            continue;
+        }
+        let distance = to_screen(*point).distance(pointer);
+        let closer = match best {
+            Some((_, best_distance)) => distance < best_distance,
+            None => true,
+        };
+        if distance < radius && closer {
+            best = Some((index, distance));
+        }
+    }
+    best.map(|(index, _)| index)
+}
+
+/// Indices of live dots inside a rectangle. A ghost is selectable only if a
+/// caller puts it in `live`, which the field painter never does.
+fn simple_box_hits(
+    rect: Rect,
+    live: &[Point],
+    to_screen: &impl Fn(Point) -> Pos2,
+    selectable: impl Fn(usize) -> bool,
+) -> Vec<usize> {
+    let mut hits = Vec::new();
+    for (index, point) in live.iter().enumerate() {
+        if selectable(index) && rect.contains(to_screen(*point)) {
+            hits.push(index);
+        }
+    }
+    hits
+}
+
+fn paint_eye_icon(painter: &egui::Painter, center: Pos2, open: bool, color: Color32) {
+    let stroke = Stroke::new(2.0, color);
+    let p = |x: f32, y: f32| center + egui::Vec2::new(x, y);
+    let upper = [
+        p(-10.0, 0.0),
+        p(-6.0, -4.5),
+        p(0.0, -6.0),
+        p(6.0, -4.5),
+        p(10.0, 0.0),
+    ];
+    let lower = [
+        p(-10.0, 0.0),
+        p(-6.0, 4.5),
+        p(0.0, 6.0),
+        p(6.0, 4.5),
+        p(10.0, 0.0),
+    ];
+    for pair in upper.windows(2) {
+        painter.line_segment([pair[0], pair[1]], stroke);
+    }
+    for pair in lower.windows(2) {
+        painter.line_segment([pair[0], pair[1]], stroke);
+    }
+    if open {
+        painter.circle_filled(center, 2.4, color);
+    } else {
+        painter.line_segment([p(-8.0, 6.0), p(8.0, -6.0)], stroke);
+    }
+}
+
+/// Fills one mesh for every previous-scene dot. `clear` keeps capacity, so a
+/// second paint of the same cast does not allocate vertex or index storage.
+fn fill_previous_ghost_mesh(
+    mesh: &mut egui::Mesh,
+    points: &[Point],
+    to_screen: &impl Fn(Point) -> Pos2,
+) {
+    mesh.clear();
+    let segments = PREVIOUS_GHOST_SEGMENTS;
+    mesh.vertices
+        .reserve(points.len().saturating_mul(segments + 1));
+    mesh.indices
+        .reserve(points.len().saturating_mul(segments * 3));
+    let uv = egui::epaint::WHITE_UV;
+    for &point in points {
+        if !point.x.is_finite() || !point.y.is_finite() {
+            continue;
+        }
+        let center = to_screen(point);
+        if !center.x.is_finite() || !center.y.is_finite() {
+            continue;
+        }
+        let base = u32::try_from(mesh.vertices.len()).unwrap_or(u32::MAX);
+        mesh.vertices.push(egui::epaint::Vertex {
+            pos: center,
+            uv,
+            color: previous_ghost_color(),
+        });
+        for step in 0..segments {
+            let angle = (step as f32) * std::f32::consts::TAU / segments as f32;
+            let (sin, cos) = angle.sin_cos();
+            mesh.vertices.push(egui::epaint::Vertex {
+                pos: center
+                    + egui::Vec2::new(cos * PREVIOUS_GHOST_RADIUS, sin * PREVIOUS_GHOST_RADIUS),
+                uv,
+                color: previous_ghost_color(),
+            });
+        }
+        for step in 0..segments {
+            let next = (step + 1) % segments;
+            mesh.indices
+                .extend_from_slice(&[base, base + 1 + step as u32, base + 1 + next as u32]);
+        }
+    }
+}
+
+fn prepare_previous_ghost_mesh(
+    slot: &mut Option<std::sync::Arc<egui::Mesh>>,
+    points: &[Point],
+    to_screen: &impl Fn(Point) -> Pos2,
+) -> Option<std::sync::Arc<egui::Mesh>> {
+    let reusable = slot
+        .as_ref()
+        .is_some_and(|arc| std::sync::Arc::strong_count(arc) == 1);
+    if !reusable {
+        *slot = Some(std::sync::Arc::new(egui::Mesh::default()));
+    }
+    let mesh = std::sync::Arc::get_mut(slot.as_mut().expect("ghost mesh slot"))
+        .expect("ghost mesh is unique before it is submitted");
+    fill_previous_ghost_mesh(mesh, points, to_screen);
+    if mesh.vertices.is_empty() {
+        None
+    } else {
+        Some(std::sync::Arc::clone(
+            slot.as_ref().expect("ghost mesh slot"),
+        ))
     }
 }
 
@@ -11063,5 +11579,200 @@ mod tests {
         let block = block.expect("union");
         assert_eq!(block.min, Pos2::new(0.0, 0.0));
         assert_eq!(block.max, Pos2::new(20.0, 12.0));
+    }
+
+    fn moved_second_scene() -> (DrillApp, Point, Point) {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 4.0, y: 8.0 }, true);
+        app.duplicate_current_set();
+        let set_id = app.document.sets[app.current_set].id;
+        let performer_id = app.document.performers[0].id;
+        let mut positions = app.document.sets[app.current_set].positions.clone();
+        positions[0].x = 26.0;
+        assert!(app.execute_edit(
+            Edit::MovePerformers {
+                set_id,
+                performer_ids: vec![performer_id],
+                positions,
+            },
+            "move",
+        ));
+        let ghost = app.document.sets[0].positions[0];
+        let live = app.document.sets[1].positions[0];
+        (app, ghost, live)
+    }
+
+    #[test]
+    fn previous_ghosts_are_not_click_drag_or_box_targets() {
+        let (mut app, ghost, live) = moved_second_scene();
+        let gap = (ghost.x - live.x).hypot(ghost.y - live.y);
+        assert!(gap > SIMPLE_DOT_HIT_RADIUS);
+        let map = |point: Point| Pos2::new(point.x, point.y);
+        let ghost_screen = map(ghost);
+        let live_only = [live];
+        let ghost_only = [ghost];
+        assert_eq!(
+            simple_hit_index(
+                ghost_screen,
+                &live_only,
+                &map,
+                SIMPLE_DOT_HIT_RADIUS,
+                |_| true
+            ),
+            None
+        );
+        assert_eq!(
+            simple_hit_index(map(live), &live_only, &map, SIMPLE_DOT_HIT_RADIUS, |_| true),
+            Some(0)
+        );
+        let ghost_box = Rect::from_center_size(ghost_screen, Vec2::splat(4.0));
+        assert!(simple_box_hits(ghost_box, &live_only, &map, |_| true).is_empty());
+        assert_eq!(
+            simple_box_hits(ghost_box, &ghost_only, &map, |_| true),
+            vec![0]
+        );
+        let both = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(40.0, 40.0));
+        assert_eq!(simple_box_hits(both, &live_only, &map, |_| true), vec![0]);
+
+        app.simple_mode.show_previous = true;
+        app.replace_selection(std::iter::once(0).collect());
+        app.simple_click(ghost, None, true, false);
+        assert!(app.selected.is_empty());
+        app.simple_start_drag(None, ghost_screen);
+        assert!(app.drag_before.is_none());
+        assert!(app.simple_mode.empty_pan);
+        assert!(simple_previous_toggle_width("前の場面") >= 48.0);
+        assert!(simple_previous_toggle_width("Previous") >= 48.0);
+    }
+
+    #[test]
+    fn previous_ghosts_hide_on_the_first_scene_and_while_playing() {
+        let (mut app, _, _) = moved_second_scene();
+        assert_eq!(app.current_set, 1);
+        app.simple_mode.show_previous = true;
+        assert!(simple_previous_toggle_enabled(1));
+        assert!(simple_previous_ghosts_visible(true, false, 1));
+        assert!(app.simple_previous_positions().is_some());
+        app.playing = true;
+        assert!(!simple_previous_ghosts_visible(true, true, 1));
+        assert!(app.simple_previous_positions().is_none());
+        app.playing = false;
+        app.current_set = 0;
+        assert!(!simple_previous_toggle_enabled(0));
+        assert!(!simple_previous_ghosts_visible(true, false, 0));
+        assert!(app.simple_previous_positions().is_none());
+        assert!(!simple_previous_ghosts_visible(false, false, 2));
+    }
+
+    #[test]
+    fn previous_ghost_mesh_is_one_batch_and_reused_for_a_hundred_dots() {
+        let points: Vec<Point> = (0..100)
+            .map(|index| Point {
+                x: index as f32,
+                y: 2.0,
+            })
+            .collect();
+        let map = |point: Point| Pos2::new(point.x, point.y);
+        let mut slot = None;
+        let first = prepare_previous_ghost_mesh(&mut slot, &points, &map).expect("mesh");
+        assert_eq!(first.vertices.len(), 100 * (PREVIOUS_GHOST_SEGMENTS + 1));
+        assert_eq!(first.indices.len(), 100 * PREVIOUS_GHOST_SEGMENTS * 3);
+        let ptr = std::sync::Arc::as_ptr(&first);
+        let vertex_cap = first.vertices.capacity();
+        let index_cap = first.indices.capacity();
+        drop(first);
+        let second = prepare_previous_ghost_mesh(&mut slot, &points, &map).expect("reused");
+        assert_eq!(std::sync::Arc::as_ptr(&second), ptr);
+        assert_eq!(second.vertices.capacity(), vertex_cap);
+        assert_eq!(second.indices.capacity(), index_cap);
+        assert_eq!(second.vertices.len(), 100 * (PREVIOUS_GHOST_SEGMENTS + 1));
+    }
+
+    #[test]
+    fn previous_ghost_choice_is_remembered_per_show() {
+        let dir = std::env::temp_dir().join(format!(
+            "drillforge-ghost-pref-{}-{}",
+            std::process::id(),
+            "show"
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let draft = dir.join("simple-draft.drill.json");
+        let named = dir.join("文化祭.drill.json");
+        let store = dir.join("ghosts.json");
+        let mut app = empty_simple_app();
+        app.simple_mode.draft_path_override = Some(draft.clone());
+        app.simple_mode.shows_dir_override = Some(dir.join("shows"));
+        app.simple_mode.previous_store_override = Some(store.clone());
+        app.sync_previous_ghost_pref();
+        assert!(!app.simple_mode.show_previous);
+        app.set_show_previous(true);
+        app.place_performer_at(Point { x: 8.0, y: 6.0 }, true);
+        assert!(app.history.undo(&mut app.document));
+        assert!(app.simple_mode.show_previous);
+        assert_eq!(app.document.performers.len(), 0);
+
+        let mut reopened = empty_simple_app();
+        reopened.simple_mode.draft_path_override = Some(draft.clone());
+        reopened.simple_mode.previous_store_override = Some(store.clone());
+        reopened.sync_previous_ghost_pref();
+        assert!(reopened.simple_mode.show_previous);
+
+        reopened.current_path = Some(named.clone());
+        reopened.simple_mode.previous_key = None;
+        reopened.sync_previous_ghost_pref();
+        assert!(!reopened.simple_mode.show_previous);
+        reopened.set_show_previous(true);
+
+        let mut named_again = empty_simple_app();
+        named_again.simple_mode.draft_path_override = Some(draft.clone());
+        named_again.simple_mode.previous_store_override = Some(store.clone());
+        named_again.current_path = Some(named.clone());
+        named_again.sync_previous_ghost_pref();
+        assert!(named_again.simple_mode.show_previous);
+
+        let mut draft_app = empty_simple_app();
+        draft_app.simple_mode.draft_path_override = Some(draft.clone());
+        draft_app.simple_mode.shows_dir_override = Some(dir.join("shows"));
+        draft_app.simple_mode.previous_store_override = Some(store.clone());
+        draft_app.sync_previous_ghost_pref();
+        assert!(draft_app.simple_mode.show_previous);
+        draft_app.current_path = Some(named.clone());
+        draft_app.rekey_previous_ghost(&named);
+        assert!(draft_app.simple_mode.show_previous);
+        assert!(
+            !draft_app
+                .simple_mode
+                .previous_shows
+                .contains_key(&draft.to_string_lossy().into_owned())
+        );
+        assert_eq!(
+            draft_app
+                .simple_mode
+                .previous_shows
+                .get(&named.to_string_lossy().into_owned()),
+            Some(&true)
+        );
+
+        draft_app.current_path = None;
+        draft_app.simple_mode.previous_key = None;
+        draft_app.place_performer_at(Point { x: 8.0, y: 6.0 }, true);
+        draft_app.set_show_previous(true);
+        assert!(draft_app.simple_start_fresh());
+        assert!(!draft_app.simple_mode.show_previous);
+        assert!(
+            !draft_app
+                .simple_mode
+                .previous_shows
+                .contains_key(&draft.to_string_lossy().into_owned())
+        );
+        assert!(
+            draft_app
+                .simple_mode
+                .previous_shows
+                .keys()
+                .any(|key| key.ends_with("下書き.drill.json"))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
