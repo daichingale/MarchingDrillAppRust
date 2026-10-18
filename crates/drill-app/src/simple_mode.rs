@@ -279,6 +279,27 @@ pub(crate) struct SimpleModeState {
     /// Draft for the current scene's name. A stock "セット 1" shows as empty.
     scene_name: String,
     scene_name_for: Option<usize>,
+    /// First-run pictogram hints, one step at a time. Session only.
+    hint_closed: bool,
+    hint_place_done: bool,
+    hint_move_done: bool,
+    hint_next_done: bool,
+    hint_play_done: bool,
+    hint_pulse_only: bool,
+    hint_phase_at: Option<Instant>,
+    last_input_at: Option<Instant>,
+    /// Green check after a keep (autosave or named write).
+    check_until: Option<Instant>,
+    /// Gentle shake + orange outline after a blocked action.
+    fail_until: Option<Instant>,
+    /// Trash long-press. Commits at one second, never a dialog.
+    delete_hold: Option<Instant>,
+    /// Last frame's action tiles, so the ghost finger can point at them.
+    action_place: Option<egui::Rect>,
+    action_move: Option<egui::Rect>,
+    action_next: Option<egui::Rect>,
+    action_play: Option<egui::Rect>,
+    field_card: Option<egui::Rect>,
 }
 
 /// One short chrome animation. Cleared as soon as it settles so the window
@@ -304,6 +325,16 @@ const SIMPLE_BLUE: Color32 = Color32::from_rgb(20, 96, 200);
 const SIMPLE_INK: Color32 = Color32::from_rgb(28, 32, 40);
 const SIMPLE_CARD: Color32 = Color32::WHITE;
 const SIMPLE_MOTION_SECS: f32 = 0.26;
+const SIMPLE_OK: Color32 = Color32::from_rgb(46, 158, 92);
+const SIMPLE_WARN: Color32 = Color32::from_rgb(232, 140, 48);
+const SIMPLE_OK_SECS: f32 = 0.6;
+const SIMPLE_FAIL_SECS: f32 = 0.3;
+const SIMPLE_HIT: f32 = 48.0;
+const SIMPLE_HINT_MOVE_SECS: f32 = 0.8;
+const SIMPLE_HINT_REST_SECS: f32 = 2.0;
+const SIMPLE_HINT_IDLE_SECS: f32 = 10.0;
+const SIMPLE_HINT_MAX_REPEATS: u8 = 3;
+const SIMPLE_DELETE_HOLD_SECS: f32 = 1.0;
 /// School-band 4/4. One count is one beat.
 const SIMPLE_BEATS_PER_MEASURE: u16 = 4;
 const SIMPLE_TEMPO_STEP: i32 = 4;
@@ -314,22 +345,39 @@ const SIMPLE_TEMPO_MAX: i32 = 208;
 enum DockAction {
     Undo,
     Redo,
-    Save,
     Open,
     More,
+}
+
+struct PictogramTile {
+    icon: PhoneIcon,
+    label: &'static str,
+    tip: &'static str,
+    width: f32,
+    enabled: bool,
+    active: bool,
+    pulse: bool,
+    time: f32,
 }
 
 #[derive(Clone, Copy)]
 enum PhoneIcon {
     Undo,
     Redo,
-    Save,
     Open,
     More,
     Play,
+    Stop,
     Pause,
     Next,
     Trash,
+    Person,
+    PersonPlus,
+    PersonMove,
+    SheetsNext,
+    Check,
+    Lock,
+    Close,
 }
 
 fn simple_choice_button(
@@ -353,8 +401,19 @@ fn simple_choice_button(
 }
 
 fn paint_phone_icon(painter: &egui::Painter, center: Pos2, icon: PhoneIcon, color: Color32) {
-    let stroke = Stroke::new(2.0, color);
-    let p = |x: f32, y: f32| center + egui::Vec2::new(x, y);
+    paint_phone_icon_at(painter, center, icon, color, 1.0);
+}
+
+fn paint_phone_icon_at(
+    painter: &egui::Painter,
+    center: Pos2,
+    icon: PhoneIcon,
+    color: Color32,
+    scale: f32,
+) {
+    let s = scale.max(0.4);
+    let stroke = Stroke::new((2.0 * s).max(1.15), color);
+    let p = |x: f32, y: f32| center + egui::Vec2::new(x * s, y * s);
     match icon {
         PhoneIcon::Undo => {
             painter.add(egui::Shape::line(
@@ -384,14 +443,6 @@ fn paint_phone_icon(painter: &egui::Painter, center: Pos2, icon: PhoneIcon, colo
             painter.line_segment([p(-6.0, -5.0), p(-1.0, -9.0)], stroke);
             painter.line_segment([p(-6.0, -5.0), p(-2.0, -1.0)], stroke);
         }
-        PhoneIcon::Save => {
-            painter.line_segment([p(0.0, -7.0), p(0.0, 2.0)], stroke);
-            painter.line_segment([p(-4.0, -1.0), p(0.0, 3.0)], stroke);
-            painter.line_segment([p(4.0, -1.0), p(0.0, 3.0)], stroke);
-            painter.line_segment([p(-7.0, 4.0), p(-7.0, 7.0)], stroke);
-            painter.line_segment([p(-7.0, 7.0), p(7.0, 7.0)], stroke);
-            painter.line_segment([p(7.0, 7.0), p(7.0, 4.0)], stroke);
-        }
         PhoneIcon::Open => {
             painter.add(egui::Shape::line(
                 vec![p(-7.0, -1.0), p(-7.0, 6.0), p(7.0, 6.0), p(7.0, -1.0)],
@@ -404,24 +455,31 @@ fn paint_phone_icon(painter: &egui::Painter, center: Pos2, icon: PhoneIcon, colo
         }
         PhoneIcon::More => {
             for (x, y) in [(-4.0, -4.0), (4.0, -4.0), (-4.0, 4.0), (4.0, 4.0)] {
-                painter.circle_filled(p(x, y), 2.2, color);
+                painter.circle_filled(p(x, y), 2.2 * s, color);
             }
         }
         PhoneIcon::Play => {
             painter.add(egui::Shape::convex_polygon(
-                vec![p(-5.0, -7.0), p(-5.0, 7.0), p(7.0, 0.0)],
+                vec![p(-5.0, -7.0), p(-5.0, 7.0), p(8.0, 0.0)],
                 color,
                 Stroke::NONE,
             ));
         }
+        PhoneIcon::Stop => {
+            painter.rect_filled(
+                egui::Rect::from_center_size(center, egui::Vec2::splat(14.0 * s)),
+                2.0 * s,
+                color,
+            );
+        }
         PhoneIcon::Pause => {
             painter.rect_filled(
-                egui::Rect::from_center_size(p(-3.5, 0.0), egui::Vec2::new(3.0, 14.0)),
+                egui::Rect::from_center_size(p(-3.5, 0.0), egui::Vec2::new(3.0 * s, 14.0 * s)),
                 1.0,
                 color,
             );
             painter.rect_filled(
-                egui::Rect::from_center_size(p(3.5, 0.0), egui::Vec2::new(3.0, 14.0)),
+                egui::Rect::from_center_size(p(3.5, 0.0), egui::Vec2::new(3.0 * s, 14.0 * s)),
                 1.0,
                 color,
             );
@@ -441,7 +499,89 @@ fn paint_phone_icon(painter: &egui::Painter, center: Pos2, icon: PhoneIcon, colo
                 stroke,
             ));
         }
+        PhoneIcon::Person => paint_person_pictogram(painter, center, s, color),
+        PhoneIcon::PersonPlus => {
+            paint_person_pictogram(painter, p(-1.5, 0.5), s * 0.82, color);
+            painter.line_segment([p(5.5, -8.5), p(5.5, -2.5)], stroke);
+            painter.line_segment([p(2.5, -5.5), p(8.5, -5.5)], stroke);
+        }
+        PhoneIcon::PersonMove => {
+            paint_person_pictogram(painter, center, s * 0.72, color);
+            paint_cardinal_arrows(painter, center, s, color);
+        }
+        PhoneIcon::SheetsNext => {
+            let back = egui::Rect::from_min_max(p(-8.0, -6.0), p(2.0, 6.0));
+            let front = egui::Rect::from_min_max(p(-5.0, -8.0), p(5.0, 4.0));
+            painter.rect_stroke(back, 2.0 * s, stroke, StrokeKind::Inside);
+            painter.rect_filled(front, 2.0 * s, SIMPLE_CARD);
+            painter.rect_stroke(front, 2.0 * s, stroke, StrokeKind::Inside);
+            painter.line_segment([p(7.0, -3.0), p(11.0, 0.0)], stroke);
+            painter.line_segment([p(7.0, 3.0), p(11.0, 0.0)], stroke);
+        }
+        PhoneIcon::Check => {
+            painter.line_segment([p(-6.0, 1.0), p(-1.5, 6.0)], stroke);
+            painter.line_segment([p(-1.5, 6.0), p(7.0, -6.0)], stroke);
+        }
+        PhoneIcon::Lock => {
+            painter.circle_stroke(p(0.0, -4.5), 3.4 * s, stroke);
+            painter.rect_filled(
+                egui::Rect::from_center_size(p(0.0, 3.0), egui::Vec2::new(12.0 * s, 10.0 * s)),
+                2.0 * s,
+                color,
+            );
+        }
+        PhoneIcon::Close => {
+            painter.line_segment([p(-5.0, -5.0), p(5.0, 5.0)], stroke);
+            painter.line_segment([p(5.0, -5.0), p(-5.0, 5.0)], stroke);
+        }
     }
+}
+
+fn paint_person_pictogram(painter: &egui::Painter, center: Pos2, scale: f32, color: Color32) {
+    let s = scale.max(0.4);
+    let stroke = Stroke::new((2.0 * s).max(1.15), color);
+    let p = |x: f32, y: f32| center + egui::Vec2::new(x * s, y * s);
+    painter.circle_stroke(p(0.0, -5.6), 3.1 * s, stroke);
+    painter.add(egui::Shape::line(
+        vec![p(-5.2, -1.2), p(5.2, -1.2), p(6.0, 8.0), p(-6.0, 8.0)],
+        stroke,
+    ));
+}
+
+fn paint_cardinal_arrows(painter: &egui::Painter, center: Pos2, scale: f32, color: Color32) {
+    let s = scale.max(0.4);
+    let stroke = Stroke::new((1.8 * s).max(1.1), color);
+    let p = |x: f32, y: f32| center + egui::Vec2::new(x * s, y * s);
+    painter.line_segment([p(0.0, -12.0), p(0.0, -9.0)], stroke);
+    painter.line_segment([p(-2.0, -10.5), p(0.0, -12.5)], stroke);
+    painter.line_segment([p(2.0, -10.5), p(0.0, -12.5)], stroke);
+    painter.line_segment([p(0.0, 9.0), p(0.0, 12.0)], stroke);
+    painter.line_segment([p(-2.0, 10.5), p(0.0, 12.5)], stroke);
+    painter.line_segment([p(2.0, 10.5), p(0.0, 12.5)], stroke);
+    painter.line_segment([p(-12.0, 0.0), p(-9.0, 0.0)], stroke);
+    painter.line_segment([p(-10.5, -2.0), p(-12.5, 0.0)], stroke);
+    painter.line_segment([p(-10.5, 2.0), p(-12.5, 0.0)], stroke);
+    painter.line_segment([p(9.0, 0.0), p(12.0, 0.0)], stroke);
+    painter.line_segment([p(10.5, -2.0), p(12.5, 0.0)], stroke);
+    painter.line_segment([p(10.5, 2.0), p(12.5, 0.0)], stroke);
+}
+
+fn paint_ghost_finger(painter: &egui::Painter, tip: Pos2, scale: f32, alpha: u8) {
+    let s = scale.max(0.5);
+    let color = Color32::from_rgba_unmultiplied(28, 32, 40, alpha);
+    let stroke = Stroke::new((2.0 * s).max(1.2), color);
+    let p = |x: f32, y: f32| tip + egui::Vec2::new(x * s, y * s);
+    painter.circle_filled(tip, 3.2 * s, color);
+    painter.add(egui::Shape::convex_polygon(
+        vec![p(-3.0, 2.0), p(3.0, 2.0), p(5.5, 16.0), p(-4.5, 16.0)],
+        Color32::from_rgba_unmultiplied(28, 32, 40, alpha / 3),
+        stroke,
+    ));
+}
+
+fn simple_reduced_motion(ctx: &egui::Context) -> bool {
+    ctx.global_style().animation_time < 0.08
+        || std::env::var_os("DRILLFORGE_REDUCE_MOTION").is_some()
 }
 
 impl DrillApp {
@@ -660,6 +800,7 @@ impl DrillApp {
             self.dirty = false;
             self.simple_mode.draft_saved = true;
             self.simple_mode.draft_retry_after = None;
+            self.simple_flash_check();
         } else {
             self.simple_mode.draft_retry_after = Some(Instant::now());
             ctx.request_repaint_after(Duration::from_millis(400));
@@ -989,6 +1130,7 @@ impl DrillApp {
         self.autosave_simple_draft(ui.ctx());
         self.expire_simple_saved_note(ui.ctx());
         self.note_simple_chrome_motion(ui.ctx());
+        self.simple_tick_pictogram(ui);
         ui.scope(|ui| {
             ui.style_mut().spacing.item_spacing = egui::Vec2::new(12.0, 10.0);
             ui.style_mut().spacing.button_padding = egui::Vec2::new(16.0, 10.0);
@@ -1001,6 +1143,7 @@ impl DrillApp {
                     self.simple_scene_name_row(ui);
                     ui.add_space(8.0);
                     self.simple_cue(ui);
+                    self.simple_action_bar(ui);
                     ui.add_space(6.0);
                     self.simple_beat_row(ui);
                     self.simple_music_row(ui);
@@ -1032,11 +1175,25 @@ impl DrillApp {
                     }
                     if self.simple_mode.overlap_note {
                         ui.add_space(6.0);
-                        ui.label(
-                            egui::RichText::new(i18n::registered(self.locale, "simple-mode.083"))
-                                .size(14.0)
+                        ui.horizontal(|ui| {
+                            let (rect, _) =
+                                ui.allocate_exact_size(egui::Vec2::splat(22.0), Sense::hover());
+                            paint_phone_icon_at(
+                                ui.painter(),
+                                rect.center(),
+                                PhoneIcon::Person,
+                                SIMPLE_WARN,
+                                0.85,
+                            );
+                            ui.label(
+                                egui::RichText::new(i18n::registered(
+                                    self.locale,
+                                    "simple-mode.083",
+                                ))
+                                .size(13.0)
                                 .color(super::app_theme::SECONDARY_TEXT),
-                        );
+                            );
+                        });
                     }
                     if ui.input(|input| input.modifiers.shift)
                         && !self.document.performers.is_empty()
@@ -1055,6 +1212,7 @@ impl DrillApp {
                     self.simple_field_card(ui, field_h);
                     ui.add_space(12.0);
                     self.simple_dock(ui);
+                    self.simple_paint_overlays(ui);
                 });
         });
         self.simple_sync_history_notes();
@@ -1163,6 +1321,131 @@ impl DrillApp {
         Some((motion.kind, ease, motion.anchor))
     }
 
+    fn simple_flash_check(&mut self) {
+        self.simple_mode.check_until = Some(Instant::now() + Duration::from_millis(600));
+        self.simple_mode.saved_note_until = self.simple_mode.check_until;
+    }
+
+    fn simple_fail(&mut self) {
+        self.simple_mode.fail_until = Some(Instant::now() + Duration::from_millis(300));
+    }
+
+    fn simple_fail_t(&self) -> Option<f32> {
+        let until = self.simple_mode.fail_until?;
+        let left = until
+            .saturating_duration_since(Instant::now())
+            .as_secs_f32();
+        if left <= 0.0 {
+            None
+        } else {
+            Some((1.0 - left / SIMPLE_FAIL_SECS).clamp(0.0, 1.0))
+        }
+    }
+
+    fn simple_check_t(&self) -> Option<f32> {
+        let until = self.simple_mode.check_until?;
+        let left = until
+            .saturating_duration_since(Instant::now())
+            .as_secs_f32();
+        if left <= 0.0 {
+            None
+        } else {
+            Some((1.0 - left / SIMPLE_OK_SECS).clamp(0.0, 1.0))
+        }
+    }
+
+    fn simple_mark_hint(&mut self, guide: SimpleGuide) {
+        match guide {
+            SimpleGuide::Place => self.simple_mode.hint_place_done = true,
+            SimpleGuide::Move => {
+                self.simple_mode.hint_move_done = true;
+                self.onboarding.simple_drag_tip_seen = true;
+            }
+            SimpleGuide::NextSet => self.simple_mode.hint_next_done = true,
+            SimpleGuide::Play => self.simple_mode.hint_play_done = true,
+        }
+        self.simple_mode.hint_phase_at = None;
+        if self.simple_mode.hint_place_done
+            && self.simple_mode.hint_move_done
+            && self.simple_mode.hint_next_done
+            && self.simple_mode.hint_play_done
+        {
+            self.onboarding.simple_pictogram_done = true;
+        }
+    }
+
+    fn simple_active_hint(&self) -> Option<SimpleGuide> {
+        if self.onboarding.simple_pictogram_done || self.simple_mode.hint_closed {
+            return None;
+        }
+        let guide = self.simple_guide();
+        let done = match guide {
+            SimpleGuide::Place => self.simple_mode.hint_place_done,
+            SimpleGuide::Move => self.simple_mode.hint_move_done,
+            SimpleGuide::NextSet => self.simple_mode.hint_next_done,
+            SimpleGuide::Play => self.simple_mode.hint_play_done,
+        };
+        (!done).then_some(guide)
+    }
+
+    fn simple_tick_pictogram(&mut self, ui: &mut egui::Ui) {
+        let now = Instant::now();
+        if ui.input(|input| input.pointer.any_pressed() || input.key_pressed(egui::Key::Space)) {
+            self.simple_mode.last_input_at = Some(now);
+        }
+        if let Some(last) = self.simple_mode.last_input_at
+            && last.elapsed().as_secs_f32() >= SIMPLE_HINT_IDLE_SECS
+            && self.simple_active_hint().is_some()
+        {
+            self.simple_mode.hint_pulse_only = true;
+        }
+        if self.simple_active_hint().is_some() {
+            if self.simple_mode.hint_phase_at.is_none() {
+                self.simple_mode.hint_phase_at = Some(now);
+            }
+            ui.ctx().request_repaint_after(Duration::from_millis(32));
+        }
+        if self
+            .simple_mode
+            .check_until
+            .is_some_and(|until| Instant::now() >= until)
+        {
+            self.simple_mode.check_until = None;
+        }
+        if self
+            .simple_mode
+            .fail_until
+            .is_some_and(|until| Instant::now() >= until)
+        {
+            self.simple_mode.fail_until = None;
+        }
+        if self.simple_mode.check_until.is_some() || self.simple_mode.fail_until.is_some() {
+            ui.ctx().request_repaint_after(Duration::from_millis(16));
+        }
+        if self.playing {
+            ui.ctx().request_repaint_after(Duration::from_millis(32));
+        }
+    }
+
+    fn simple_hint_cycle(&self) -> (f32, bool) {
+        let Some(started) = self.simple_mode.hint_phase_at else {
+            return (0.0, false);
+        };
+        let elapsed = started.elapsed().as_secs_f32();
+        let period = SIMPLE_HINT_MOVE_SECS + SIMPLE_HINT_REST_SECS;
+        let repeats = (elapsed / period).floor() as u8;
+        let pulse_only = self.simple_mode.hint_pulse_only || repeats >= SIMPLE_HINT_MAX_REPEATS;
+        let phase = elapsed % period;
+        let t = if pulse_only {
+            0.5 + 0.5 * (elapsed * 2.4).sin()
+        } else if phase < SIMPLE_HINT_MOVE_SECS {
+            (phase / SIMPLE_HINT_MOVE_SECS).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        (t, pulse_only)
+    }
+
     fn simple_primary_action(&self) -> Option<SimplePrimary> {
         if self.playing {
             return Some(SimplePrimary::Pause);
@@ -1191,10 +1474,7 @@ impl DrillApp {
             height += 48.0;
         }
         if self.simple_can_remove() {
-            height += 52.0;
-        }
-        if self.simple_primary_action().is_some() {
-            height += 66.0;
+            height += 56.0;
         }
         let notes = self.simple_history_lines().len();
         if notes > 0 {
@@ -1295,24 +1575,24 @@ impl DrillApp {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
                 if !self.document.performers.is_empty() {
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "{}{}",
-                            self.document.performers.len(),
-                            i18n::registered(self.locale, "simple-mode.084")
-                        ))
-                        .size(15.0)
-                        .strong()
-                        .color(SIMPLE_INK),
-                    );
+                    self.simple_member_count(ui);
                 }
-                if let Some((status, saved)) = self.simple_status_label() {
+                if self.simple_check_t().is_some() {
+                    let (rect, _) = ui.allocate_exact_size(egui::Vec2::splat(28.0), Sense::hover());
+                    paint_phone_icon_at(
+                        ui.painter(),
+                        rect.center(),
+                        PhoneIcon::Check,
+                        SIMPLE_OK,
+                        1.2,
+                    );
+                } else if let Some((status, saved)) = self.simple_status_label() {
                     let color = if saved {
-                        SIMPLE_BLUE
+                        SIMPLE_OK
                     } else {
                         super::app_theme::SECONDARY_TEXT
                     };
-                    ui.label(egui::RichText::new(status).size(13.0).color(color));
+                    ui.label(egui::RichText::new(status).size(12.0).color(color));
                 }
                 if ui
                     .button(i18n::registered(self.locale, "glossary.001"))
@@ -1445,45 +1725,24 @@ impl DrillApp {
             .get(index)
             .map(|set| set.name.as_str())
             .unwrap_or("");
-        let label = simple_chip_caption(stored, index);
-        let named = simple_scene_name_draft(stored);
-        let width = if named.is_empty() {
-            48.0
-        } else {
-            (28.0 + label.chars().count() as f32 * 15.0).clamp(72.0, 148.0)
-        };
-        let (rect, response) = ui.allocate_exact_size(egui::Vec2::new(width, 48.0), Sense::click());
+        let (rect, mut response) =
+            ui.allocate_exact_size(egui::Vec2::new(SIMPLE_HIT, SIMPLE_HIT), Sense::click());
+        let radius = if current { 18.0 } else { 11.0 };
         let fill = if current { SIMPLE_BLUE } else { Color32::WHITE };
         let ink = if current { Color32::WHITE } else { SIMPLE_INK };
-        if named.is_empty() {
-            ui.painter().circle_filled(rect.center(), 22.0, fill);
-            if !current {
-                ui.painter().circle_stroke(
-                    rect.center(),
-                    22.0,
-                    Stroke::new(1.0, super::app_theme::HAIRLINE),
-                );
-            }
-        } else {
-            let pill = rect.shrink(2.0);
-            ui.painter().rect_filled(pill, 22.0, fill);
-            if !current {
-                ui.painter().rect_stroke(
-                    pill,
-                    22.0,
-                    Stroke::new(1.0, super::app_theme::HAIRLINE),
-                    StrokeKind::Inside,
-                );
-            }
-            response.clone().on_hover_text(named);
+        ui.painter().circle_filled(rect.center(), radius, fill);
+        if !current {
+            ui.painter()
+                .circle_stroke(rect.center(), radius, Stroke::new(1.5, SIMPLE_BLUE));
         }
         ui.painter().text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
-            label,
-            egui::FontId::proportional(15.0),
+            (index + 1).to_string(),
+            egui::FontId::proportional(if current { 18.0 } else { 13.0 }),
             ink,
         );
+        response = response.on_hover_text(simple_chip_caption(stored, index));
         if response.clicked() && !current {
             self.simple_mode.overlap_note = false;
             self.simple_mode.finished_playback = false;
@@ -1493,6 +1752,43 @@ impl DrillApp {
                 self.simple_apply_watch_range();
             }
         }
+    }
+
+    fn simple_member_count(&self, ui: &mut egui::Ui) {
+        let n = self.document.performers.len();
+        let caption = format!("{}{}", n, i18n::registered(self.locale, "simple-mode.084"));
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            if simple_shows_person_numeral(n) {
+                let (icon, _) = ui.allocate_exact_size(egui::Vec2::splat(22.0), Sense::hover());
+                paint_phone_icon_at(
+                    ui.painter(),
+                    icon.center(),
+                    PhoneIcon::Person,
+                    SIMPLE_BLUE,
+                    0.9,
+                );
+                ui.label(
+                    egui::RichText::new(n.to_string())
+                        .size(22.0)
+                        .strong()
+                        .color(SIMPLE_INK),
+                );
+            } else {
+                for _ in 0..n {
+                    let (icon, _) = ui.allocate_exact_size(egui::Vec2::splat(16.0), Sense::hover());
+                    paint_phone_icon_at(
+                        ui.painter(),
+                        icon.center(),
+                        PhoneIcon::Person,
+                        SIMPLE_BLUE,
+                        0.6,
+                    );
+                }
+            }
+        })
+        .response
+        .on_hover_text(caption);
     }
 
     fn simple_cue(&mut self, ui: &mut egui::Ui) {
@@ -1551,10 +1847,210 @@ impl DrillApp {
         };
         ui.label(
             egui::RichText::new(message)
-                .size(22.0)
-                .strong()
-                .color(SIMPLE_INK),
+                .size(13.0)
+                .color(super::app_theme::SECONDARY_TEXT),
         );
+    }
+
+    fn simple_action_bar(&mut self, ui: &mut egui::Ui) {
+        let guide = self.simple_guide();
+        let playing = self.playing;
+        let can_place = !playing && self.is_editable_set_start();
+        let can_move = can_place && !self.document.performers.is_empty();
+        let can_next = can_place && !self.document.performers.is_empty();
+        let can_play = playing || self.show_has_motion();
+        let time = ui.input(|input| input.time) as f32;
+        ui.add_space(4.0);
+        let mut place = false;
+        let mut move_focus = false;
+        let mut next = false;
+        let mut play = false;
+        let mut blocked = false;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            let tile = SIMPLE_HIT + 18.0;
+            let (place_rect, place_click) = self.simple_pictogram_tile(
+                ui,
+                PictogramTile {
+                    icon: PhoneIcon::PersonPlus,
+                    label: i18n::registered(self.locale, "simple-mode.303"),
+                    tip: i18n::registered(self.locale, "simple-mode.304"),
+                    width: tile,
+                    enabled: can_place,
+                    active: guide == SimpleGuide::Place && !playing,
+                    pulse: false,
+                    time,
+                },
+            );
+            self.simple_mode.action_place = Some(place_rect);
+            if place_click {
+                if can_place {
+                    place = true;
+                } else {
+                    blocked = true;
+                }
+            }
+            let (move_rect, move_click) = self.simple_pictogram_tile(
+                ui,
+                PictogramTile {
+                    icon: PhoneIcon::PersonMove,
+                    label: i18n::registered(self.locale, "simple-mode.305"),
+                    tip: i18n::registered(self.locale, "simple-mode.306"),
+                    width: tile,
+                    enabled: can_move,
+                    active: guide == SimpleGuide::Move && !playing,
+                    pulse: false,
+                    time,
+                },
+            );
+            self.simple_mode.action_move = Some(move_rect);
+            if move_click {
+                if can_move {
+                    move_focus = true;
+                } else {
+                    blocked = true;
+                }
+            }
+            let next_pulse = guide == SimpleGuide::NextSet && !playing;
+            let (next_rect, next_click) = self.simple_pictogram_tile(
+                ui,
+                PictogramTile {
+                    icon: PhoneIcon::SheetsNext,
+                    label: i18n::registered(self.locale, "simple-mode.307"),
+                    tip: i18n::registered(self.locale, "simple-mode.308"),
+                    width: tile,
+                    enabled: can_next,
+                    active: next_pulse,
+                    pulse: next_pulse,
+                    time,
+                },
+            );
+            self.simple_mode.action_next = Some(next_rect);
+            if next_click {
+                if can_next {
+                    next = true;
+                } else {
+                    blocked = true;
+                }
+            }
+            let (play_icon, play_label, play_tip) = if playing {
+                (
+                    PhoneIcon::Stop,
+                    i18n::registered(self.locale, "simple-mode.311"),
+                    i18n::registered(self.locale, "simple-mode.312"),
+                )
+            } else {
+                (
+                    PhoneIcon::Play,
+                    i18n::registered(self.locale, "simple-mode.309"),
+                    i18n::registered(self.locale, "simple-mode.310"),
+                )
+            };
+            let play_glow = (guide == SimpleGuide::Play && !playing) || playing;
+            let (play_rect, play_click) = self.simple_pictogram_tile(
+                ui,
+                PictogramTile {
+                    icon: play_icon,
+                    label: play_label,
+                    tip: play_tip,
+                    width: tile + 28.0,
+                    enabled: can_play,
+                    active: play_glow,
+                    pulse: play_glow && !playing,
+                    time,
+                },
+            );
+            self.simple_mode.action_play = Some(play_rect);
+            if play_click {
+                if can_play {
+                    play = true;
+                } else {
+                    blocked = true;
+                }
+            }
+        });
+        if blocked {
+            self.simple_fail();
+        }
+        if place {
+            self.simple_add_person();
+            self.simple_mark_hint(SimpleGuide::Place);
+        }
+        if move_focus && self.selected.is_empty() && !self.document.performers.is_empty() {
+            self.replace_selection(std::iter::once(0).collect());
+        }
+        if next {
+            self.simple_mode.finished_playback = false;
+            let revision = self.history.revision();
+            self.duplicate_current_set();
+            self.simple_mark(revision, "simple-mode.078");
+            self.simple_mark_hint(SimpleGuide::NextSet);
+        }
+        if play {
+            if playing {
+                self.toggle_playback(ui.ctx());
+            } else {
+                self.simple_start_play(ui.ctx());
+                self.simple_mark_hint(SimpleGuide::Play);
+            }
+        }
+    }
+
+    fn simple_pictogram_tile(&self, ui: &mut egui::Ui, tile: PictogramTile) -> (egui::Rect, bool) {
+        let height = SIMPLE_HIT + 14.0;
+        let (rect, response) =
+            ui.allocate_exact_size(egui::Vec2::new(tile.width, height), Sense::click());
+        let glow = if tile.pulse {
+            0.55 + 0.45 * (tile.time * 3.0).sin().abs()
+        } else {
+            1.0
+        };
+        let fill = if tile.active {
+            Color32::from_rgba_unmultiplied(20, 96, 200, (40.0 + 80.0 * glow) as u8)
+        } else if response.hovered() {
+            super::app_theme::ACCENT_SOFT
+        } else {
+            Color32::WHITE
+        };
+        let ink = if tile.enabled {
+            SIMPLE_INK
+        } else {
+            super::app_theme::SECONDARY_TEXT.gamma_multiply(0.55)
+        };
+        let icon_color = if tile.enabled {
+            SIMPLE_BLUE
+        } else {
+            Color32::from_rgba_unmultiplied(20, 96, 200, 80)
+        };
+        ui.painter().rect_filled(rect, 16.0, fill);
+        let stroke = if tile.active {
+            Stroke::new(2.0, SIMPLE_BLUE.gamma_multiply(glow))
+        } else {
+            Stroke::new(1.0, super::app_theme::HAIRLINE)
+        };
+        ui.painter()
+            .rect_stroke(rect, 16.0, stroke, StrokeKind::Inside);
+        let icon_scale = if matches!(tile.icon, PhoneIcon::Play | PhoneIcon::Stop) {
+            1.55
+        } else {
+            1.35
+        };
+        paint_phone_icon_at(
+            ui.painter(),
+            rect.center() + egui::Vec2::new(0.0, -8.0),
+            tile.icon,
+            icon_color,
+            icon_scale,
+        );
+        ui.painter().text(
+            rect.center() + egui::Vec2::new(0.0, 22.0),
+            egui::Align2::CENTER_CENTER,
+            tile.label,
+            egui::FontId::proportional(11.0),
+            ink,
+        );
+        response.clone().on_hover_text(tile.tip);
+        (rect, response.clicked())
     }
 
     fn simple_step_counts(&mut self, delta: i32) {
@@ -3877,23 +4373,43 @@ impl DrillApp {
         self.simple_refresh_held_picture();
         let width = ui.available_width();
         let (rect, _) = ui.allocate_exact_size(egui::Vec2::new(width, height), Sense::hover());
-        let card = rect.shrink(8.0);
-        let shadow = egui::Shadow {
-            offset: [0, 6],
-            blur: 16,
-            spread: 0,
-            color: Color32::from_black_alpha(18),
-        };
-        ui.painter().add(shadow.as_shape(card, 24));
+        let shake = self
+            .simple_fail_t()
+            .map(|t| (t * 40.0).sin() * 4.0 * (1.0 - t))
+            .unwrap_or(0.0);
+        let card = rect.shrink(8.0).translate(egui::Vec2::new(shake, 0.0));
+        self.simple_mode.field_card = Some(card);
         ui.painter().rect_filled(card, 24.0, SIMPLE_CARD);
+        ui.painter().rect_stroke(
+            card,
+            24.0,
+            Stroke::new(1.0, super::app_theme::HAIRLINE),
+            StrokeKind::Inside,
+        );
         let inner = card.shrink(12.0);
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner));
         self.simple_field_full_ui(&mut child, true);
         if self.playing {
-            let pulse = 0.65 + 0.35 * (ui.input(|input| input.time) as f32 * 3.2).sin().abs();
-            let color = Color32::from_rgba_unmultiplied(20, 96, 200, (pulse * 255.0) as u8);
+            let pulse = 0.55 + 0.45 * (ui.input(|input| input.time) as f32 * 1.6).sin().abs();
+            let color = Color32::from_rgba_unmultiplied(20, 96, 200, (pulse * 180.0) as u8);
             ui.painter()
                 .rect_stroke(card, 24.0, Stroke::new(3.0, color), StrokeKind::Inside);
+            let lock = Pos2::new(card.right() - 28.0, card.top() + 28.0);
+            paint_phone_icon_at(ui.painter(), lock, PhoneIcon::Lock, SIMPLE_BLUE, 1.15);
+            ui.interact(
+                egui::Rect::from_center_size(lock, egui::Vec2::splat(SIMPLE_HIT)),
+                ui.id().with("simple-lock"),
+                Sense::hover(),
+            )
+            .on_hover_text(i18n::registered(self.locale, "simple-mode.315"));
+        }
+        if self.simple_fail_t().is_some() {
+            ui.painter().rect_stroke(
+                card,
+                24.0,
+                Stroke::new(3.0, SIMPLE_WARN),
+                StrokeKind::Inside,
+            );
         }
         if let Some((ChromeMotion::Set, ease, _)) = self.simple_motion_ease()
             && self.nav_glide.position().is_none()
@@ -3901,6 +4417,16 @@ impl DrillApp {
             let alpha = ((1.0 - ease) * 110.0) as u8;
             ui.painter()
                 .rect_filled(card, 24.0, Color32::from_white_alpha(alpha));
+        }
+        if let Some(t) = self.simple_check_t() {
+            let alpha = ((1.0 - t) * 220.0) as u8;
+            let center = Pos2::new(card.right() - 36.0, card.bottom() - 36.0);
+            ui.painter().circle_filled(
+                center,
+                16.0,
+                Color32::from_rgba_unmultiplied(46, 158, 92, alpha / 3),
+            );
+            paint_phone_icon_at(ui.painter(), center, PhoneIcon::Check, SIMPLE_OK, 1.3);
         }
     }
 
@@ -3915,14 +4441,13 @@ impl DrillApp {
             outer.center(),
             egui::Vec2::new(width.min(outer.width()), height),
         );
-        let shadow = egui::Shadow {
-            offset: [0, 8],
-            blur: 18,
-            spread: 0,
-            color: Color32::from_black_alpha(22),
-        };
-        ui.painter().add(shadow.as_shape(dock, 28));
         ui.painter().rect_filled(dock, 28.0, SIMPLE_CARD);
+        ui.painter().rect_stroke(
+            dock,
+            28.0,
+            Stroke::new(1.0, super::app_theme::HAIRLINE),
+            StrokeKind::Inside,
+        );
         let mut child = ui
             .new_child(egui::UiBuilder::new().max_rect(dock.shrink2(egui::Vec2::new(16.0, 12.0))));
         if self.document.sets.len() >= 2 {
@@ -3949,10 +4474,6 @@ impl DrillApp {
             child.add_space(6.0);
         }
         self.simple_dock_actions(&mut child);
-        if self.simple_primary_action().is_some() {
-            child.add_space(10.0);
-            self.simple_primary(&mut child);
-        }
     }
 
     fn simple_remove_bar(&mut self, ui: &mut egui::Ui) {
@@ -3961,10 +4482,16 @@ impl DrillApp {
         } else {
             i18n::registered(self.locale, "simple-mode.098")
         };
-        let (rect, response) =
-            ui.allocate_exact_size(egui::Vec2::new(ui.available_width(), 44.0), Sense::click());
-        let fill = if response.hovered() {
+        let (rect, response) = ui.allocate_exact_size(
+            egui::Vec2::new(ui.available_width().clamp(SIMPLE_HIT, 280.0), SIMPLE_HIT),
+            Sense::click_and_drag(),
+        );
+        let holding = response.is_pointer_button_down_on();
+        let progress = self.simple_delete_hold_progress(holding);
+        let fill = if holding {
             super::app_theme::ACCENT_SOFT
+        } else if response.hovered() {
+            super::app_theme::ACCENT_HOVER
         } else {
             Color32::WHITE
         };
@@ -3975,30 +4502,69 @@ impl DrillApp {
             Stroke::new(1.5, SIMPLE_BLUE),
             StrokeKind::Inside,
         );
-        paint_phone_icon(
+        if progress > 0.0 {
+            let ring = rect.shrink(4.0);
+            ui.painter().circle_stroke(
+                rect.center() + egui::Vec2::new(-28.0, 0.0),
+                16.0,
+                Stroke::new(3.0, SIMPLE_WARN.gamma_multiply(progress)),
+            );
+            let _ = ring;
+        }
+        paint_phone_icon_at(
             ui.painter(),
-            rect.center() + egui::Vec2::new(-36.0, 0.0),
+            rect.center() + egui::Vec2::new(-28.0, 0.0),
             PhoneIcon::Trash,
             SIMPLE_BLUE,
+            1.25,
         );
         ui.painter().text(
-            rect.center() + egui::Vec2::new(8.0, 0.0),
+            rect.center() + egui::Vec2::new(16.0, 0.0),
             egui::Align2::CENTER_CENTER,
             label,
-            egui::FontId::proportional(16.0),
+            egui::FontId::proportional(13.0),
             SIMPLE_BLUE,
         );
-        if response.clicked() {
-            self.simple_mode.overlap_note = false;
-            let note = if self.selected.len() == 1 {
-                "simple-mode.097"
-            } else {
-                "simple-mode.098"
-            };
-            let revision = self.history.revision();
-            self.remove_selected_performers();
-            self.simple_mark(revision, note);
+        response
+            .clone()
+            .on_hover_text(i18n::registered(self.locale, "simple-mode.314"));
+        if holding {
+            ui.ctx().request_repaint_after(Duration::from_millis(16));
         }
+        if progress >= 1.0 {
+            self.simple_commit_held_delete();
+        }
+    }
+
+    fn simple_delete_hold_progress(&mut self, holding: bool) -> f32 {
+        if !holding {
+            self.simple_mode.delete_hold = None;
+            return 0.0;
+        }
+        let started = *self
+            .simple_mode
+            .delete_hold
+            .get_or_insert_with(Instant::now);
+        (started.elapsed().as_secs_f32() / SIMPLE_DELETE_HOLD_SECS).clamp(0.0, 1.0)
+    }
+
+    fn simple_commit_held_delete(&mut self) {
+        if !self.simple_can_remove() {
+            self.simple_mode.delete_hold = None;
+            self.simple_fail();
+            return;
+        }
+        self.simple_mode.delete_hold = None;
+        self.simple_mode.overlap_note = false;
+        let note = if self.selected.len() == 1 {
+            "simple-mode.097"
+        } else {
+            "simple-mode.098"
+        };
+        let revision = self.history.revision();
+        self.remove_selected_performers();
+        self.simple_mark(revision, note);
+        self.simple_flash_check();
     }
 
     fn simple_dock_actions(&mut self, ui: &mut egui::Ui) {
@@ -4018,12 +4584,6 @@ impl DrillApp {
                     DockAction::Redo,
                 ),
                 (
-                    "simple-mode.081",
-                    "simple-mode.093",
-                    PhoneIcon::Save,
-                    DockAction::Save,
-                ),
-                (
                     "simple-mode.080",
                     "simple-mode.094",
                     PhoneIcon::Open,
@@ -4038,14 +4598,14 @@ impl DrillApp {
             ];
             let count = labels.len() as f32;
             let gaps = 8.0 * (count - 1.0);
-            let button_w = ((ui.available_width() - gaps) / count).clamp(64.0, 112.0);
+            let button_w = ((ui.available_width() - gaps) / count).clamp(SIMPLE_HIT, 112.0);
             let row = button_w * count + gaps;
             ui.add_space(((ui.available_width() - row) / 2.0).max(0.0));
             for (id, tip, icon, action) in labels {
                 let enabled = match action {
                     DockAction::Undo => self.history.can_undo(),
                     DockAction::Redo => self.history.can_redo(),
-                    DockAction::Save | DockAction::Open | DockAction::More => true,
+                    DockAction::Open | DockAction::More => true,
                 };
                 let label = i18n::registered(self.locale, id);
                 let response = self
@@ -4068,7 +4628,6 @@ impl DrillApp {
                 self.simple_mode.overlap_note = false;
                 self.execute_command(UiCommand::Redo, ui.ctx());
             }
-            DockAction::Save => self.simple_begin_save(),
             DockAction::Open => self.simple_open_shows(),
             DockAction::More => self.set_simple_mode(false),
         }
@@ -4083,7 +4642,7 @@ impl DrillApp {
         enabled: bool,
     ) -> egui::Response {
         let (rect, response) = ui.allocate_exact_size(
-            egui::Vec2::new(width, 72.0),
+            egui::Vec2::new(width, SIMPLE_HIT + 24.0),
             if enabled {
                 Sense::click()
             } else {
@@ -4105,11 +4664,12 @@ impl DrillApp {
         } else {
             super::app_theme::SECONDARY_TEXT.gamma_multiply(0.55)
         };
-        paint_phone_icon(
+        paint_phone_icon_at(
             ui.painter(),
-            rect.center() + egui::Vec2::new(0.0, -12.0),
+            rect.center() + egui::Vec2::new(0.0, -10.0),
             icon,
             color,
+            1.25,
         );
         ui.painter().text(
             rect.center() + egui::Vec2::new(0.0, 16.0),
@@ -4121,6 +4681,7 @@ impl DrillApp {
         response
     }
 
+    #[allow(dead_code)]
     fn simple_primary(&mut self, ui: &mut egui::Ui) {
         let Some(action) = self.simple_primary_action() else {
             return;
@@ -4181,6 +4742,139 @@ impl DrillApp {
                 }
                 SimplePrimary::Pause => self.toggle_playback(ui.ctx()),
                 SimplePrimary::Play => self.simple_start_play(ui.ctx()),
+            }
+        }
+    }
+
+    fn simple_paint_overlays(&mut self, ui: &mut egui::Ui) {
+        let Some(guide) = self.simple_active_hint() else {
+            return;
+        };
+        let reduced = simple_reduced_motion(ui.ctx());
+        let (t, pulse_only) = self.simple_hint_cycle();
+        let show_hand = !reduced && !pulse_only;
+        let pulse = 0.55 + 0.45 * (t * std::f32::consts::PI).sin().abs();
+        {
+            let painter = ui.painter();
+            match guide {
+                SimpleGuide::Place => {
+                    if let Some(card) = self.simple_mode.field_card {
+                        let target = card.center();
+                        painter.circle_filled(
+                            target,
+                            12.0 * pulse,
+                            Color32::from_rgba_unmultiplied(20, 96, 200, 55),
+                        );
+                        paint_phone_icon_at(
+                            painter,
+                            target + egui::Vec2::new(0.0, -6.0),
+                            PhoneIcon::PersonPlus,
+                            Color32::from_rgba_unmultiplied(20, 96, 200, 110),
+                            1.8,
+                        );
+                        if show_hand {
+                            paint_ghost_finger(
+                                painter,
+                                target + egui::Vec2::new(8.0, 10.0 + 16.0 * t),
+                                1.2,
+                                160,
+                            );
+                        } else {
+                            painter.arrow(
+                                target + egui::Vec2::new(0.0, 36.0),
+                                egui::Vec2::new(0.0, -18.0),
+                                Stroke::new(2.5, SIMPLE_BLUE),
+                            );
+                        }
+                    }
+                }
+                SimpleGuide::Move => {
+                    if let Some(card) = self.simple_mode.field_card {
+                        let start = card.center() + egui::Vec2::new(-36.0, 0.0);
+                        let end = start + egui::Vec2::new(72.0 * t, 0.0);
+                        paint_phone_icon_at(
+                            painter,
+                            start,
+                            PhoneIcon::Person,
+                            Color32::from_rgba_unmultiplied(20, 96, 200, 90),
+                            1.4,
+                        );
+                        if show_hand {
+                            paint_ghost_finger(painter, end + egui::Vec2::new(6.0, 8.0), 1.15, 160);
+                        } else {
+                            painter.arrow(
+                                start,
+                                egui::Vec2::new(28.0, 0.0),
+                                Stroke::new(2.5, SIMPLE_BLUE),
+                            );
+                        }
+                    }
+                }
+                SimpleGuide::NextSet => {
+                    if let Some(rect) = self.simple_mode.action_next {
+                        painter.rect_stroke(
+                            rect.expand(4.0),
+                            18.0,
+                            Stroke::new(2.5, SIMPLE_BLUE.gamma_multiply(pulse)),
+                            StrokeKind::Outside,
+                        );
+                        if show_hand {
+                            paint_ghost_finger(
+                                painter,
+                                rect.center() + egui::Vec2::new(4.0, 8.0),
+                                1.0,
+                                150,
+                            );
+                        } else {
+                            painter.arrow(
+                                rect.left_center() + egui::Vec2::new(-18.0, 0.0),
+                                egui::Vec2::new(16.0, 0.0),
+                                Stroke::new(2.5, SIMPLE_BLUE),
+                            );
+                        }
+                    }
+                }
+                SimpleGuide::Play => {
+                    if let Some(rect) = self.simple_mode.action_play {
+                        painter.rect_stroke(
+                            rect.expand(5.0),
+                            18.0,
+                            Stroke::new(3.0, SIMPLE_BLUE.gamma_multiply(pulse)),
+                            StrokeKind::Outside,
+                        );
+                        if show_hand {
+                            paint_ghost_finger(
+                                painter,
+                                rect.center() + egui::Vec2::new(6.0, 10.0),
+                                1.05,
+                                150,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(card) = self.simple_mode.field_card {
+            let close = egui::Rect::from_center_size(
+                Pos2::new(card.right() - 22.0, card.top() + 22.0),
+                egui::Vec2::splat(SIMPLE_HIT),
+            );
+            let id = ui.id().with("simple-hint-close");
+            let response = ui.interact(close, id, Sense::click());
+            ui.painter()
+                .circle_filled(close.center(), 14.0, Color32::from_white_alpha(230));
+            paint_phone_icon_at(
+                ui.painter(),
+                close.center(),
+                PhoneIcon::Close,
+                SIMPLE_INK,
+                0.9,
+            );
+            response
+                .clone()
+                .on_hover_text(i18n::registered(self.locale, "simple-mode.313"));
+            if response.clicked() {
+                self.simple_mode.hint_closed = true;
             }
         }
     }
@@ -4385,6 +5079,7 @@ impl DrillApp {
         self.show_recent_projects = true;
     }
 
+    #[allow(dead_code)]
     fn simple_begin_save(&mut self) {
         if let Some(path) = self.current_path.clone().filter(|path| path.is_file()) {
             self.simple_mode.naming_pending = true;
@@ -4477,7 +5172,7 @@ impl DrillApp {
         }
         self.simple_mode.naming_pending = false;
         self.simple_mode.naming = false;
-        self.simple_mode.saved_note_until = Some(Instant::now() + Duration::from_secs(3));
+        self.simple_flash_check();
         self.recent_projects.remember(path.to_path_buf());
     }
 
@@ -4540,6 +5235,10 @@ impl DrillApp {
     }
 
     fn simple_add_person(&mut self) {
+        if !self.is_editable_set_start() {
+            self.simple_fail();
+            return;
+        }
         let grid = &self.document.grid;
         let step = grid.horizontal_units / f32::from(grid.horizontal_steps.max(1));
         let n = self.document.performers.len() as f32;
@@ -4550,6 +5249,7 @@ impl DrillApp {
         let revision = self.history.revision();
         self.place_performer_at(raw, true);
         self.simple_mark(revision, "simple-mode.055");
+        self.simple_mark_hint(SimpleGuide::Place);
     }
 
     fn simple_rename_selected(&mut self, name: &str) {
@@ -4623,6 +5323,7 @@ impl DrillApp {
                 self.begin_field_drag(pointer);
             } else {
                 self.ensure_editable_set_start();
+                self.simple_fail();
             }
         } else {
             self.field_viewport.begin_pan(Some(pointer));
@@ -4642,9 +5343,14 @@ impl DrillApp {
     ) {
         match nearest {
             None if self.simple_places_on_empty_tap() => {
+                if !self.is_editable_set_start() {
+                    self.simple_fail();
+                    return;
+                }
                 let revision = self.history.revision();
                 self.place_performer_at(field_point, snap);
                 self.simple_mark(revision, "simple-mode.055");
+                self.simple_mark_hint(SimpleGuide::Place);
             }
             None => {
                 self.simple_mode.overlap_note = false;
@@ -4786,25 +5492,18 @@ impl DrillApp {
                 .filter(|(kind, _, _)| *kind == ChromeMotion::Empty)
                 .map(|(_, ease, _)| 0.86 + 0.14 * ease)
                 .unwrap_or(1.0);
-            let radius = 40.0 * pop;
+            let faded = Color32::from_rgba_unmultiplied(20, 96, 200, 90);
             painter.circle_filled(
                 center,
-                radius,
-                Color32::from_rgba_unmultiplied(76, 163, 255, 48),
+                46.0 * pop,
+                Color32::from_rgba_unmultiplied(76, 163, 255, 28),
             );
-            painter.circle_stroke(center, radius, Stroke::new(2.0, SIMPLE_BLUE));
+            paint_phone_icon_at(&painter, center, PhoneIcon::PersonPlus, faded, 2.4 * pop);
             painter.text(
-                center,
-                egui::Align2::CENTER_CENTER,
-                "+",
-                egui::FontId::proportional(34.0),
-                SIMPLE_BLUE,
-            );
-            painter.text(
-                center + egui::Vec2::new(0.0, radius + 16.0),
+                center + egui::Vec2::new(0.0, 52.0 * pop),
                 egui::Align2::CENTER_TOP,
                 i18n::registered(self.locale, "simple-mode.082"),
-                egui::FontId::proportional(18.0),
+                egui::FontId::proportional(13.0),
                 SIMPLE_BLUE,
             );
         }
@@ -4894,6 +5593,14 @@ impl DrillApp {
             && matches!(kind, ChromeMotion::Place | ChromeMotion::Move)
         {
             let pos = to_screen(anchor);
+            if kind == ChromeMotion::Place {
+                let pop = 0.45 + 0.55 * ease;
+                painter.circle_filled(
+                    pos,
+                    12.0 * pop,
+                    Color32::from_rgba_unmultiplied(20, 96, 200, ((1.0 - ease) * 140.0) as u8),
+                );
+            }
             let radius = 8.0 + 26.0 * ease;
             let alpha = ((1.0 - ease) * 160.0) as u8;
             painter.circle_stroke(
@@ -4940,6 +5647,7 @@ impl DrillApp {
                 self.commit_field_drag();
                 self.simple_mark(revision, "simple-mode.183");
                 self.bump_simple_motion(ChromeMotion::Move);
+                self.simple_mark_hint(SimpleGuide::Move);
             }
         }
     }
@@ -6118,6 +6826,10 @@ fn simple_transition_seconds(document: &drill_core::Document, set_index: usize) 
 }
 
 /// Plain text of where everyone stands, to paste into a message. Nothing is written.
+fn simple_shows_person_numeral(count: usize) -> bool {
+    count > 12
+}
+
 fn simple_chip_caption(name: &str, index: usize) -> String {
     let number = (index + 1).to_string();
     let custom = simple_scene_name_draft(name);
@@ -9447,5 +10159,79 @@ mod tests {
         app.begin_simple_show();
         assert!(app.simple_mode.focus.is_none());
         assert!(app.simple_mode.away.is_empty());
+    }
+
+    #[test]
+    fn pictogram_hints_follow_the_guide_and_then_persist() {
+        let mut app = empty_simple_app();
+        assert_eq!(app.simple_guide(), SimpleGuide::Place);
+        assert_eq!(app.simple_active_hint(), Some(SimpleGuide::Place));
+        app.simple_add_person();
+        assert!(app.simple_mode.hint_place_done);
+        assert_eq!(app.simple_guide(), SimpleGuide::NextSet);
+        assert_eq!(app.simple_active_hint(), Some(SimpleGuide::NextSet));
+        app.duplicate_current_set();
+        app.simple_mark_hint(SimpleGuide::NextSet);
+        assert_eq!(app.simple_guide(), SimpleGuide::Move);
+        assert_eq!(app.simple_active_hint(), Some(SimpleGuide::Move));
+        app.replace_selection([0].into_iter().collect());
+        let start = app.document.sets[0].positions[0];
+        app.begin_field_drag(Pos2::new(0.0, 0.0));
+        app.update_field_drag(Pos2::new(50.0, 0.0), 10.0, true);
+        app.commit_field_drag();
+        app.simple_mark_hint(SimpleGuide::Move);
+        assert_ne!(app.document.sets[1].positions[0], start);
+        assert_eq!(app.simple_guide(), SimpleGuide::Play);
+        app.simple_mark_hint(SimpleGuide::Play);
+        assert!(app.onboarding.simple_pictogram_done);
+        assert!(app.simple_active_hint().is_none());
+    }
+
+    #[test]
+    fn closing_the_hint_hides_it_for_the_session() {
+        let mut app = empty_simple_app();
+        assert!(app.simple_active_hint().is_some());
+        app.simple_mode.hint_closed = true;
+        assert!(app.simple_active_hint().is_none());
+    }
+
+    #[test]
+    fn trash_commits_only_after_a_one_second_hold() {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 8.0, y: 6.0 }, true);
+        app.replace_selection([0].into_iter().collect());
+        assert_eq!(app.simple_delete_hold_progress(false), 0.0);
+        app.simple_mode.delete_hold = Some(Instant::now());
+        assert!(app.simple_delete_hold_progress(true) < 1.0);
+        assert_eq!(app.document.performers.len(), 1);
+        app.simple_mode.delete_hold = Some(Instant::now() - Duration::from_millis(1100));
+        assert_eq!(app.simple_delete_hold_progress(true), 1.0);
+        app.simple_commit_held_delete();
+        assert!(app.document.performers.is_empty());
+    }
+
+    #[test]
+    fn a_blocked_edit_flashes_the_orange_warn() {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 8.0, y: 6.0 }, true);
+        app.playing = true;
+        app.simple_add_person();
+        assert_eq!(app.document.performers.len(), 1);
+        assert!(app.simple_fail_t().is_some());
+        assert!(app.simple_mode.fail_until.is_some());
+    }
+
+    #[test]
+    fn member_tally_uses_a_numeral_past_twelve() {
+        assert!(!simple_shows_person_numeral(12));
+        assert!(simple_shows_person_numeral(13));
+    }
+
+    #[test]
+    fn autosave_flashes_a_green_check_without_a_save_button() {
+        let mut app = empty_simple_app();
+        app.simple_flash_check();
+        assert!(app.simple_check_t().is_some());
+        assert!(app.simple_mode.check_until.is_some());
     }
 }
