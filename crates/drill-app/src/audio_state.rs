@@ -161,6 +161,19 @@ impl AudioState {
             job.cancel();
         }
     }
+
+    /// Drop the decoded song and the device. Safe when no output was opened.
+    pub fn clear(&mut self) {
+        self.pause();
+        self.cancel();
+        self.job = None;
+        self.output = None;
+        self.asset = None;
+        self.peaks = None;
+        self.buckets.clear();
+        self.last_click_config = None;
+        self.status = StatusMessage::new("audio-status.001");
+    }
     pub fn is_loading(&self) -> bool {
         self.job.is_some()
     }
