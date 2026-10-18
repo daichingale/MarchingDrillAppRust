@@ -32,7 +32,7 @@ fn native_options() -> eframe::NativeOptions {
     eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("DrillForge")
-            .with_inner_size([1280.0, 800.0]),
+            .with_inner_size(qa_inner_size()),
         // eframe's deterministic screenshot harness currently exists only in
         // the Glow integration. Production stays on wgpu.
         renderer: if std::env::var_os("EFRAME_SCREENSHOT_TO").is_some() {
@@ -63,6 +63,21 @@ fn native_options() -> eframe::NativeOptions {
         wgpu_options: WgpuConfiguration::default().with_surface_config(SurfaceConfig::LOW_LATENCY),
         ..Default::default()
     }
+}
+
+fn qa_inner_size() -> [f32; 2] {
+    const DEFAULT: [f32; 2] = [1280.0, 800.0];
+    if let Ok(raw) = std::env::var("DRILLFORGE_QA_SIZE") {
+        let mut parts = raw.split('x');
+        if let (Some(width), Some(height)) = (parts.next(), parts.next())
+            && let (Ok(width), Ok(height)) = (width.parse::<f32>(), height.parse::<f32>())
+            && (640.0..=2560.0).contains(&width)
+            && (480.0..=1600.0).contains(&height)
+        {
+            return [width, height];
+        }
+    }
+    DEFAULT
 }
 
 fn install_fonts(context: &egui::Context) {

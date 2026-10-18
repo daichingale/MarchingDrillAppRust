@@ -18,11 +18,18 @@ pub struct OnboardingState {
     pub coach_step: u8,
     pub simple_drag_tip_seen: bool,
     pub simple_steps_dismissed: bool,
+    /// First-run pictogram hints. Existing preference files omit this field,
+    /// which means the person already found the field without them.
+    #[serde(default = "existing_user_pictogram_hints_done")]
+    pub simple_pictogram_done: bool,
     /// Existing preference files omit this field. Missing means the person
     /// already had the full editor, so they stay there. A brand-new install
     /// uses [`Default`], which opens the simple field.
     #[serde(default = "existing_user_prefers_full_editor")]
     pub prefer_simple: bool,
+    /// Collapsed floating toolbar in Simple Mode. Missing means expanded.
+    #[serde(default)]
+    pub simple_toolbar_collapsed: bool,
     #[serde(skip)]
     pub show_welcome: bool,
     #[serde(skip)]
@@ -39,7 +46,9 @@ impl Default for OnboardingState {
             coach_step: 0,
             simple_drag_tip_seen: false,
             simple_steps_dismissed: false,
+            simple_pictogram_done: false,
             prefer_simple: true,
+            simple_toolbar_collapsed: false,
             show_welcome: true,
             show_help: false,
             persisted: String::new(),
@@ -242,6 +251,10 @@ fn existing_user_prefers_full_editor() -> bool {
     false
 }
 
+fn existing_user_pictogram_hints_done() -> bool {
+    true
+}
+
 fn preferences_path() -> Option<std::path::PathBuf> {
     #[cfg(target_os = "windows")]
     let base = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from);
@@ -289,6 +302,7 @@ mod tests {
         let state = OnboardingState::default();
         assert!(state.prefer_simple);
         assert!(!state.welcome_seen);
+        assert!(!state.simple_pictogram_done);
     }
     #[test]
     fn saved_preferences_without_the_new_flag_stay_on_the_full_editor() {
@@ -296,5 +310,17 @@ mod tests {
         let state: OnboardingState = serde_json::from_str(json).expect("older prefs still parse");
         assert!(state.welcome_seen);
         assert!(!state.prefer_simple);
+        assert!(state.simple_pictogram_done);
+        assert!(!state.simple_toolbar_collapsed);
+    }
+    #[test]
+    fn toolbar_collapsed_roundtrips_in_preferences() {
+        let saved = OnboardingState {
+            simple_toolbar_collapsed: true,
+            ..Default::default()
+        };
+        let text = serde_json::to_string(&saved).expect("prefs serialize");
+        let loaded: OnboardingState = serde_json::from_str(&text).expect("prefs parse");
+        assert!(loaded.simple_toolbar_collapsed);
     }
 }
