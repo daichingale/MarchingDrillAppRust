@@ -2112,9 +2112,14 @@ impl DrillApp {
         } else {
             preview.extend_from_slice(before);
         }
+        self.sync_simple_mirror_drag();
     }
 
     fn commit_field_drag(&mut self) {
+        if self.simple_mode.enabled && self.simple_mode.mirror_moves {
+            self.commit_simple_mirror_drag();
+            return;
+        }
         let Some(before) = self.drag_before.take() else {
             return;
         };
@@ -4193,8 +4198,12 @@ impl DrillApp {
                 performer_ids,
                 positions: after,
             },
-            i18n::registered(self.locale, "app-state.054"),
+            self.formation_change_failure(),
         );
+    }
+
+    fn formation_change_failure(&self) -> &'static str {
+        i18n::registered(self.locale, "app-state.054")
     }
 
     /// The one authoritative route for all command-surface arrangement

@@ -305,6 +305,11 @@ pub(crate) struct SimpleModeState {
     field_card: Option<egui::Rect>,
     /// Union of floating chrome from the last frame, so field clicks miss it.
     overlay_block: Option<egui::Rect>,
+    /// Left-right mirror while editing this session. Not part of the drill
+    /// file: drafts and named saves write `document` only.
+    pub(super) mirror_moves: bool,
+    /// Where unpaired partners are heading during a drag. Cleared on release.
+    mirror_preview: Vec<Point>,
 }
 
 /// One short chrome animation. Cleared as soon as it settles so the window
@@ -327,6 +332,7 @@ enum ChromeMotion {
 /// Filled controls use a deeper blue than the light accent wash. White text
 /// on the accent itself fails contrast; this stays in the same blue family.
 const SIMPLE_BLUE: Color32 = Color32::from_rgb(20, 96, 200);
+const SIMPLE_ORANGE: Color32 = Color32::from_rgb(196, 112, 24);
 const SIMPLE_INK: Color32 = Color32::from_rgb(28, 32, 40);
 const SIMPLE_CARD: Color32 = Color32::WHITE;
 const SIMPLE_MOTION_SECS: f32 = 0.26;
@@ -391,6 +397,7 @@ enum PhoneIcon {
     Close,
     ChevronDown,
     Tools,
+    Mirror,
 }
 
 fn simple_choice_button(
@@ -575,6 +582,17 @@ fn paint_phone_icon_at(
                 1.2 * s,
                 color,
             );
+        }
+        PhoneIcon::Mirror => {
+            painter.line_segment([p(0.0, -8.0), p(0.0, 8.0)], stroke);
+            painter.add(egui::Shape::line(
+                vec![p(-3.0, -6.0), p(-8.0, 0.0), p(-3.0, 6.0)],
+                stroke,
+            ));
+            painter.add(egui::Shape::line(
+                vec![p(3.0, -6.0), p(8.0, 0.0), p(3.0, 6.0)],
+                stroke,
+            ));
         }
     }
 }
@@ -949,7 +967,7 @@ impl DrillApp {
     /// `empty`, `placed`, `play`, `glossary`, `selected`, `recent`, `full`,
     /// `move`, `save`, `done`, `line`, `step`, `circle`, `nudge`, `walk`,
     /// `shows`, `hints`, `memo`, `numbers`, `shape`, `block`, `count`,
-    /// `places`, `pair`, `order`, `sheet`, `recover`, `guide-place`,
+    /// `places`, `pair`, `order`, `sheet`, `recover`, `mirror`, `guide-place`,
     /// `guide-move`, `guide-play`, `guide-playing`, or `guide-collapsed`.
     pub(crate) fn apply_qa_simple_fixture(&mut self) {
         let Ok(stage) = std::env::var("DRILLFORGE_QA_SIMPLE") else {
@@ -1213,6 +1231,16 @@ impl DrillApp {
         }
         if stage == "sheet" {
             self.simple_mode.show_sheet_open = true;
+        }
+        if stage == "mirror" {
+            self.onboarding.simple_pictogram_done = true;
+            self.simple_mode.hint_closed = true;
+            self.simple_mode.mirror_moves = true;
+            // 12 mirrors to 34 across the indoor axis at 23. The right person
+            // sits a step off so the orange "not mirrored" chip is visible.
+            self.place_performer_at(Point { x: 32.0, y: 16.0 }, false);
+            self.place_performer_at(Point { x: 26.0, y: 22.0 }, false);
+            self.replace_selection(std::iter::once(0).collect());
         }
         if stage == "order" || stage == "recover" {
             self.project_state
@@ -2115,6 +2143,30 @@ impl DrillApp {
                     blocked = true;
                 }
             }
+            let mirror_on = self.simple_mode.mirror_moves;
+            let (mirror_rect, mirror_click) = self.simple_pictogram_tile(
+                ui,
+                PictogramTile {
+                    icon: PhoneIcon::Mirror,
+                    label: i18n::registered(self.locale, "simple-mode.320"),
+                    tip: i18n::registered(self.locale, "simple-mode.325"),
+                    width: 72.0,
+                    enabled: !playing,
+                    active: mirror_on,
+                    pulse: false,
+                    filled: mirror_on,
+                    compact: false,
+                    time,
+                },
+            );
+            let _ = mirror_rect;
+            if mirror_click {
+                if playing {
+                    blocked = true;
+                } else {
+                    self.simple_toggle_mirror();
+                }
+            }
             let next_pulse = hint == Some(SimpleGuide::NextSet) && !playing;
             let (next_rect, next_click) = self.simple_pictogram_tile(
                 ui,
@@ -2796,7 +2848,15 @@ impl DrillApp {
 
     fn simple_commit_arrangement(&mut self, points: Vec<Point>, note: &'static str) {
         let revision = self.history.revision();
-        self.commit_layout(points);
+        if self.simple_mode.mirror_moves {
+            let selected: Vec<usize> = self.selected.iter().copied().collect();
+            if selected.len() == points.len() {
+                let driven: Vec<(usize, Point)> = selected.into_iter().zip(points).collect();
+                self.simple_commit_symmetric_driven(&driven);
+            }
+        } else {
+            self.commit_layout(points);
+        }
         if self.history.revision() != revision {
             self.simple_mark(revision, note);
             self.bump_simple_motion(ChromeMotion::Move);
@@ -3689,9 +3749,295 @@ impl DrillApp {
             return;
         }
         let revision = self.history.revision();
-        self.nudge_selected(horizontal, vertical);
+        if self.simple_mode.mirror_moves {
+            let grid = self.document.grid.clone();
+            let dx = grid.horizontal_units / f32::from(grid.horizontal_steps.max(1));
+            let dy = grid.vertical_units / f32::from(grid.vertical_steps.max(1));
+            let points: Vec<Point> = self
+                .selected_points()
+                .into_iter()
+                .map(|point| Point {
+                    x: (point.x + dx * horizontal as f32).clamp(0.0, grid.max_x()),
+                    y: (point.y + dy * vertical as f32).clamp(0.0, grid.max_y()),
+                })
+                .collect();
+            let selected: Vec<usize> = self.selected.iter().copied().collect();
+            let driven: Vec<(usize, Point)> = selected.into_iter().zip(points).collect();
+            self.simple_commit_symmetric_driven(&driven);
+        } else {
+            self.nudge_selected(horizontal, vertical);
+        }
         if self.history.revision() != revision {
             self.simple_mark(revision, "simple-mode.182");
+            self.bump_simple_motion(ChromeMotion::Move);
+        }
+    }
+
+    /// Session-only. Nothing is written into the drill file.
+    fn simple_toggle_mirror(&mut self) {
+        self.simple_mode.mirror_moves = !self.simple_mode.mirror_moves;
+        self.simple_mode.mirror_preview.clear();
+    }
+
+    fn simple_mirror_axis(&self) -> f32 {
+        self.document.grid.width * 0.5
+    }
+
+    fn simple_mirror_tolerance(&self) -> f32 {
+        let grid = &self.document.grid;
+        let step = grid.horizontal_units / f32::from(grid.horizontal_steps.max(1));
+        drill_core::symmetry::center_tolerance(step)
+    }
+
+    fn simple_current_positions(&self) -> Option<Vec<Point>> {
+        self.document
+            .sets
+            .get(self.current_set)
+            .map(|set| set.positions.clone())
+    }
+
+    fn simple_snap_clamp(&self, points: &[Point]) -> Vec<Point> {
+        let grid = &self.document.grid;
+        points
+            .iter()
+            .map(|point| {
+                let point = grid.snap(*point);
+                Point {
+                    x: point.x.clamp(0.0, grid.max_x()),
+                    y: point.y.clamp(0.0, grid.max_y()),
+                }
+            })
+            .collect()
+    }
+
+    fn simple_mirrored_positions(
+        &self,
+        current: &[Point],
+        driven: &[(usize, Point)],
+    ) -> Vec<Point> {
+        let moved = drill_core::symmetry::mirror_move(
+            current,
+            self.simple_mirror_axis(),
+            self.simple_mirror_tolerance(),
+            driven,
+        );
+        self.simple_snap_clamp(&moved)
+    }
+
+    /// One history step for the chosen people and any partner who has to follow.
+    fn simple_commit_symmetric_driven(&mut self, driven: &[(usize, Point)]) -> bool {
+        let Some(current) = self.simple_current_positions() else {
+            return false;
+        };
+        let next = self.simple_mirrored_positions(&current, driven);
+        self.simple_commit_position_list(next)
+    }
+
+    fn simple_commit_position_list(&mut self, next: Vec<Point>) -> bool {
+        if !self.ensure_editable_set_start() {
+            return false;
+        }
+        let Some(set) = self.document.sets.get(self.current_set) else {
+            return false;
+        };
+        if next.len() != set.positions.len() {
+            return false;
+        }
+        let current = set.positions.clone();
+        if next == current {
+            return false;
+        }
+        let generated_by = set.generated_by;
+        let set_id = set.id;
+        let failure = self.formation_change_failure();
+        if let Some(generator_id) = generated_by {
+            let mut document = self.document.clone();
+            if let Some(set) = document.sets.get_mut(self.current_set) {
+                set.positions = next;
+            }
+            document.detach_generator(generator_id);
+            return self.execute_edit(
+                Edit::ReplaceDocument {
+                    document: Box::new(document),
+                },
+                failure,
+            );
+        }
+        let mut performer_ids = Vec::new();
+        let mut positions = Vec::new();
+        for (index, point) in next.iter().enumerate() {
+            if current.get(index) == Some(point) {
+                continue;
+            }
+            let Some(performer) = self.document.performers.get(index) else {
+                continue;
+            };
+            performer_ids.push(performer.id);
+            positions.push(*point);
+        }
+        if performer_ids.is_empty() {
+            return false;
+        }
+        self.execute_edit(
+            Edit::MovePerformers {
+                set_id,
+                performer_ids,
+                positions,
+            },
+            failure,
+        )
+    }
+
+    pub(super) fn sync_simple_mirror_drag(&mut self) {
+        self.simple_mode.mirror_preview.clear();
+        if !self.simple_mode.enabled || !self.simple_mode.mirror_moves {
+            return;
+        }
+        let (Some(before), Some(preview)) = (self.drag_before.clone(), self.drag_preview.clone())
+        else {
+            return;
+        };
+        if preview == before {
+            return;
+        }
+        let Some(current) = self.simple_current_positions() else {
+            return;
+        };
+        let selected: Vec<usize> = self.selected.iter().copied().collect();
+        if selected.len() != preview.len() {
+            return;
+        }
+        let driven: Vec<(usize, Point)> = selected.iter().copied().zip(preview).collect();
+        let snapped = self.simple_mirrored_positions(&current, &driven);
+        let Some(preview) = self.drag_preview.as_mut() else {
+            return;
+        };
+        for (slot, &index) in selected.iter().enumerate() {
+            if let (Some(slot_point), Some(point)) = (preview.get_mut(slot), snapped.get(index)) {
+                *slot_point = *point;
+            }
+        }
+        let partners = drill_core::symmetry::pair_across_center(
+            &current,
+            self.simple_mirror_axis(),
+            self.simple_mirror_tolerance(),
+        );
+        for &index in &selected {
+            let Some(partner) = partners.get(index).copied().flatten() else {
+                continue;
+            };
+            if selected.contains(&partner) {
+                continue;
+            }
+            if let Some(point) = snapped.get(partner).copied()
+                && current.get(partner).copied() != Some(point)
+            {
+                self.simple_mode.mirror_preview.push(point);
+            }
+        }
+    }
+
+    pub(super) fn commit_simple_mirror_drag(&mut self) {
+        let Some(before) = self.drag_before.take() else {
+            return;
+        };
+        let after = self.drag_preview.take().unwrap_or_else(|| before.clone());
+        self.simple_mode.mirror_preview.clear();
+        self.field_viewport.dots_landed();
+        self.drag_origin = None;
+        if before == after || !self.is_editable_set_start() {
+            return;
+        }
+        let selected: Vec<usize> = self.selected.iter().copied().collect();
+        if selected.len() != after.len() {
+            return;
+        }
+        let driven: Vec<(usize, Point)> = selected.into_iter().zip(after).collect();
+        if self.simple_commit_symmetric_driven(&driven) {
+            self.onboarding.simple_drag_tip_seen = true;
+        }
+    }
+
+    fn simple_unmirrored_count(&self) -> usize {
+        let Some(positions) = self
+            .document
+            .sets
+            .get(self.current_set)
+            .map(|set| &set.positions)
+        else {
+            return 0;
+        };
+        drill_core::symmetry::unmirrored_count(
+            positions,
+            self.simple_mirror_axis(),
+            self.simple_mirror_tolerance(),
+        )
+    }
+
+    fn simple_selection_has_partner(&self) -> bool {
+        let Some(positions) = self
+            .document
+            .sets
+            .get(self.current_set)
+            .map(|set| set.positions.clone())
+        else {
+            return false;
+        };
+        let partners = drill_core::symmetry::pair_across_center(
+            &positions,
+            self.simple_mirror_axis(),
+            self.simple_mirror_tolerance(),
+        );
+        self.selected.iter().any(|&index| {
+            partners
+                .get(index)
+                .copied()
+                .flatten()
+                .is_some_and(|partner| !self.selected.contains(&partner))
+        })
+    }
+
+    /// The side the selection sits on. A tie, or a selection that is only the
+    /// center line, keeps the left side and moves the right.
+    fn simple_master_is_left(&self, positions: &[Point]) -> bool {
+        let axis = self.simple_mirror_axis();
+        let tolerance = self.simple_mirror_tolerance();
+        let mut left = 0usize;
+        let mut right = 0usize;
+        for &index in &self.selected {
+            let Some(point) = positions.get(index) else {
+                continue;
+            };
+            if drill_core::symmetry::on_center_line(*point, axis, tolerance) {
+                continue;
+            }
+            if point.x < axis {
+                left += 1;
+            } else {
+                right += 1;
+            }
+        }
+        left >= right
+    }
+
+    fn simple_align_partners(&mut self) {
+        if !self.simple_mode.mirror_moves || self.playing || !self.ensure_editable_set_start() {
+            return;
+        }
+        let Some(current) = self.simple_current_positions() else {
+            return;
+        };
+        let aligned = drill_core::symmetry::align_to_side(
+            &current,
+            self.simple_mirror_axis(),
+            self.simple_mirror_tolerance(),
+            self.simple_master_is_left(&current),
+        );
+        let snapped = self.simple_snap_clamp(&aligned);
+        let revision = self.history.revision();
+        self.simple_commit_position_list(snapped);
+        if self.history.revision() != revision {
+            self.simple_mark(revision, "simple-mode.323");
             self.bump_simple_motion(ChromeMotion::Move);
         }
     }
@@ -4805,6 +5151,7 @@ impl DrillApp {
         self.simple_overlay_members(&ctx, field, &mut block);
         self.simple_overlay_sets(&ctx, field, &mut block);
         self.simple_overlay_chrome(&ctx, field, &mut block);
+        self.simple_overlay_symmetry(&ctx, field, &mut block);
         self.simple_overlay_recovery(&ctx, field, &mut block);
         if self.simple_toolbar_open() {
             self.simple_overlay_toolbar(&ctx, field, fade, &mut block);
@@ -5022,6 +5369,40 @@ impl DrillApp {
             .fixed_pos(pos)
             .show(ctx, |ui| {
                 self.simple_recovery_banner(ui);
+            });
+        overlay_union(block, response.response.rect);
+    }
+
+    /// Warning and the match button float on the field. They do not take a row.
+    fn simple_overlay_symmetry(
+        &mut self,
+        ctx: &egui::Context,
+        field: egui::Rect,
+        block: &mut Option<egui::Rect>,
+    ) {
+        if !self.simple_mode.mirror_moves || self.playing {
+            return;
+        }
+        let count = self.simple_unmirrored_count();
+        let show_rule = self.simple_selection_has_partner();
+        if count == 0 && !show_rule {
+            return;
+        }
+        let pos = Pos2::new(field.center().x, field.top() + 64.0);
+        let response = egui::Area::new(egui::Id::new("simple-overlay-symmetry"))
+            .order(egui::Order::Foreground)
+            .pivot(egui::Align2::CENTER_TOP)
+            .fixed_pos(pos)
+            .show(ctx, |ui| {
+                egui::Frame::new()
+                    .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 230))
+                    .stroke(Stroke::new(1.5, SIMPLE_ORANGE))
+                    .corner_radius(16.0)
+                    .inner_margin(egui::Margin::symmetric(10, 6))
+                    .show(ui, |ui| {
+                        ui.set_max_width((field.width() - 24.0).max(160.0));
+                        self.simple_symmetry_overlay(ui);
+                    });
             });
         overlay_union(block, response.response.rect);
     }
@@ -6169,6 +6550,7 @@ impl DrillApp {
         self.paint_simple_paths(&painter, &to_screen);
         self.paint_simple_audience(&painter, rect, &to_screen);
         self.paint_simple_sides(&painter, rect, &to_screen);
+        self.paint_simple_center_line(&painter, &to_screen);
         self.paint_simple_floor(&painter, rect, &to_screen);
         self.paint_simple_focus_wash(&painter, &to_screen);
         self.paint_simple_outside_rings(&painter, &to_screen);
@@ -6253,12 +6635,22 @@ impl DrillApp {
                 painter.circle_filled(pos, 8.0, Color32::from_rgb(100, 235, 255));
                 painter.circle_stroke(pos, 11.0, Stroke::new(2.0, Color32::WHITE));
             }
+            for &point in &self.simple_mode.mirror_preview {
+                let pos = to_screen(point);
+                painter.circle_filled(pos, 8.0, Color32::from_rgba_unmultiplied(20, 96, 200, 70));
+                painter.circle_stroke(
+                    pos,
+                    14.0,
+                    Stroke::new(2.0, Color32::from_rgba_unmultiplied(20, 96, 200, 180)),
+                );
+            }
         }
         let select_ease = self
             .simple_motion_ease()
             .filter(|(kind, _, _)| matches!(kind, ChromeMotion::Select | ChromeMotion::Place))
             .map(|(_, ease, _)| ease)
             .unwrap_or(1.0);
+        self.paint_simple_partner_rings(&painter, &to_screen);
         for (index, &point) in self.frame_positions.iter().enumerate() {
             if self.selected.contains(&index) && self.drag_preview.is_none() {
                 let pos = to_screen(point);
@@ -6459,6 +6851,108 @@ impl DrillApp {
             to_screen(right),
             i18n::registered(self.locale, "simple-mode.207"),
         );
+    }
+
+    fn paint_simple_center_line(
+        &self,
+        painter: &egui::Painter,
+        to_screen: &impl Fn(Point) -> Pos2,
+    ) {
+        if !self.simple_mode.mirror_moves {
+            return;
+        }
+        let axis = self.simple_mirror_axis();
+        let top = to_screen(Point {
+            x: axis,
+            y: self.document.grid.height,
+        });
+        let bottom = to_screen(Point { x: axis, y: 0.0 });
+        painter.line_segment(
+            [top, bottom],
+            Stroke::new(2.0, Color32::from_rgba_unmultiplied(20, 96, 200, 90)),
+        );
+    }
+
+    fn paint_simple_partner_rings(
+        &self,
+        painter: &egui::Painter,
+        to_screen: &impl Fn(Point) -> Pos2,
+    ) {
+        if !self.simple_mode.mirror_moves || self.drag_preview.is_some() {
+            return;
+        }
+        let positions = if self.frame_positions.len() == self.document.performers.len() {
+            self.frame_positions.clone()
+        } else {
+            let Some(positions) = self.simple_current_positions() else {
+                return;
+            };
+            positions
+        };
+        let partners = drill_core::symmetry::pair_across_center(
+            &positions,
+            self.simple_mirror_axis(),
+            self.simple_mirror_tolerance(),
+        );
+        let ink = Color32::from_rgba_unmultiplied(20, 96, 200, 170);
+        for &index in &self.selected {
+            let Some(partner) = partners.get(index).copied().flatten() else {
+                continue;
+            };
+            if self.selected.contains(&partner) {
+                continue;
+            }
+            let Some(point) = positions.get(partner) else {
+                continue;
+            };
+            let pos = to_screen(*point);
+            painter.circle_filled(pos, 16.0, Color32::from_rgba_unmultiplied(20, 96, 200, 28));
+            painter.circle_stroke(pos, 14.0, Stroke::new(2.0, ink));
+        }
+    }
+
+    /// Sits on top of the field so the picture underneath keeps its height.
+    fn simple_symmetry_overlay(&mut self, ui: &mut egui::Ui) {
+        let count = self.simple_unmirrored_count();
+        let show_rule = self.simple_selection_has_partner();
+        if count == 0 && !show_rule {
+            return;
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::Vec2::new(8.0, 8.0);
+            if count > 0 {
+                ui.label(
+                    egui::RichText::new(
+                        i18n::registered(self.locale, "simple-mode.322")
+                            .replace("{0}", &count.to_string()),
+                    )
+                    .size(14.0)
+                    .strong()
+                    .color(SIMPLE_ORANGE),
+                );
+                let label = i18n::registered(self.locale, "simple-mode.323");
+                let button =
+                    egui::Button::new(egui::RichText::new(label).size(15.0).color(SIMPLE_ORANGE))
+                        .min_size(egui::Vec2::new(72.0, 48.0))
+                        .fill(Color32::WHITE)
+                        .stroke(Stroke::new(1.5, SIMPLE_ORANGE))
+                        .corner_radius(18.0);
+                if ui
+                    .add_enabled(self.is_editable_set_start(), button)
+                    .on_hover_text(i18n::registered(self.locale, "simple-mode.324"))
+                    .clicked()
+                {
+                    self.simple_align_partners();
+                }
+            }
+            if show_rule {
+                ui.label(
+                    egui::RichText::new(i18n::registered(self.locale, "simple-mode.321"))
+                        .size(12.0)
+                        .color(super::app_theme::SECONDARY_TEXT),
+                );
+            }
+        });
     }
 }
 
@@ -11063,5 +11557,303 @@ mod tests {
         let block = block.expect("union");
         assert_eq!(block.min, Pos2::new(0.0, 0.0));
         assert_eq!(block.max, Pos2::new(20.0, 12.0));
+    }
+
+    fn place_free(app: &mut DrillApp, points: &[Point]) {
+        for point in points {
+            app.place_performer_at(*point, false);
+        }
+    }
+
+    fn field_step(app: &DrillApp) -> f32 {
+        let grid = &app.document.grid;
+        grid.horizontal_units / f32::from(grid.horizontal_steps.max(1))
+    }
+
+    fn near_point(a: Point, b: Point, tol: f32) -> bool {
+        (a.x - b.x).hypot(a.y - b.y) <= tol
+    }
+
+    fn mirrored_pair() -> DrillApp {
+        let mut app = empty_simple_app();
+        // Axis of the indoor floor is 23. 10 mirrors to 36.
+        place_free(
+            &mut app,
+            &[
+                Point { x: 10.0, y: 20.0 },
+                Point { x: 36.0, y: 20.0 },
+                Point { x: 10.0, y: 28.0 },
+                Point { x: 36.0, y: 28.0 },
+            ],
+        );
+        app.simple_mode.mirror_moves = true;
+        app
+    }
+
+    #[test]
+    fn step_and_arrow_nudge_mirrors_the_partner_and_one_undo_restores_both() {
+        let mut app = mirrored_pair();
+        let before = app.document.sets[0].positions.clone();
+        app.replace_selection(std::iter::once(0).collect());
+        let cursor = app.history.cursor();
+        // Arrow keys and the step buttons both call this.
+        app.simple_nudge(4, 1);
+        assert_eq!(app.history.cursor(), cursor + 1);
+        let after = &app.document.sets[0].positions;
+        let axis = app.document.grid.width * 0.5;
+        let expected = drill_core::editing::mirror(std::slice::from_ref(&after[0]), axis)[0];
+        assert!(
+            near_point(after[1], expected, field_step(&app) * 0.5 + 0.02),
+            "partner {:?} should mirror {:?} ({expected:?})",
+            after[1],
+            after[0]
+        );
+        assert!(after[0].x > before[0].x);
+        assert_eq!(after[2], before[2]);
+        assert_eq!(after[3], before[3]);
+        assert!(app.history.undo(&mut app.document));
+        assert_eq!(app.document.sets[0].positions, before);
+        assert_eq!(app.history.cursor(), cursor);
+    }
+
+    #[test]
+    fn drag_mirrors_the_partner_in_one_undo() {
+        let mut app = mirrored_pair();
+        let before = app.document.sets[0].positions.clone();
+        app.replace_selection(std::iter::once(0).collect());
+        let cursor = app.history.cursor();
+        app.begin_field_drag(Pos2::new(0.0, 0.0));
+        app.update_field_drag(Pos2::new(40.0, -20.0), 10.0, true);
+        assert!(
+            !app.simple_mode.mirror_preview.is_empty(),
+            "the partner preview follows the drag"
+        );
+        app.commit_field_drag();
+        assert_eq!(app.history.cursor(), cursor + 1);
+        let after = &app.document.sets[0].positions;
+        let axis = app.document.grid.width * 0.5;
+        let expected = drill_core::editing::mirror(std::slice::from_ref(&after[0]), axis)[0];
+        assert!(near_point(
+            after[1],
+            expected,
+            field_step(&app) * 0.5 + 0.02
+        ));
+        assert_ne!(after[0], before[0]);
+        assert!(app.history.undo(&mut app.document));
+        assert_eq!(app.document.sets[0].positions, before);
+    }
+
+    #[test]
+    fn line_and_arc_place_partners_on_the_mirror() {
+        let mut app = mirrored_pair();
+        app.replace_selection([0_usize, 2].into_iter().collect());
+        let partners = drill_core::symmetry::pair_across_center(
+            &app.document.sets[0].positions,
+            app.document.grid.width * 0.5,
+            app.simple_mirror_tolerance(),
+        );
+        assert_eq!(partners[0], Some(1));
+        assert_eq!(partners[2], Some(3));
+        app.simple_line_up();
+        assert_partners_mirror(&app);
+        assert!(app.history.undo(&mut app.document));
+        app.simple_arc_up();
+        assert_partners_mirror(&app);
+    }
+
+    fn assert_partners_mirror(app: &DrillApp) {
+        let positions = &app.document.sets[0].positions;
+        let axis = app.document.grid.width * 0.5;
+        // 0 and 2 were the driven side. Their original partners are 1 and 3.
+        for (master, partner) in [(0, 1), (2, 3)] {
+            let expected =
+                drill_core::editing::mirror(std::slice::from_ref(&positions[master]), axis)[0];
+            assert!(
+                near_point(positions[partner], expected, field_step(app) * 0.5 + 0.02),
+                "partner {partner} at {:?} is not the mirror of {master} at {:?} ({expected:?})",
+                positions[partner],
+                positions[master]
+            );
+        }
+    }
+
+    #[test]
+    fn unpaired_people_move_alone_and_center_people_only_move_forward() {
+        let mut app = empty_simple_app();
+        let axis = app.document.grid.width * 0.5;
+        place_free(
+            &mut app,
+            &[
+                Point { x: 8.0, y: 18.0 },
+                Point { x: 12.0, y: 24.0 },
+                Point { x: axis, y: 16.0 },
+            ],
+        );
+        app.simple_mode.mirror_moves = true;
+        let before = app.document.sets[0].positions.clone();
+        app.replace_selection(std::iter::once(0).collect());
+        app.simple_nudge(3, 0);
+        let moved = app.document.sets[0].positions[0];
+        assert!(moved.x > before[0].x);
+        assert_eq!(app.document.sets[0].positions[1], before[1]);
+        assert_eq!(app.document.sets[0].positions[2], before[2]);
+
+        app.replace_selection(std::iter::once(2).collect());
+        let center_before = app.document.sets[0].positions[2];
+        app.simple_nudge(4, -2);
+        let center = app.document.sets[0].positions[2];
+        assert!(
+            (center.x - axis).abs() <= field_step(&app) * 0.5 + 0.02,
+            "center x {} drifted off {axis}",
+            center.x
+        );
+        assert!(center.y < center_before.y);
+        assert_eq!(app.document.sets[0].positions[0], moved);
+    }
+
+    #[test]
+    fn mirror_off_moves_only_the_chosen_person() {
+        let mut app = mirrored_pair();
+        app.simple_mode.mirror_moves = false;
+        let before = app.document.sets[0].positions.clone();
+        app.replace_selection(std::iter::once(0).collect());
+        app.simple_nudge(2, 0);
+        let after = &app.document.sets[0].positions;
+        assert_ne!(after[0], before[0]);
+        assert_eq!(after[1], before[1]);
+    }
+
+    #[test]
+    fn align_matches_the_other_side_and_one_undo_restores_it() {
+        let mut app = empty_simple_app();
+        place_free(
+            &mut app,
+            &[Point { x: 10.0, y: 20.0 }, Point { x: 30.0, y: 22.0 }],
+        );
+        app.simple_mode.mirror_moves = true;
+        let before = app.document.sets[0].positions.clone();
+        assert_eq!(app.simple_unmirrored_count(), 2);
+        app.replace_selection(std::iter::once(0).collect());
+        assert!(app.simple_selection_has_partner());
+        let cursor = app.history.cursor();
+        app.simple_align_partners();
+        assert_eq!(app.history.cursor(), cursor + 1);
+        let after = &app.document.sets[0].positions;
+        let axis = app.document.grid.width * 0.5;
+        let expected = drill_core::editing::mirror(std::slice::from_ref(&after[0]), axis)[0];
+        assert!(near_point(
+            after[1],
+            expected,
+            field_step(&app) * 0.5 + 0.02
+        ));
+        assert_eq!(app.simple_unmirrored_count(), 0);
+        assert!(app.history.undo(&mut app.document));
+        assert_eq!(app.document.sets[0].positions, before);
+        assert_eq!(app.simple_unmirrored_count(), 2);
+    }
+
+    #[test]
+    fn choosing_the_right_side_aligns_the_left_to_it() {
+        let mut app = empty_simple_app();
+        place_free(
+            &mut app,
+            &[Point { x: 10.0, y: 20.0 }, Point { x: 30.0, y: 24.0 }],
+        );
+        app.simple_mode.mirror_moves = true;
+        app.replace_selection(std::iter::once(1).collect());
+        app.simple_align_partners();
+        let after = &app.document.sets[0].positions;
+        let axis = app.document.grid.width * 0.5;
+        let expected = drill_core::editing::mirror(std::slice::from_ref(&after[1]), axis)[0];
+        let tol = field_step(&app) * 0.5 + 0.02;
+        assert!(near_point(after[0], expected, tol));
+        assert!(
+            (after[1].x - 30.0).abs() <= tol && (after[1].y - 24.0).abs() <= tol,
+            "the chosen side should stay put, got {:?}",
+            after[1]
+        );
+    }
+
+    #[test]
+    fn mirror_toggle_is_not_written_into_the_file() {
+        let mut app = mirrored_pair();
+        let dirty = app.dirty;
+        let revision = app.history.revision();
+        let before = app.document.to_json().expect("json");
+        app.simple_toggle_mirror();
+        assert!(!app.simple_mode.mirror_moves);
+        app.simple_toggle_mirror();
+        assert!(app.simple_mode.mirror_moves);
+        assert_eq!(app.dirty, dirty);
+        assert_eq!(app.history.revision(), revision);
+        let json = app.document.to_json().expect("json");
+        assert_eq!(json, before);
+        assert!(!json.contains("mirror_moves"));
+        let dir = std::env::temp_dir().join(format!(
+            "drillforge-mirror-{}-{}",
+            std::process::id(),
+            "toggle"
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("show.drill.json");
+        app.simple_mode.draft_path_override = Some(path.clone());
+        assert!(app.write_simple_draft());
+        let saved = std::fs::read_to_string(&path).expect("draft");
+        assert!(!saved.contains("mirror_moves"));
+        let loaded = drill_core::Document::from_json(&saved).expect("load");
+        assert_eq!(loaded.performers.len(), app.document.performers.len());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn mid_count_still_blocks_mirrored_edits() {
+        let mut app = mirrored_pair();
+        app.replace_selection(std::iter::once(0).collect());
+        app.count_position = 4.0;
+        assert!(!app.is_editable_set_start());
+        let before = app.document.sets[0].positions.clone();
+        let cursor = app.history.cursor();
+        app.simple_nudge(2, 0);
+        app.simple_line_up();
+        app.simple_arc_up();
+        app.simple_align_partners();
+        app.begin_field_drag(Pos2::new(0.0, 0.0));
+        app.update_field_drag(Pos2::new(40.0, 0.0), 10.0, true);
+        app.commit_field_drag();
+        assert_eq!(app.document.sets[0].positions, before);
+        assert_eq!(app.history.cursor(), cursor);
+    }
+
+    #[test]
+    fn full_mode_symmetry_does_not_follow_the_simple_mirror_flag() {
+        let mut app = mirrored_pair();
+        app.simple_mode.enabled = false;
+        let before = app.document.sets[0].positions.clone();
+        app.replace_selection(std::iter::once(0).collect());
+        app.nudge_selected(2, 0);
+        assert_ne!(app.document.sets[0].positions[0], before[0]);
+        assert_eq!(app.document.sets[0].positions[1], before[1]);
+
+        app.document.sets[0].positions = before.clone();
+        app.replace_selection(std::iter::once(0).collect());
+        app.mirror_selection_across_field();
+        assert_eq!(app.document.sets[0].positions[1], before[1]);
+        let axis = app.document.grid.width * 0.5;
+        let mirrored = drill_core::editing::mirror(std::slice::from_ref(&before[0]), axis)[0];
+        let snapped = app.document.grid.snap(mirrored);
+        assert!(near_point(
+            app.document.sets[0].positions[0],
+            Point {
+                x: snapped.x.clamp(0.0, app.document.grid.max_x()),
+                y: snapped.y.clamp(0.0, app.document.grid.max_y()),
+            },
+            0.05
+        ));
+
+        app.document.sets[0].positions = before;
+        app.replace_selection((0..4).collect());
+        let radial_before = app.document.sets[0].positions.clone();
+        app.apply_radial_selection(2);
+        assert_ne!(app.document.sets[0].positions, radial_before);
     }
 }
