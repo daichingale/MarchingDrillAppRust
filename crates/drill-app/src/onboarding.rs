@@ -27,6 +27,9 @@ pub struct OnboardingState {
     /// uses [`Default`], which opens the simple field.
     #[serde(default = "existing_user_prefers_full_editor")]
     pub prefer_simple: bool,
+    /// Collapsed floating toolbar in Simple Mode. Missing means expanded.
+    #[serde(default)]
+    pub simple_toolbar_collapsed: bool,
     #[serde(skip)]
     pub show_welcome: bool,
     #[serde(skip)]
@@ -45,6 +48,7 @@ impl Default for OnboardingState {
             simple_steps_dismissed: false,
             simple_pictogram_done: false,
             prefer_simple: true,
+            simple_toolbar_collapsed: false,
             show_welcome: true,
             show_help: false,
             persisted: String::new(),
@@ -307,5 +311,16 @@ mod tests {
         assert!(state.welcome_seen);
         assert!(!state.prefer_simple);
         assert!(state.simple_pictogram_done);
+        assert!(!state.simple_toolbar_collapsed);
+    }
+    #[test]
+    fn toolbar_collapsed_roundtrips_in_preferences() {
+        let saved = OnboardingState {
+            simple_toolbar_collapsed: true,
+            ..Default::default()
+        };
+        let text = serde_json::to_string(&saved).expect("prefs serialize");
+        let loaded: OnboardingState = serde_json::from_str(&text).expect("prefs parse");
+        assert!(loaded.simple_toolbar_collapsed);
     }
 }

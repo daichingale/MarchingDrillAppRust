@@ -67,9 +67,6 @@ fn native_options() -> eframe::NativeOptions {
 
 fn qa_inner_size() -> [f32; 2] {
     const DEFAULT: [f32; 2] = [1280.0, 800.0];
-    if std::env::var_os("EFRAME_SCREENSHOT_TO").is_none() {
-        return DEFAULT;
-    }
     if let Ok(raw) = std::env::var("DRILLFORGE_QA_SIZE") {
         let mut parts = raw.split('x');
         if let (Some(width), Some(height)) = (parts.next(), parts.next())
@@ -80,9 +77,7 @@ fn qa_inner_size() -> [f32; 2] {
             return [width, height];
         }
     }
-    // Simple Mode's extra rows need a taller frame so the field, lock, and
-    // pictogram dock stay in the PNG. Production stays at 1280×800.
-    [1280.0, 1200.0]
+    DEFAULT
 }
 
 fn install_fonts(context: &egui::Context) {
