@@ -907,7 +907,8 @@ impl DrillApp {
     /// `empty`, `placed`, `play`, `glossary`, `selected`, `recent`, `full`,
     /// `move`, `save`, `done`, `line`, `step`, `circle`, `nudge`, `walk`,
     /// `shows`, `hints`, `memo`, `numbers`, `shape`, `block`, `count`,
-    /// `places`, `pair`, `order`, `sheet`, or `recover`.
+    /// `places`, `pair`, `order`, `sheet`, `recover`, `guide-place`,
+    /// `guide-move`, `guide-play`, or `guide-playing`.
     pub(crate) fn apply_qa_simple_fixture(&mut self) {
         let Ok(stage) = std::env::var("DRILLFORGE_QA_SIMPLE") else {
             return;
@@ -915,6 +916,10 @@ impl DrillApp {
         self.onboarding.show_welcome = false;
         self.simple_mode.enabled = true;
         self.begin_simple_show();
+        if stage.starts_with("guide-") {
+            self.apply_qa_simple_guide(&stage);
+            return;
+        }
         if stage == "empty" {
             return;
         }
@@ -1185,6 +1190,96 @@ impl DrillApp {
                     stale_for: Duration::from_secs(90),
                 });
         }
+        self.settle_qa_simple_chrome();
+    }
+
+    fn apply_qa_simple_guide(&mut self, stage: &str) {
+        self.onboarding.simple_pictogram_done = false;
+        self.simple_mode.hint_closed = false;
+        self.simple_mode.hint_pulse_only = false;
+        // Pass 2 of the screenshot harness is only a few milliseconds in.
+        // Start the ghost finger mid-demo so the PNG is not an empty pulse.
+        self.simple_mode.hint_phase_at = Some(Instant::now() - Duration::from_millis(500));
+        self.simple_mode.last_input_at = Some(Instant::now());
+        match stage {
+            "guide-place" => {}
+            "guide-move" => {
+                self.place_performer_at(Point { x: 12.0, y: 16.0 }, true);
+                self.place_performer_at(Point { x: 20.0, y: 16.0 }, true);
+                self.place_performer_at(Point { x: 16.0, y: 22.0 }, true);
+                self.simple_mark_hint(SimpleGuide::Place);
+                self.simple_mode.hint_phase_at = Some(Instant::now() - Duration::from_millis(500));
+            }
+            "guide-play" => {
+                self.place_performer_at(Point { x: 12.0, y: 16.0 }, true);
+                self.place_performer_at(Point { x: 20.0, y: 16.0 }, true);
+                self.simple_mark_hint(SimpleGuide::Place);
+                self.simple_mark_hint(SimpleGuide::Move);
+                self.duplicate_current_set();
+                let set_id = self.document.sets[self.current_set].id;
+                let performer_id = self.document.performers[0].id;
+                let moved = self.document.sets[self.current_set].positions[0];
+                let _ = self.execute_edit(
+                    Edit::MovePerformers {
+                        set_id,
+                        performer_ids: vec![performer_id],
+                        positions: vec![Point {
+                            x: moved.x + 6.0,
+                            y: moved.y,
+                        }],
+                    },
+                    "qa",
+                );
+                self.simple_mark_hint(SimpleGuide::NextSet);
+                self.simple_mode.hint_phase_at = Some(Instant::now() - Duration::from_millis(500));
+            }
+            "guide-playing" => {
+                self.place_performer_at(Point { x: 12.0, y: 16.0 }, true);
+                self.place_performer_at(Point { x: 20.0, y: 16.0 }, true);
+                self.duplicate_current_set();
+                let set_id = self.document.sets[self.current_set].id;
+                let performer_id = self.document.performers[0].id;
+                let moved = self.document.sets[self.current_set].positions[0];
+                let _ = self.execute_edit(
+                    Edit::MovePerformers {
+                        set_id,
+                        performer_ids: vec![performer_id],
+                        positions: vec![Point {
+                            x: moved.x + 6.0,
+                            y: moved.y,
+                        }],
+                    },
+                    "qa",
+                );
+                self.simple_mark_hint(SimpleGuide::Place);
+                self.simple_mark_hint(SimpleGuide::Move);
+                self.simple_mark_hint(SimpleGuide::NextSet);
+                self.simple_mark_hint(SimpleGuide::Play);
+                self.current_set = 0;
+                self.nav_glide.settle();
+                let counts = self
+                    .document
+                    .sets
+                    .first()
+                    .map(|set| set.counts.max(1))
+                    .unwrap_or(16);
+                self.count_position = 6.0_f32.min(f32::from(counts) * 0.5);
+                self.playback_start = 0;
+                self.playback_end = self.document.timeline_counts();
+                self.playing = true;
+                self.speed = 0.0;
+                self.document.positions_at(
+                    self.current_set,
+                    self.count_position / f32::from(counts),
+                    &mut self.frame_positions,
+                );
+            }
+            _ => {}
+        }
+        self.settle_qa_simple_chrome();
+    }
+
+    fn settle_qa_simple_chrome(&mut self) {
         // The harness grabs pass 2, before a 260ms ease would finish.
         // Show the settled chrome instead of a half-played ring.
         self.simple_mode.seen_people = self.document.performers.len();
@@ -10478,5 +10573,31 @@ mod tests {
         assert!(path.exists());
         assert!(app.simple_mode.check_until.is_some());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn qa_guide_stages_open_the_matching_hint() {
+        let mut place = empty_simple_app();
+        place.apply_qa_simple_guide("guide-place");
+        assert!(place.document.performers.is_empty());
+        assert_eq!(place.simple_active_hint(), Some(SimpleGuide::Place));
+
+        let mut moved = empty_simple_app();
+        moved.apply_qa_simple_guide("guide-move");
+        assert_eq!(moved.document.performers.len(), 3);
+        assert_eq!(moved.simple_active_hint(), Some(SimpleGuide::Move));
+
+        let mut play = empty_simple_app();
+        play.apply_qa_simple_guide("guide-play");
+        assert_eq!(play.document.sets.len(), 2);
+        assert_eq!(play.simple_active_hint(), Some(SimpleGuide::Play));
+
+        let mut playing = empty_simple_app();
+        playing.apply_qa_simple_guide("guide-playing");
+        assert!(playing.playing);
+        assert_eq!(playing.current_set, 0);
+        assert!(playing.playback_end >= playing.document.timeline_counts());
+        assert!(playing.onboarding.simple_pictogram_done);
+        assert!(playing.simple_active_hint().is_none());
     }
 }
