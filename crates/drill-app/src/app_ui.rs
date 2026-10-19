@@ -1572,7 +1572,10 @@ impl eframe::App for DrillApp {
                 self.show_workspace_inspector(&mut column, set_counts);
             }
             let available = ui.available_size();
-            let (response, painter) = ui.allocate_painter(available, Sense::click_and_drag());
+            let (response, mut painter) = ui.allocate_painter(available, Sense::click_and_drag());
+            if !self.full_legacy_chrome && !self.focus_field {
+                painter.set_clip_rect(self.full_field_paint_clip(ui.ctx(), response.rect));
+            }
             if !self.is_editable_set_start() {
                 let current_set_name = self
                     .document
@@ -3165,193 +3168,214 @@ impl DrillApp {
 
     pub(crate) fn show_timeline_playback_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
-            if ui
-                .button(if self.playing {
-                    text(self.locale, Text::Pause)
-                } else {
-                    text(self.locale, Text::Play)
-                })
-                .clicked()
-            {
-                self.toggle_playback(ui.ctx());
-            }
-            if ui
-                .button(super::i18n::registered(self.locale, "core-edit.033"))
-                .on_hover_text(super::i18n::registered(self.locale, "core-edit.034"))
-                .clicked()
-            {
-                self.jump_to_show_start();
-            }
-            self.show_playback_speed_presets(ui);
-            let live_bpm =
-                super::playhead_bpm(&self.document, self.current_set, self.count_position).round()
-                    as i32;
-            ui.label(
-                super::i18n::registered(self.locale, "full-mode.034")
-                    .replace("{0}", &live_bpm.to_string()),
-            );
-            let scene_bpm = self.scene_opening_bpm();
-            ui.label(
-                super::i18n::registered(self.locale, "full-mode.075")
-                    .replace("{0}", &scene_bpm.to_string()),
-            )
-            .on_hover_text(super::i18n::registered(self.locale, "full-mode.076"));
-            if ui
-                .button("−")
-                .on_hover_text(super::i18n::registered(self.locale, "full-mode.077"))
-                .clicked()
-            {
-                self.scene_tempo_slower();
-            }
-            if ui
-                .button("＋")
-                .on_hover_text(super::i18n::registered(self.locale, "full-mode.078"))
-                .clicked()
-            {
-                self.scene_tempo_faster();
-            }
-            let current_walk = self.current_scene_walk();
-            ui.menu_button(
-                super::i18n::registered(self.locale, "full-mode.059"),
-                |ui| {
-                    ui.small(super::i18n::registered(self.locale, "full-mode.060"));
-                    self.scene_walk_choice(
-                        ui,
-                        current_walk,
-                        super::SceneWalk::Steady,
-                        super::i18n::registered(self.locale, "full-mode.061"),
-                        super::i18n::registered(self.locale, "full-mode.062"),
-                    );
-                    self.scene_walk_choice(
-                        ui,
-                        current_walk,
-                        super::SceneWalk::Smooth,
-                        super::i18n::registered(self.locale, "full-mode.063"),
-                        super::i18n::registered(self.locale, "full-mode.064"),
-                    );
-                    self.scene_walk_choice(
-                        ui,
-                        current_walk,
-                        super::SceneWalk::LeaveSlow,
-                        super::i18n::registered(self.locale, "full-mode.065"),
-                        super::i18n::registered(self.locale, "full-mode.066"),
-                    );
-                    self.scene_walk_choice(
-                        ui,
-                        current_walk,
-                        super::SceneWalk::ArriveSlow,
-                        super::i18n::registered(self.locale, "full-mode.067"),
-                        super::i18n::registered(self.locale, "full-mode.068"),
-                    );
-                    self.scene_walk_choice(
-                        ui,
-                        current_walk,
-                        super::SceneWalk::Arc,
-                        super::i18n::registered(self.locale, "full-mode.069"),
-                        super::i18n::registered(self.locale, "full-mode.070"),
-                    );
-                    self.scene_walk_choice(
-                        ui,
-                        current_walk,
-                        super::SceneWalk::ArcOther,
-                        super::i18n::registered(self.locale, "full-mode.071"),
-                        super::i18n::registered(self.locale, "full-mode.072"),
-                    );
-                },
-            );
-            ui.checkbox(
-                &mut self.count_in_enabled,
-                super::i18n::registered(self.locale, "full-mode.006"),
-            )
-            .on_hover_text(super::i18n::registered(self.locale, "full-mode.007"));
-            ui.checkbox(
-                &mut self.playback_paths,
-                super::i18n::registered(self.locale, "rehearsal.010"),
-            )
-            .on_hover_text(super::i18n::registered(self.locale, "rehearsal.011"));
-            ui.checkbox(
-                &mut self.show_next_places,
-                super::i18n::registered(self.locale, "full-mode.080"),
-            )
-            .on_hover_text(super::i18n::registered(self.locale, "full-mode.081"));
-            if let Some(left) = self.count_in_remaining {
-                let shown = super::count_in_display(left);
-                ui.strong(
-                    super::i18n::registered(self.locale, "full-mode.008")
-                        .replace("{0}", &shown.to_string()),
-                );
-            }
-            if ui
-                .button(super::i18n::registered(self.locale, "full-mode.028"))
-                .on_hover_text(super::i18n::registered(self.locale, "full-mode.029"))
-                .clicked()
-            {
-                let csv =
-                    coordinates::set_coordinates_csv(&self.document, self.current_set, self.locale);
-                ui.ctx().copy_text(csv);
-                self.status = super::i18n::registered(self.locale, "full-mode.030").into();
-            }
-            let scene_start = self.document.global_count(self.current_set, 0.0) as u32;
-            let scene_end = (scene_start + u32::from(self.document.sets[self.current_set].counts))
-                .min(self.document.timeline_counts());
-            let repeating = self.loop_playback
-                && self.playback_start == scene_start
-                && self.playback_end == scene_end;
-            if ui
-                .selectable_label(
-                    repeating,
-                    super::i18n::registered(self.locale, "full-mode.049"),
-                )
-                .on_hover_text(super::i18n::registered(self.locale, "full-mode.050"))
-                .clicked()
-            {
-                let (start, end, looping) = super::toggle_scene_loop(
-                    self.playback_start,
-                    self.playback_end,
-                    self.loop_playback,
-                    scene_start,
-                    scene_end,
-                );
-                self.playback_start = start;
-                self.playback_end = end;
-                self.loop_playback = looping;
-                self.status = if looping {
-                    super::i18n::registered(self.locale, "full-mode.052").into()
-                } else {
-                    super::i18n::registered(self.locale, "full-mode.051").into()
-                };
-            }
-            let chosen = !self.selected.is_empty();
-            if ui
-                .add_enabled(
-                    chosen,
-                    egui::Button::new(super::i18n::registered(self.locale, "full-mode.053")),
-                )
-                .on_hover_text(super::i18n::registered(self.locale, "full-mode.054"))
-                .clicked()
-            {
-                let indices: Vec<usize> = self.selected.iter().copied().collect();
-                let sheet = coordinates::member_sheets(&self.document, &indices, self.locale);
-                ui.ctx().copy_text(sheet);
-                self.status = super::i18n::registered(self.locale, "full-mode.055").into();
-            }
-            if self.show_dot_labels
-                && super::hide_labels_for_playback(
-                    self.playing,
-                    self.document.performers.len(),
-                    self.labels_while_playing,
-                )
-            {
-                ui.label(super::i18n::registered(self.locale, "full-mode.056"));
-                if ui
-                    .small_button(super::i18n::registered(self.locale, "full-mode.057"))
-                    .on_hover_text(super::i18n::registered(self.locale, "full-mode.058"))
-                    .clicked()
-                {
-                    self.labels_while_playing = true;
-                }
-            }
+            self.timeline_transport_controls(ui);
+            self.timeline_tempo_controls(ui);
+            self.timeline_option_controls(ui);
         });
+    }
+
+    /// Tempo and rehearsal switches, in two rows, without repeating play or speed.
+    pub(crate) fn show_timeline_grouped_options(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            self.timeline_tempo_controls(ui);
+        });
+        ui.horizontal_wrapped(|ui| {
+            self.timeline_option_controls(ui);
+        });
+    }
+
+    fn timeline_transport_controls(&mut self, ui: &mut egui::Ui) {
+        if ui
+            .button(if self.playing {
+                text(self.locale, Text::Pause)
+            } else {
+                text(self.locale, Text::Play)
+            })
+            .clicked()
+        {
+            self.toggle_playback(ui.ctx());
+        }
+        if ui
+            .button(super::i18n::registered(self.locale, "core-edit.033"))
+            .on_hover_text(super::i18n::registered(self.locale, "core-edit.034"))
+            .clicked()
+        {
+            self.jump_to_show_start();
+        }
+        self.show_playback_speed_presets(ui);
+    }
+
+    fn timeline_tempo_controls(&mut self, ui: &mut egui::Ui) {
+        let live_bpm = super::playhead_bpm(&self.document, self.current_set, self.count_position)
+            .round() as i32;
+        ui.label(
+            super::i18n::registered(self.locale, "full-mode.034")
+                .replace("{0}", &live_bpm.to_string()),
+        );
+        let scene_bpm = self.scene_opening_bpm();
+        ui.label(
+            super::i18n::registered(self.locale, "full-mode.075")
+                .replace("{0}", &scene_bpm.to_string()),
+        )
+        .on_hover_text(super::i18n::registered(self.locale, "full-mode.076"));
+        if ui
+            .button("−")
+            .on_hover_text(super::i18n::registered(self.locale, "full-mode.077"))
+            .clicked()
+        {
+            self.scene_tempo_slower();
+        }
+        if ui
+            .button("＋")
+            .on_hover_text(super::i18n::registered(self.locale, "full-mode.078"))
+            .clicked()
+        {
+            self.scene_tempo_faster();
+        }
+        let current_walk = self.current_scene_walk();
+        ui.menu_button(
+            super::i18n::registered(self.locale, "full-mode.059"),
+            |ui| {
+                ui.small(super::i18n::registered(self.locale, "full-mode.060"));
+                self.scene_walk_choice(
+                    ui,
+                    current_walk,
+                    super::SceneWalk::Steady,
+                    super::i18n::registered(self.locale, "full-mode.061"),
+                    super::i18n::registered(self.locale, "full-mode.062"),
+                );
+                self.scene_walk_choice(
+                    ui,
+                    current_walk,
+                    super::SceneWalk::Smooth,
+                    super::i18n::registered(self.locale, "full-mode.063"),
+                    super::i18n::registered(self.locale, "full-mode.064"),
+                );
+                self.scene_walk_choice(
+                    ui,
+                    current_walk,
+                    super::SceneWalk::LeaveSlow,
+                    super::i18n::registered(self.locale, "full-mode.065"),
+                    super::i18n::registered(self.locale, "full-mode.066"),
+                );
+                self.scene_walk_choice(
+                    ui,
+                    current_walk,
+                    super::SceneWalk::ArriveSlow,
+                    super::i18n::registered(self.locale, "full-mode.067"),
+                    super::i18n::registered(self.locale, "full-mode.068"),
+                );
+                self.scene_walk_choice(
+                    ui,
+                    current_walk,
+                    super::SceneWalk::Arc,
+                    super::i18n::registered(self.locale, "full-mode.069"),
+                    super::i18n::registered(self.locale, "full-mode.070"),
+                );
+                self.scene_walk_choice(
+                    ui,
+                    current_walk,
+                    super::SceneWalk::ArcOther,
+                    super::i18n::registered(self.locale, "full-mode.071"),
+                    super::i18n::registered(self.locale, "full-mode.072"),
+                );
+            },
+        );
+    }
+
+    fn timeline_option_controls(&mut self, ui: &mut egui::Ui) {
+        ui.checkbox(
+            &mut self.count_in_enabled,
+            super::i18n::registered(self.locale, "full-mode.006"),
+        )
+        .on_hover_text(super::i18n::registered(self.locale, "full-mode.007"));
+        ui.checkbox(
+            &mut self.playback_paths,
+            super::i18n::registered(self.locale, "rehearsal.010"),
+        )
+        .on_hover_text(super::i18n::registered(self.locale, "rehearsal.011"));
+        ui.checkbox(
+            &mut self.show_next_places,
+            super::i18n::registered(self.locale, "full-mode.080"),
+        )
+        .on_hover_text(super::i18n::registered(self.locale, "full-mode.081"));
+        if let Some(left) = self.count_in_remaining {
+            let shown = super::count_in_display(left);
+            ui.strong(
+                super::i18n::registered(self.locale, "full-mode.008")
+                    .replace("{0}", &shown.to_string()),
+            );
+        }
+        if ui
+            .button(super::i18n::registered(self.locale, "full-mode.028"))
+            .on_hover_text(super::i18n::registered(self.locale, "full-mode.029"))
+            .clicked()
+        {
+            let csv =
+                coordinates::set_coordinates_csv(&self.document, self.current_set, self.locale);
+            ui.ctx().copy_text(csv);
+            self.status = super::i18n::registered(self.locale, "full-mode.030").into();
+        }
+        let scene_start = self.document.global_count(self.current_set, 0.0) as u32;
+        let scene_end = (scene_start + u32::from(self.document.sets[self.current_set].counts))
+            .min(self.document.timeline_counts());
+        let repeating = self.loop_playback
+            && self.playback_start == scene_start
+            && self.playback_end == scene_end;
+        if ui
+            .selectable_label(
+                repeating,
+                super::i18n::registered(self.locale, "full-mode.049"),
+            )
+            .on_hover_text(super::i18n::registered(self.locale, "full-mode.050"))
+            .clicked()
+        {
+            let (start, end, looping) = super::toggle_scene_loop(
+                self.playback_start,
+                self.playback_end,
+                self.loop_playback,
+                scene_start,
+                scene_end,
+            );
+            self.playback_start = start;
+            self.playback_end = end;
+            self.loop_playback = looping;
+            self.status = if looping {
+                super::i18n::registered(self.locale, "full-mode.052").into()
+            } else {
+                super::i18n::registered(self.locale, "full-mode.051").into()
+            };
+        }
+        let chosen = !self.selected.is_empty();
+        if ui
+            .add_enabled(
+                chosen,
+                egui::Button::new(super::i18n::registered(self.locale, "full-mode.053")),
+            )
+            .on_hover_text(super::i18n::registered(self.locale, "full-mode.054"))
+            .clicked()
+        {
+            let indices: Vec<usize> = self.selected.iter().copied().collect();
+            let sheet = coordinates::member_sheets(&self.document, &indices, self.locale);
+            ui.ctx().copy_text(sheet);
+            self.status = super::i18n::registered(self.locale, "full-mode.055").into();
+        }
+        if self.show_dot_labels
+            && super::hide_labels_for_playback(
+                self.playing,
+                self.document.performers.len(),
+                self.labels_while_playing,
+            )
+        {
+            ui.label(super::i18n::registered(self.locale, "full-mode.056"));
+            if ui
+                .small_button(super::i18n::registered(self.locale, "full-mode.057"))
+                .on_hover_text(super::i18n::registered(self.locale, "full-mode.058"))
+                .clicked()
+            {
+                self.labels_while_playing = true;
+            }
+        }
     }
 
     fn paint_field_marks(

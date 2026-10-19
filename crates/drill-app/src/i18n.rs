@@ -101,6 +101,9 @@ pub enum Text {
     Markers,
     Parts,
     Sets,
+    NoName,
+    PlaybackOptions,
+    Collapse,
 }
 
 impl Text {
@@ -108,7 +111,7 @@ impl Text {
     /// the catalog completeness test fail during review rather than leaking a
     /// fallback string into a release build.
     #[cfg(test)]
-    pub const ALL: [Self; 52] = [
+    pub const ALL: [Self; 55] = [
         Self::File,
         Self::Edit,
         Self::Playback,
@@ -161,6 +164,9 @@ impl Text {
         Self::Markers,
         Self::Parts,
         Self::Sets,
+        Self::NoName,
+        Self::PlaybackOptions,
+        Self::Collapse,
     ];
 }
 
@@ -276,6 +282,12 @@ pub fn text(locale: Locale, key: Text) -> &'static str {
         (Locale::En, Text::Parts) => "Parts",
         (Locale::Ja, Text::Sets) => "セット",
         (Locale::En, Text::Sets) => "Sets",
+        (Locale::Ja, Text::NoName) => "名前なし",
+        (Locale::En, Text::NoName) => "No name",
+        (Locale::Ja, Text::PlaybackOptions) => "再生の設定",
+        (Locale::En, Text::PlaybackOptions) => "Playback options",
+        (Locale::Ja, Text::Collapse) => "閉じる",
+        (Locale::En, Text::Collapse) => "Collapse",
     }
 }
 
@@ -284,6 +296,14 @@ pub fn people_selected(locale: Locale, count: usize) -> String {
     match locale {
         Locale::Ja => format!("{count}人選択中"),
         Locale::En => format!("{count} selected"),
+    }
+}
+
+/// How many people are in the roster list, without saying they are selected.
+pub fn roster_count(locale: Locale, count: usize) -> String {
+    match locale {
+        Locale::Ja => format!("{count}人"),
+        Locale::En => format!("{count} people"),
     }
 }
 

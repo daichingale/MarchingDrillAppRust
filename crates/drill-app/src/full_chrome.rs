@@ -72,6 +72,7 @@ impl DrillApp {
         let screen = ui.ctx().viewport_rect();
         egui::Area::new("full-top-bar".into())
             .order(egui::Order::Foreground)
+            .fade_in(false)
             .fixed_pos(screen.left_top())
             .show(ui.ctx(), |ui| {
                 let frame = egui::Frame::new()
@@ -128,6 +129,7 @@ impl DrillApp {
         let screen = ui.ctx().viewport_rect();
         egui::Area::new("full-tool-dock".into())
             .order(egui::Order::Foreground)
+            .fade_in(false)
             .fixed_pos(screen.left_top() + egui::vec2(12.0, 46.0))
             .show(ui.ctx(), |ui| {
                 paper(6).show(ui, |ui| {
@@ -302,6 +304,7 @@ impl DrillApp {
         );
         egui::Area::new("full-context-bar".into())
             .order(egui::Order::Foreground)
+            .fade_in(false)
             .fixed_pos(origin)
             .show(ui.ctx(), |ui| {
                 paper(6).show(ui, |ui| {
@@ -316,14 +319,14 @@ impl DrillApp {
                             ))
                             .strong(),
                         );
-                        self.context_command(ui, UiCommand::AlignHorizontal);
+                        self.context_command_visible(ui, UiCommand::AlignHorizontal);
                         if ui.button(text(self.locale, Text::OnGrid)).clicked() {
                             self.snap_selected_to_grid();
                         }
                         if ui.button(text(self.locale, Text::FlipCenterLine)).clicked() {
                             self.mirror_selection_across_field();
                         }
-                        self.context_command(ui, UiCommand::DistributeHorizontal);
+                        self.context_command_visible(ui, UiCommand::DistributeHorizontal);
                         ui.menu_button(text(self.locale, Text::Arrange), |ui| {
                             for command in [
                                 UiCommand::AlignVertical,
@@ -332,7 +335,7 @@ impl DrillApp {
                                 UiCommand::FlipVertical,
                                 UiCommand::MakeLine,
                             ] {
-                                self.context_command(ui, command);
+                                self.context_command_visible(ui, command);
                             }
                         });
                         ui.menu_button(text(self.locale, Text::More), |ui| {
@@ -365,6 +368,18 @@ impl DrillApp {
             });
     }
 
+    /// Commands that do nothing for a single person stay off the bar.
+    fn context_command_visible(&mut self, ui: &mut egui::Ui, command: UiCommand) {
+        let needs_several = matches!(
+            command,
+            UiCommand::DistributeHorizontal | UiCommand::DistributeVertical | UiCommand::MakeLine
+        );
+        if needs_several && self.selected.len() < 2 {
+            return;
+        }
+        self.context_command(ui, command);
+    }
+
     fn context_command(&mut self, ui: &mut egui::Ui, command: UiCommand) {
         let enabled = command.enabled(self.command_context(), self.locale);
         let response = ui.add_enabled(
@@ -384,7 +399,7 @@ impl DrillApp {
     fn full_visible_field(&self, screen: egui::Rect) -> egui::Rect {
         let top = 136.0;
         let bottom = if self.full_timeline_expanded {
-            380.0
+            300.0
         } else {
             118.0
         };
@@ -399,6 +414,29 @@ impl DrillApp {
             return egui::Rect::from_min_size(min, egui::Vec2::ZERO);
         }
         egui::Rect::from_min_max(min, max)
+    }
+
+    /// Keeps dots and their numbers out of the floating timeline and inspector.
+    ///
+    /// egui's first area frame is a 600×400 default anchored to the bottom, so
+    /// the stored rect is much taller than the panel we actually draw. Clip to
+    /// the layout we use, not that placeholder.
+    pub(super) fn full_field_paint_clip(
+        &self,
+        _ctx: &egui::Context,
+        field: egui::Rect,
+    ) -> egui::Rect {
+        let mut clip = field;
+        let bottom = if self.full_timeline_expanded {
+            340.0
+        } else {
+            100.0
+        };
+        clip.max.y = (field.bottom() - bottom).max(field.top());
+        if self.show_inspector && !self.full_inspector_collapsed {
+            clip.max.x = (field.right() - 324.0).max(field.left());
+        }
+        clip
     }
 
     fn selection_screen_bounds(&self, screen: egui::Rect) -> Option<egui::Rect> {
@@ -434,13 +472,14 @@ impl DrillApp {
         let screen = ui.ctx().viewport_rect();
         let top = 46.0;
         let bottom = if self.full_timeline_expanded {
-            372.0
+            292.0
         } else {
             112.0
         };
         if self.full_inspector_collapsed || !self.show_inspector {
             egui::Area::new("full-inspector-tab".into())
                 .order(egui::Order::Foreground)
+                .fade_in(false)
                 .fixed_pos(egui::pos2(screen.right() - 92.0, screen.top() + top + 4.0))
                 .show(ui.ctx(), |ui| {
                     paper(4).show(ui, |ui| {
@@ -456,20 +495,12 @@ impl DrillApp {
         let height = (screen.height() - top - bottom).max(180.0);
         egui::Area::new("full-inspector".into())
             .order(egui::Order::Foreground)
+            .fade_in(false)
             .fixed_pos(egui::pos2(screen.right() - 316.0, screen.top() + top))
             .show(ui.ctx(), |ui| {
                 paper(8).show(ui, |ui| {
                     ui.set_width(300.0);
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(text(self.locale, Text::Inspector)).strong());
-                        if ui
-                            .small_button("−")
-                            .on_hover_text(text(self.locale, Text::Inspector))
-                            .clicked()
-                        {
-                            self.full_inspector_collapsed = true;
-                        }
-                    });
+                    self.show_full_inspector_header(ui);
                     let body = (height - 36.0).max(120.0);
                     let (rect, _) = ui.allocate_exact_size(egui::vec2(300.0, body), Sense::hover());
                     let mut child = ui.new_child(
@@ -488,30 +519,84 @@ impl DrillApp {
             });
     }
 
+    fn show_full_inspector_header(&mut self, ui: &mut egui::Ui) {
+        let width = 284.0;
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 32.0), Sense::hover());
+        let title = if self.selected.len() > 1 {
+            super::i18n::people_selected(self.locale, self.selected.len())
+        } else {
+            text(self.locale, Text::Inspector).to_string()
+        };
+        let title_rect = egui::Rect::from_min_max(
+            rect.left_top(),
+            egui::pos2(rect.left() + 148.0, rect.bottom()),
+        );
+        ui.painter().text(
+            title_rect.left_center(),
+            egui::Align2::LEFT_CENTER,
+            &title,
+            egui::FontId::proportional(16.0),
+            Color32::from_rgb(32, 36, 44),
+        );
+        let button_rect = egui::Rect::from_min_max(
+            egui::pos2(rect.left() + 148.0, rect.top()),
+            rect.right_bottom(),
+        );
+        let mut buttons = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(button_rect)
+                .layout(egui::Layout::right_to_left(egui::Align::Center)),
+        );
+        if self.full_collapse_button(&mut buttons) {
+            self.full_inspector_collapsed = true;
+        }
+        if !self.selected.is_empty()
+            && buttons
+                .button(text(self.locale, Text::ClearSelection))
+                .clicked()
+        {
+            self.clear_selection();
+        }
+    }
+
+    fn full_collapse_button(&self, ui: &mut egui::Ui) -> bool {
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), Sense::click());
+        if response.hovered() {
+            ui.painter()
+                .rect_filled(rect, 6.0, super::app_theme::ACCENT_SOFT);
+        }
+        let color = if response.hovered() {
+            super::app_theme::ACCENT
+        } else {
+            super::app_theme::SECONDARY_TEXT
+        };
+        let center = rect.center();
+        let stroke = Stroke::new(1.8, color);
+        ui.painter().line_segment(
+            [
+                center + egui::vec2(-4.0, -5.0),
+                center + egui::vec2(2.0, 0.0),
+            ],
+            stroke,
+        );
+        ui.painter().line_segment(
+            [
+                center + egui::vec2(2.0, 0.0),
+                center + egui::vec2(-4.0, 5.0),
+            ],
+            stroke,
+        );
+        response
+            .on_hover_text(text(self.locale, Text::Collapse))
+            .clicked()
+    }
+
     fn show_full_inspector_body(&mut self, ui: &mut egui::Ui) {
         if self.selected.is_empty() {
             self.show_full_roster(ui);
-            return;
+        } else {
+            self.show_performer_properties(ui);
         }
-        ui.horizontal(|ui| {
-            if self.selected.len() > 1 {
-                ui.label(
-                    egui::RichText::new(super::i18n::people_selected(
-                        self.locale,
-                        self.selected.len(),
-                    ))
-                    .strong(),
-                );
-            }
-            if ui.button(text(self.locale, Text::ClearSelection)).clicked() {
-                self.clear_selection();
-            }
-        });
-        if self.selected.is_empty() {
-            self.show_full_roster(ui);
-            return;
-        }
-        self.show_performer_properties(ui);
     }
 
     fn show_full_roster(&mut self, ui: &mut egui::Ui) {
@@ -538,9 +623,10 @@ impl DrillApp {
             .collect();
         if !sections.is_empty() {
             ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
                 for (id, name) in &sections {
                     let on = self.full_section_filter.contains(id);
-                    if ui.selectable_label(on, name).clicked() {
+                    if full_filter_chip(ui, name, on) {
                         if on {
                             self.full_section_filter.retain(|section| section != id);
                         } else {
@@ -592,6 +678,10 @@ impl DrillApp {
             ui.label(text(self.locale, Text::NoMatches));
             return;
         }
+        ui.label(
+            egui::RichText::new(super::i18n::roster_count(self.locale, rows.len()))
+                .color(super::app_theme::SECONDARY_TEXT),
+        );
         for (index, number, name, section) in rows {
             self.full_roster_row(ui, index, &number, &name, &section);
         }
@@ -607,7 +697,7 @@ impl DrillApp {
     ) {
         let selected = self.selected.contains(&index);
         let width = ui.available_width().max(40.0);
-        let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 28.0), Sense::click());
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 32.0), Sense::click());
         let fill = if selected {
             super::app_theme::ACCENT_SOFT
         } else if response.hovered() {
@@ -618,43 +708,56 @@ impl DrillApp {
         if fill != Color32::TRANSPARENT {
             ui.painter().rect_filled(rect, 6.0, fill);
         }
+        ui.painter().hline(
+            rect.x_range(),
+            rect.bottom(),
+            Stroke::new(1.0, super::app_theme::HAIRLINE),
+        );
         let ink = Color32::from_rgb(32, 36, 44);
-        let font = egui::FontId::proportional(13.0);
         let clip = ui.clip_rect();
         let number_rect = egui::Rect::from_min_max(
             rect.left_top(),
-            egui::pos2(rect.left() + 48.0, rect.bottom()),
+            egui::pos2(rect.left() + 44.0, rect.bottom()),
         );
         let name_rect = egui::Rect::from_min_max(
-            egui::pos2(rect.left() + 48.0, rect.top()),
-            egui::pos2((rect.right() - 88.0).max(rect.left() + 48.0), rect.bottom()),
+            egui::pos2(rect.left() + 44.0, rect.top()),
+            egui::pos2((rect.right() - 96.0).max(rect.left() + 44.0), rect.bottom()),
         );
         let section_rect = egui::Rect::from_min_max(
-            egui::pos2((rect.right() - 84.0).max(rect.left()), rect.top()),
+            egui::pos2((rect.right() - 92.0).max(rect.left()), rect.top()),
             rect.right_bottom(),
         );
         ui.set_clip_rect(clip.intersect(number_rect.shrink(4.0)));
         ui.painter().text(
-            rect.left_center() + egui::vec2(6.0, 0.0),
+            rect.left_center() + egui::vec2(8.0, 0.0),
             egui::Align2::LEFT_CENTER,
             number,
-            font.clone(),
+            egui::FontId::monospace(13.0),
             ink,
         );
+        let unnamed = name.is_empty();
         ui.set_clip_rect(clip.intersect(name_rect));
         ui.painter().text(
             name_rect.left_center(),
             egui::Align2::LEFT_CENTER,
-            name,
-            font.clone(),
-            ink,
+            if unnamed {
+                text(self.locale, Text::NoName)
+            } else {
+                name
+            },
+            egui::FontId::proportional(13.0),
+            if unnamed {
+                super::app_theme::SECONDARY_TEXT
+            } else {
+                ink
+            },
         );
         ui.set_clip_rect(clip.intersect(section_rect.shrink2(egui::vec2(4.0, 0.0))));
         ui.painter().text(
-            section_rect.right_center() + egui::vec2(-4.0, 0.0),
+            section_rect.right_center() + egui::vec2(-8.0, 0.0),
             egui::Align2::RIGHT_CENTER,
             section,
-            font,
+            egui::FontId::proportional(13.0),
             super::app_theme::SECONDARY_TEXT,
         );
         ui.set_clip_rect(clip);
@@ -670,18 +773,16 @@ impl DrillApp {
         let screen = ui.ctx().viewport_rect();
         egui::Area::new("full-timeline".into())
             .order(egui::Order::Foreground)
+            .fade_in(false)
             .anchor(egui::Align2::LEFT_BOTTOM, egui::Vec2::ZERO)
             .show(ui.ctx(), |ui| {
                 let frame = egui::Frame::new()
-                    .fill(Color32::WHITE)
+                    .fill(Color32::from_rgb(244, 246, 250))
                     .stroke(Stroke::new(1.0, super::app_theme::HAIRLINE))
                     .inner_margin(egui::Margin::symmetric(8, 6))
                     .show(ui, |ui| {
                         ui.set_min_width(screen.width() - 16.0);
                         ui.set_max_width(screen.width() - 16.0);
-                        if self.full_timeline_expanded {
-                            ui.set_max_height(360.0);
-                        }
                         ui.horizontal(|ui| {
                             if ui
                                 .button(if self.playing {
@@ -710,6 +811,22 @@ impl DrillApp {
                         });
                         self.show_set_card_strip(ui);
                         if self.full_timeline_expanded {
+                            let (playhead_set, playhead_count) = self.render_playhead();
+                            let change = super::timeline::draw_count_track(
+                                ui,
+                                &self.document,
+                                playhead_set,
+                                playhead_count,
+                                self.playback_start,
+                                self.playback_end,
+                                &mut self.timeline_view,
+                                self.locale,
+                                self.presence.set_marks(),
+                            );
+                            self.apply_full_timeline_change(change);
+                            ui.collapsing(text(self.locale, Text::PlaybackOptions), |ui| {
+                                self.show_timeline_grouped_options(ui);
+                            });
                             ui.collapsing(text(self.locale, Text::Sets), |ui| {
                                 ui.horizontal_wrapped(|ui| {
                                     self.context_command(ui, UiCommand::DuplicateSet);
@@ -725,25 +842,6 @@ impl DrillApp {
                                 markers.show(self, ui);
                                 self.production_markers_panel = markers;
                             });
-                            egui::ScrollArea::vertical()
-                                .id_salt("full-timeline-extra")
-                                .max_height(120.0)
-                                .show(ui, |ui| {
-                                    self.show_timeline_playback_bar(ui);
-                                    let (playhead_set, playhead_count) = self.render_playhead();
-                                    let change = super::timeline::draw_count_track(
-                                        ui,
-                                        &self.document,
-                                        playhead_set,
-                                        playhead_count,
-                                        self.playback_start,
-                                        self.playback_end,
-                                        &mut self.timeline_view,
-                                        self.locale,
-                                        self.presence.set_marks(),
-                                    );
-                                    self.apply_full_timeline_change(change);
-                                });
                         }
                     });
                 let _ = frame;
@@ -798,6 +896,46 @@ impl DrillApp {
             self.seek_global(next * total);
         }
     }
+}
+
+fn full_filter_chip(ui: &mut egui::Ui, label: &str, on: bool) -> bool {
+    let font = egui::FontId::proportional(13.0);
+    let galley = ui.painter().layout_no_wrap(
+        label.to_owned(),
+        font.clone(),
+        Color32::from_rgb(32, 36, 44),
+    );
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(galley.size().x + 22.0, 26.0), Sense::click());
+    let fill = if on {
+        super::app_theme::ACCENT_SOFT
+    } else if response.hovered() {
+        super::app_theme::ACCENT_HOVER
+    } else {
+        Color32::from_rgb(248, 249, 252)
+    };
+    ui.painter().rect_filled(rect.shrink(1.0), 12.0, fill);
+    ui.painter().rect_stroke(
+        rect,
+        13.0,
+        Stroke::new(
+            1.0,
+            if on {
+                super::app_theme::ACCENT
+            } else {
+                Color32::from_rgb(176, 182, 194)
+            },
+        ),
+        egui::StrokeKind::Inside,
+    );
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        font,
+        Color32::from_rgb(32, 36, 44),
+    );
+    response.clicked()
 }
 
 fn roster_number_order(left: &str, right: &str) -> std::cmp::Ordering {
