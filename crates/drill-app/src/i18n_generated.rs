@@ -3434,6 +3434,22 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "simple-mode.318") => "Tools",
         (Locale::Ja, "simple-mode.319") => "道具を出す",
         (Locale::En, "simple-mode.319") => "Show the toolbar",
+        (Locale::Ja, "simple-mode.320") => "左右対称",
+        (Locale::En, "simple-mode.320") => "Mirror",
+        (Locale::Ja, "simple-mode.321") => "中央の線の反対で、いちばん近い人",
+        (Locale::En, "simple-mode.321") => "Nearest person across the center line",
+        (Locale::Ja, "simple-mode.322") => "{0}人 対称でない",
+        (Locale::En, "simple-mode.322") => "{0} not mirrored",
+        (Locale::Ja, "simple-mode.323") => "そろえる",
+        (Locale::En, "simple-mode.323") => "Match",
+        (Locale::Ja, "simple-mode.324") => "選んだ側に合わせて、反対側を直します",
+        (Locale::En, "simple-mode.324") => "Match the other side to the side you chose",
+        (Locale::Ja, "simple-mode.325") => {
+            "今の場面で、中央の線の反対側にいるいちばん近い人がいっしょに動きます"
+        }
+        (Locale::En, "simple-mode.325") => {
+            "In this scene, the nearest person across the center line moves too"
+        }
         (Locale::Ja, "rehearsal.021") => "練習メモ",
         (Locale::En, "rehearsal.021") => "Rehearsal notes",
         (Locale::Ja, "rehearsal.022") => "全部の場面の歩き方を、テキストで保存します",
