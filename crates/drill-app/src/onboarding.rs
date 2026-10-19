@@ -210,7 +210,7 @@ impl OnboardingState {
         if !self.show_help {
             return;
         }
-        egui::Window::new(super::i18n::registered(locale, "onboarding.013"))
+        super::app_theme::modal_window(super::i18n::registered(locale, "onboarding.013"), context)
             .open(&mut self.show_help)
             .default_width(520.0)
             .resizable(true)

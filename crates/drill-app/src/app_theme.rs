@@ -117,7 +117,9 @@ const COLLAPSE_ANIMATION_SECONDS: f32 = 0.15;
 pub(crate) const ACCENT: Color32 = Color32::from_rgb(76, 163, 255);
 pub(crate) const ACCENT_HOVER: Color32 = Color32::from_rgb(232, 242, 255);
 pub(crate) const ACCENT_SOFT: Color32 = Color32::from_rgb(214, 232, 255);
-pub(crate) const SECONDARY_TEXT: Color32 = Color32::from_rgb(84, 90, 102);
+/// Secondary copy on the light paper. Dark enough to read at 12–14px;
+/// the old 84,90,102 gray looked disabled next to the ink.
+pub(crate) const SECONDARY_TEXT: Color32 = Color32::from_rgb(48, 54, 66);
 pub(crate) const HAIRLINE: Color32 = Color32::from_rgb(214, 218, 226);
 pub(crate) const CORNER: u8 = 10;
 pub(crate) const CORNER_SM: u8 = 8;
@@ -320,6 +322,20 @@ fn nightline_visuals() -> egui::Visuals {
     visuals.selection.stroke.color = Color32::BLACK;
     visuals.hyperlink_color = accent;
     visuals
+}
+
+/// A window that stays inside the viewport, with room for its own scrollbar.
+/// Floating toolbars are hidden while one of these is open; this still keeps
+/// the card off the window edge if the toolbar is not the thing in the way.
+pub(crate) fn modal_window<'a>(
+    title: impl Into<egui::WidgetText>,
+    ctx: &egui::Context,
+) -> egui::Window<'a> {
+    let bounds = ctx.viewport_rect().shrink(16.0);
+    egui::Window::new(title)
+        .constrain_to(bounds)
+        .max_height(bounds.height())
+        .max_width(bounds.width())
 }
 
 #[cfg(test)]

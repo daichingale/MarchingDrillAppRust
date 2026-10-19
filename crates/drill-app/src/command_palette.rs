@@ -71,7 +71,7 @@ impl CommandPalette {
         });
 
         let mut open = true;
-        egui::Window::new(i18n::registered(locale, "command-palette.001"))
+        super::app_theme::modal_window(i18n::registered(locale, "command-palette.001"), context)
             .id(egui::Id::new("command-palette"))
             .open(&mut open)
             .collapsible(false)

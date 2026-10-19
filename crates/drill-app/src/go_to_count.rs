@@ -53,7 +53,7 @@ impl GoToCount {
             }
         });
         let mut open = true;
-        egui::Window::new(super::i18n::registered(locale, "go-to-count.001"))
+        super::app_theme::modal_window(super::i18n::registered(locale, "go-to-count.001"), context)
             .id(egui::Id::new("go-to-global-count"))
             .open(&mut open)
             .collapsible(false)

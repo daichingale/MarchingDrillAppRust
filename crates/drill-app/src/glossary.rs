@@ -228,7 +228,7 @@ impl GlossaryState {
         }
         let title = super::i18n::registered(locale, "glossary.002");
         let mut open = self.open;
-        egui::Window::new(title)
+        super::app_theme::modal_window(title, context)
             .id(egui::Id::new("marching-glossary"))
             .open(&mut open)
             .default_width(420.0)
@@ -265,8 +265,10 @@ impl GlossaryState {
                     );
                     return;
                 }
+                let scroll_h = (context.viewport_rect().height() - 220.0).max(160.0);
                 egui::ScrollArea::vertical()
                     .id_salt("glossary-cards")
+                    .max_height(scroll_h)
                     .show(ui, |ui| {
                         for term in terms {
                             super::app_theme::surface_frame(ui).show(ui, |ui| {

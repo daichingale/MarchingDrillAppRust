@@ -123,14 +123,16 @@ enum Category {
     Song,
 }
 
+/// Frequent work first. Sets sit with playback (next set, duplicate).
+/// File is last because new/open/save are rare next to moving people.
 const CATEGORIES: [Category; 7] = [
     Category::Tools,
     Category::Playback,
     Category::Sets,
     Category::Edit,
     Category::View,
-    Category::File,
     Category::Song,
+    Category::File,
 ];
 
 const EXTRAS: [Action; 31] = [
@@ -735,6 +737,20 @@ pub(crate) struct KeyBindings {
     recording: Option<Action>,
     pending: Option<Pending>,
     confirm_reset: bool,
+    /// Bit per [`Category`] index. Set means the group is folded.
+    collapsed: u8,
+}
+
+fn category_mask(category: Category) -> u8 {
+    1 << match category {
+        Category::Tools => 0,
+        Category::Playback => 1,
+        Category::Sets => 2,
+        Category::Edit => 3,
+        Category::View => 4,
+        Category::Song => 5,
+        Category::File => 6,
+    }
 }
 
 impl KeyBindings {
@@ -779,6 +795,14 @@ impl KeyBindings {
     pub(crate) fn cancel_pending(&mut self) {
         self.pending = None;
         self.recording = None;
+    }
+
+    fn category_collapsed(&self, category: Category) -> bool {
+        self.collapsed & category_mask(category) != 0
+    }
+
+    fn toggle_category(&mut self, category: Category) {
+        self.collapsed ^= category_mask(category);
     }
 }
 
@@ -1034,13 +1058,18 @@ impl super::DrillApp {
         }
         let mut open = true;
         let title = self.settings_title();
-        egui::Window::new(title)
+        let bounds = ctx.viewport_rect().shrink(16.0);
+        super::app_theme::modal_window(title, ctx)
             .id(egui::Id::new("key-settings"))
             .open(&mut open)
             .collapsible(false)
             .resizable(true)
-            .default_size(egui::vec2(700.0, 640.0))
-            .max_height(680.0)
+            .title_bar(false)
+            .vscroll(false)
+            .default_size(egui::vec2(
+                700.0_f32.min(bounds.width()),
+                (bounds.height() - 8.0).min(640.0),
+            ))
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .frame(paper_frame())
             .show(ctx, |ui| self.settings_contents(ui));
@@ -1103,59 +1132,111 @@ impl super::DrillApp {
         }
         let query = self.keybindings.query.clone();
         let rows = self.visible_actions(ui.ctx(), &query);
-        let scroll_height = (ui.available_height() - 56.0).clamp(240.0, 460.0);
+        let bounds_h = ui.ctx().viewport_rect().shrink(16.0).height();
+        let mut chrome = 168.0;
+        if self.keybindings.recording.is_some() {
+            chrome += 72.0;
+        }
+        if self.keybindings.pending.is_some() {
+            chrome += 60.0;
+        }
+        if self.keybindings.confirm_reset {
+            chrome += 48.0;
+        }
+        let scroll_height = (bounds_h - chrome).max(120.0);
         egui::ScrollArea::vertical()
             .max_height(scroll_height)
-            .show(ui, |ui| self.settings_rows(ui, &rows, search_id));
+            .auto_shrink([false, false])
+            .show(ui, |ui| self.settings_rows(ui, &rows, search_id, &query));
         ui.separator();
         self.reset_all_row(ui);
     }
 
-    fn settings_rows(&mut self, ui: &mut egui::Ui, rows: &[Action], search_id: egui::Id) {
+    fn settings_rows(
+        &mut self,
+        ui: &mut egui::Ui,
+        rows: &[Action],
+        search_id: egui::Id,
+        query: &str,
+    ) {
         let reset = i18n::registered(self.locale, "shortcuts.007");
         let unbound = self.unbound_word();
-        let mut current = None;
-        for action in rows {
-            let category = category_of(*action);
-            if current != Some(category) {
-                current = Some(category);
-                ui.add_space(8.0);
+        let searching = !query.trim().is_empty();
+        for category in CATEGORIES {
+            let group: Vec<Action> = rows
+                .iter()
+                .copied()
+                .filter(|action| category_of(*action) == category)
+                .collect();
+            if group.is_empty() {
+                continue;
+            }
+            let open = searching || !self.keybindings.category_collapsed(category);
+            if self.category_header(ui, category, open).clicked() && !searching {
+                self.keybindings.toggle_category(category);
+            }
+            if !open {
+                continue;
+            }
+            for action in group {
+                let name = self.action_label(action);
+                let chords = self.keybindings.map.chords(action);
+                let armed = self.keybindings.recording == Some(action);
                 ui.horizontal(|ui| {
                     paint_category_icon(ui, category);
-                    ui.label(
-                        egui::RichText::new(self.category_label(category))
-                            .strong()
-                            .size(16.0)
-                            .color(super::app_theme::ACCENT),
-                    );
-                });
-            }
-            let name = self.action_label(*action);
-            let chords = self.keybindings.map.chords(*action);
-            let armed = self.keybindings.recording == Some(*action);
-            ui.horizontal(|ui| {
-                paint_category_icon(ui, category);
-                ui.label(name);
-                if chords.is_empty() {
-                    if key_chip(ui, unbound, armed).clicked() {
-                        self.arm(*action, search_id, ui.ctx());
-                    }
-                } else {
-                    for chord in &chords {
-                        let text = ui.ctx().format_shortcut(&chord.egui());
-                        if key_chip(ui, &text, armed).clicked() {
-                            self.arm(*action, search_id, ui.ctx());
+                    ui.label(name);
+                    if chords.is_empty() {
+                        if key_chip(ui, unbound, armed).clicked() {
+                            self.arm(action, search_id, ui.ctx());
+                        }
+                    } else {
+                        for chord in &chords {
+                            let text = ui.ctx().format_shortcut(&chord.egui());
+                            if key_chip(ui, &text, armed).clicked() {
+                                self.arm(action, search_id, ui.ctx());
+                            }
                         }
                     }
-                }
-                if ui.button(reset).clicked() {
-                    self.keybindings.map.reset_action(*action);
-                    self.keybindings.recording = None;
-                    self.keybindings.pending = None;
-                    self.keybindings.save();
-                }
-            });
+                    if ui.button(reset).clicked() {
+                        self.keybindings.map.reset_action(action);
+                        self.keybindings.recording = None;
+                        self.keybindings.pending = None;
+                        self.keybindings.save();
+                    }
+                });
+            }
         }
+    }
+
+    fn category_header(&self, ui: &mut egui::Ui, category: Category, open: bool) -> egui::Response {
+        ui.add_space(8.0);
+        let (rect, response) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 28.0), egui::Sense::click());
+        if response.hovered() {
+            ui.painter()
+                .rect_filled(rect, 8.0, super::app_theme::ACCENT_SOFT);
+        }
+        paint_chevron(
+            ui.painter(),
+            rect.left_center() + egui::vec2(10.0, 0.0),
+            open,
+        );
+        paint_category_icon_in(
+            ui.painter(),
+            egui::Rect::from_center_size(
+                rect.left_center() + egui::vec2(32.0, 0.0),
+                egui::vec2(18.0, 18.0),
+            ),
+            category,
+        );
+        ui.painter().text(
+            rect.left_center() + egui::vec2(48.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+            self.category_label(category),
+            egui::FontId::proportional(16.0),
+            INK,
+        );
+        response
     }
 
     fn reset_all_row(&mut self, ui: &mut egui::Ui) {
@@ -1193,6 +1274,7 @@ impl super::DrillApp {
             return;
         }
         let screen = ctx.viewport_rect();
+        let bounds = screen.shrink(16.0);
         let mut close = false;
         egui::Area::new(egui::Id::new("key-chart-dim"))
             .order(egui::Order::Foreground)
@@ -1205,14 +1287,16 @@ impl super::DrillApp {
                     close = true;
                 }
             });
+        let card_w = 780.0_f32.min(bounds.width());
+        let card_h = bounds.height().min(720.0);
         egui::Area::new(egui::Id::new("key-chart"))
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
                 paper_frame().show(ui, |ui| {
                     light_paper(ui);
-                    ui.set_min_size(egui::vec2(640.0, 420.0));
-                    ui.set_max_size(egui::vec2(780.0, 640.0));
+                    ui.set_min_width(card_w.min(560.0));
+                    ui.set_max_size(egui::vec2(card_w, card_h));
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new(self.cheat_title())
@@ -1228,9 +1312,10 @@ impl super::DrillApp {
                     });
                     ui.label(
                         egui::RichText::new(i18n::registered(self.locale, "shortcuts.021"))
-                            .color(super::app_theme::SECONDARY_TEXT),
+                            .size(15.0)
+                            .color(INK),
                     );
-                    self.cheat_rows(ui);
+                    self.cheat_rows(ui, (card_h - 96.0).max(160.0));
                 });
             });
         if close {
@@ -1238,10 +1323,10 @@ impl super::DrillApp {
         }
     }
 
-    fn cheat_rows(&self, ui: &mut egui::Ui) {
+    fn cheat_rows(&self, ui: &mut egui::Ui, scroll_height: f32) {
         let unbound = self.unbound_word();
         egui::ScrollArea::vertical()
-            .max_height(460.0)
+            .max_height(scroll_height)
             .show(ui, |ui| {
                 for category in CATEGORIES {
                     ui.add_space(8.0);
@@ -1251,7 +1336,7 @@ impl super::DrillApp {
                             egui::RichText::new(self.category_label(category))
                                 .strong()
                                 .size(16.0)
-                                .color(super::app_theme::ACCENT),
+                                .color(INK),
                         );
                     });
                     for action in all_actions()
@@ -1485,7 +1570,27 @@ fn light_paper(ui: &mut egui::Ui) {
 
 fn paint_category_icon(ui: &mut egui::Ui, category: Category) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
-    let painter = ui.painter();
+    paint_category_icon_in(ui.painter(), rect, category);
+}
+
+fn paint_chevron(painter: &egui::Painter, center: egui::Pos2, open: bool) {
+    let points = if open {
+        vec![
+            center + egui::vec2(-5.0, -2.0),
+            center + egui::vec2(5.0, -2.0),
+            center + egui::vec2(0.0, 4.0),
+        ]
+    } else {
+        vec![
+            center + egui::vec2(-3.0, -5.0),
+            center + egui::vec2(4.0, 0.0),
+            center + egui::vec2(-3.0, 5.0),
+        ]
+    };
+    painter.add(egui::Shape::convex_polygon(points, INK, egui::Stroke::NONE));
+}
+
+fn paint_category_icon_in(painter: &egui::Painter, rect: egui::Rect, category: Category) {
     let center = rect.center();
     let color = super::app_theme::ACCENT;
     match category {

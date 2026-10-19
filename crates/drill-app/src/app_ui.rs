@@ -2236,6 +2236,7 @@ impl eframe::App for DrillApp {
                         &mut self.display_list,
                     );
                 }
+                egui_backend::paint_field_ground(&painter, rect);
                 if let Some(gpu) = self.gpu.as_ref().filter(|gpu| gpu.active()) {
                     gpu.update(&self.display_list);
                     egui_backend::paint_gpu_background(&painter, rect.min, &self.display_list);
@@ -3948,7 +3949,7 @@ impl DrillApp {
         } else {
             super::i18n::registered(self.locale, "recent-projects.010")
         };
-        egui::Window::new(title)
+        super::app_theme::modal_window(title, ctx)
             .id(egui::Id::new("recent-projects"))
             .open(&mut open)
             .collapsible(false)

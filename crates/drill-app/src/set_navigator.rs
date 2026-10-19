@@ -69,88 +69,91 @@ impl SetNavigator {
         });
 
         let mut open = true;
-        egui::Window::new(super::i18n::registered(locale, "set-navigator.001"))
-            .id(egui::Id::new("set-navigator"))
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .fixed_size(egui::vec2(560.0, 440.0))
-            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-            .show(context, |ui| {
-                let response = ui.add(
-                    egui::TextEdit::singleline(&mut self.query)
-                        .id(ui.make_persistent_id("set-navigator-query"))
-                        .hint_text(super::i18n::registered(locale, "set-navigator.002"))
-                        .desired_width(f32::INFINITY),
-                );
-                if self.focus_query {
-                    response.request_focus();
-                    self.focus_query = false;
-                }
-                if response.changed() {
-                    self.selected = 0;
-                }
-                ui.add_space(6.0);
-                if entries.is_empty() {
-                    ui.centered_and_justified(|ui| {
-                        ui.label(super::i18n::registered(locale, "set-navigator.003"));
-                    });
-                } else {
-                    egui::ScrollArea::vertical()
-                        .id_salt("set-navigator-results")
-                        .show(ui, |ui| {
-                            for (position, entry) in entries.iter().enumerate() {
-                                let is_current = entry.index == current_set;
-                                let landmark = if entry.landmark.is_empty() {
-                                    String::new()
-                                } else {
-                                    format!("  ·  {}", entry.landmark)
-                                };
-                                let label = format!(
-                                    "{} {}  ·  {} {}  ·  {} {}{}",
-                                    super::i18n::registered(locale, "set-navigator.004"),
-                                    entry.index + 1,
-                                    super::i18n::registered(locale, "set-navigator.005"),
-                                    entry.start_count + 1,
-                                    entry.counts,
-                                    super::i18n::registered(locale, "set-navigator.006"),
-                                    landmark,
-                                );
-                                let text = if is_current {
-                                    egui::RichText::new(format!("{}  —  {}", entry.title, label))
-                                        .strong()
-                                } else {
-                                    egui::RichText::new(format!("{}  —  {}", entry.title, label))
-                                };
-                                let response = ui.add(
-                                    egui::Button::new(text)
-                                        .selected(position == self.selected)
-                                        .frame(false),
-                                );
-                                response.widget_info(|| {
-                                    egui::WidgetInfo::labeled(
-                                        egui::WidgetType::Button,
-                                        true,
-                                        format!(
-                                            "{} {}",
-                                            super::i18n::registered(locale, "set-navigator.007"),
-                                            entry.title
-                                        ),
-                                    )
-                                });
-                                if response.hovered() {
-                                    self.selected = position;
-                                }
-                                if response.clicked() {
-                                    chosen = Some(entry.index);
-                                    close = true;
-                                }
+        super::app_theme::modal_window(
+            super::i18n::registered(locale, "set-navigator.001"),
+            context,
+        )
+        .id(egui::Id::new("set-navigator"))
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .fixed_size(egui::vec2(560.0, 440.0))
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .show(context, |ui| {
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut self.query)
+                    .id(ui.make_persistent_id("set-navigator-query"))
+                    .hint_text(super::i18n::registered(locale, "set-navigator.002"))
+                    .desired_width(f32::INFINITY),
+            );
+            if self.focus_query {
+                response.request_focus();
+                self.focus_query = false;
+            }
+            if response.changed() {
+                self.selected = 0;
+            }
+            ui.add_space(6.0);
+            if entries.is_empty() {
+                ui.centered_and_justified(|ui| {
+                    ui.label(super::i18n::registered(locale, "set-navigator.003"));
+                });
+            } else {
+                egui::ScrollArea::vertical()
+                    .id_salt("set-navigator-results")
+                    .show(ui, |ui| {
+                        for (position, entry) in entries.iter().enumerate() {
+                            let is_current = entry.index == current_set;
+                            let landmark = if entry.landmark.is_empty() {
+                                String::new()
+                            } else {
+                                format!("  ·  {}", entry.landmark)
+                            };
+                            let label = format!(
+                                "{} {}  ·  {} {}  ·  {} {}{}",
+                                super::i18n::registered(locale, "set-navigator.004"),
+                                entry.index + 1,
+                                super::i18n::registered(locale, "set-navigator.005"),
+                                entry.start_count + 1,
+                                entry.counts,
+                                super::i18n::registered(locale, "set-navigator.006"),
+                                landmark,
+                            );
+                            let text = if is_current {
+                                egui::RichText::new(format!("{}  —  {}", entry.title, label))
+                                    .strong()
+                            } else {
+                                egui::RichText::new(format!("{}  —  {}", entry.title, label))
+                            };
+                            let response = ui.add(
+                                egui::Button::new(text)
+                                    .selected(position == self.selected)
+                                    .frame(false),
+                            );
+                            response.widget_info(|| {
+                                egui::WidgetInfo::labeled(
+                                    egui::WidgetType::Button,
+                                    true,
+                                    format!(
+                                        "{} {}",
+                                        super::i18n::registered(locale, "set-navigator.007"),
+                                        entry.title
+                                    ),
+                                )
+                            });
+                            if response.hovered() {
+                                self.selected = position;
                             }
-                        });
-                }
-                ui.separator();
-                ui.small(super::i18n::registered(locale, "set-navigator.008"));
-            });
+                            if response.clicked() {
+                                chosen = Some(entry.index);
+                                close = true;
+                            }
+                        }
+                    });
+            }
+            ui.separator();
+            ui.small(super::i18n::registered(locale, "set-navigator.008"));
+        });
         if !open || close {
             self.open = false;
             self.focus_query = false;
