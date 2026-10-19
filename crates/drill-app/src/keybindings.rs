@@ -797,6 +797,15 @@ impl super::DrillApp {
         match stage.as_str() {
             "settings" => self.keybindings.settings_open = true,
             "sheet" => self.keybindings.cheat_open = true,
+            // V is already Select. Stage that onto Move, then keep the
+            // recorder armed so the shot shows the warning during recording.
+            "conflict" => {
+                self.keybindings.settings_open = true;
+                let _ = self
+                    .keybindings
+                    .stage(Action::ToolMove, Chord::plain(egui::Key::V));
+                self.keybindings.recording = Some(Action::ToolMove);
+            }
             _ => {}
         }
     }
