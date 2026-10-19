@@ -7,6 +7,50 @@
 use super::simple_mode::{PhoneIcon, PictogramTile};
 use super::*;
 
+const CONTEXT_BAR_H: f32 = 46.0;
+const CONTEXT_BAR_GAP: f32 = 20.0;
+const CONTEXT_BAR_HALF: f32 = 360.0;
+const CONTEXT_DOT_PAD: f32 = 16.0;
+
+fn context_bar_hits(top: f32, bottom: f32, center_x: f32, performers: &[egui::Pos2]) -> bool {
+    performers.iter().any(|at| {
+        at.y >= top - CONTEXT_DOT_PAD
+            && at.y <= bottom + CONTEXT_DOT_PAD
+            && (at.x - center_x).abs() <= CONTEXT_BAR_HALF + CONTEXT_DOT_PAD
+    })
+}
+
+/// Above the selection when that band is empty, otherwise below, otherwise
+/// the top edge of the open field.
+fn context_bar_anchor(
+    bounds: egui::Rect,
+    visible: egui::Rect,
+    performers: &[egui::Pos2],
+) -> (egui::Align2, egui::Pos2) {
+    let center_x = bounds.center().x;
+    let above_top = bounds.min.y - CONTEXT_BAR_GAP - CONTEXT_BAR_H;
+    let above_bottom = bounds.min.y - CONTEXT_BAR_GAP;
+    let below_top = bounds.max.y + CONTEXT_BAR_GAP;
+    let below_bottom = bounds.max.y + CONTEXT_BAR_GAP + CONTEXT_BAR_H;
+    let above_fits = above_top >= visible.top()
+        && !context_bar_hits(above_top, above_bottom, center_x, performers);
+    if above_fits {
+        return (
+            egui::Align2::CENTER_BOTTOM,
+            egui::pos2(center_x, above_bottom),
+        );
+    }
+    let below_fits = below_bottom <= visible.bottom()
+        && !context_bar_hits(below_top, below_bottom, center_x, performers);
+    if below_fits {
+        return (egui::Align2::CENTER_TOP, egui::pos2(center_x, below_top));
+    }
+    (
+        egui::Align2::CENTER_TOP,
+        egui::pos2(visible.center().x, visible.top() + 8.0),
+    )
+}
+
 fn paper(margin: i8) -> egui::Frame {
     egui::Frame::new()
         .fill(Color32::WHITE)
@@ -122,10 +166,17 @@ impl DrillApp {
                         } else {
                             text(self.locale, Text::Saved)
                         });
-                        ui.label(
-                            egui::RichText::new(text(self.locale, Text::DetailedMode))
-                                .color(super::app_theme::ACCENT),
-                        );
+                        egui::Frame::new()
+                            .fill(super::simple_mode::SIMPLE_BLUE)
+                            .corner_radius(6.0)
+                            .inner_margin(egui::Margin::symmetric(8, 3))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    egui::RichText::new(text(self.locale, Text::DetailedMode))
+                                        .size(14.0)
+                                        .color(Color32::WHITE),
+                                );
+                            });
                         if ui.button(text(self.locale, Text::SimpleMode)).clicked() {
                             self.set_simple_mode(true);
                         }
@@ -288,20 +339,13 @@ impl DrillApp {
         let Some(bounds) = self.selection_screen_bounds(screen) else {
             return;
         };
+        let performers = self.performer_screen_points(screen);
         // Hug the buttons. A fixed width left an empty stretch on the left
         // because the buttons were centered inside a bar they did not fill.
-        let place_below = bounds.min.y - 8.0 - 48.0 < visible.top();
-        let (pivot, at) = if place_below {
-            (
-                egui::Align2::CENTER_TOP,
-                egui::pos2(bounds.center().x, bounds.max.y + 8.0),
-            )
-        } else {
-            (
-                egui::Align2::CENTER_BOTTOM,
-                egui::pos2(bounds.center().x, bounds.min.y - 8.0),
-            )
-        };
+        // The bar also stays off the dots: above the selection, then below,
+        // then the top edge of the field when both sides are crowded.
+        let (pivot, at) = context_bar_anchor(bounds, visible, &performers);
+        let dragging = self.drag_preview.is_some();
         egui::Area::new("full-context-bar".into())
             .order(egui::Order::Foreground)
             .fade_in(false)
@@ -309,6 +353,9 @@ impl DrillApp {
             .fixed_pos(at)
             .constrain_to(visible)
             .show(ui.ctx(), |ui| {
+                if dragging {
+                    ui.set_opacity(0.45);
+                }
                 paper(6).show(ui, |ui| {
                     // `horizontal` reserves the full available width, so the
                     // paper stays wider than the buttons. A left-to-right
@@ -475,6 +522,28 @@ impl DrillApp {
             bounds = Some(bounds.map_or(dot, |existing: egui::Rect| existing.union(dot)));
         }
         bounds
+    }
+
+    fn performer_screen_points(&self, screen: egui::Rect) -> Vec<egui::Pos2> {
+        let grid = &self.document.grid;
+        let map = drill_render::FieldMap::with_view(
+            grid.width,
+            grid.height,
+            drill_render::Vec2 {
+                x: screen.width(),
+                y: screen.height(),
+            },
+            0.0,
+            Some(self.field_viewport.center),
+            self.field_viewport.zoom,
+        );
+        self.frame_positions
+            .iter()
+            .map(|point| {
+                let local = map.map(*point);
+                screen.min + egui::vec2(local.x, local.y)
+            })
+            .collect()
     }
 
     fn show_full_inspector(&mut self, ui: &mut egui::Ui) {
@@ -956,5 +1025,30 @@ fn roster_number_order(left: &str, right: &str) -> std::cmp::Ordering {
         (Ok(_), Err(_)) => std::cmp::Ordering::Less,
         (Err(_), Ok(_)) => std::cmp::Ordering::Greater,
         (Err(_), Err(_)) => left.cmp(right),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn context_bar_moves_below_when_the_row_above_is_occupied() {
+        let visible = egui::Rect::from_min_max(egui::pos2(0.0, 104.0), egui::pos2(1280.0, 700.0));
+        let bounds = egui::Rect::from_min_max(egui::pos2(400.0, 420.0), egui::pos2(700.0, 480.0));
+        let row_above = egui::pos2(550.0, bounds.min.y - 28.0);
+        let (pivot, at) = context_bar_anchor(bounds, visible, &[row_above]);
+        assert_eq!(pivot, egui::Align2::CENTER_TOP);
+        assert!(at.y >= bounds.max.y);
+        let (clear_pivot, clear_at) = context_bar_anchor(bounds, visible, &[]);
+        assert_eq!(clear_pivot, egui::Align2::CENTER_BOTTOM);
+        assert!(clear_at.y <= bounds.min.y);
+        let crowded = [
+            egui::pos2(550.0, bounds.min.y - 28.0),
+            egui::pos2(550.0, bounds.max.y + 36.0),
+        ];
+        let (top_pivot, top_at) = context_bar_anchor(bounds, visible, &crowded);
+        assert_eq!(top_pivot, egui::Align2::CENTER_TOP);
+        assert!(top_at.y <= visible.top() + 8.5);
     }
 }

@@ -2508,9 +2508,6 @@ impl eframe::App for DrillApp {
                             ring + settle_ring,
                             Stroke::new(2.5, SELECTION_ACCENT),
                         );
-                        if self.selected.len() >= 2 {
-                            self.paint_selection_rank_badge(&painter, pos, index);
-                        }
                     }
                     // Peer rings sit outside the local accent selection ring so
                     // the two never merge into one thick smear.
@@ -2666,12 +2663,12 @@ impl eframe::App for DrillApp {
                         painter.rect_filled(
                             marquee,
                             0.0,
-                            Color32::from_rgba_unmultiplied(70, 160, 255, 35),
+                            Color32::from_rgba_unmultiplied(20, 96, 200, 42),
                         );
                         painter.rect_stroke(
                             marquee,
                             0.0,
-                            Stroke::new(1.5, Color32::from_rgb(95, 180, 255)),
+                            Stroke::new(2.0, Color32::from_rgb(20, 96, 200)),
                             StrokeKind::Inside,
                         );
                     }
@@ -3508,14 +3505,19 @@ impl DrillApp {
                     for (index, name, counts, set_id) in &cards {
                         let selected = *index == current_set;
                         let fill = if selected {
-                            super::app_theme::ACCENT_SOFT
+                            super::simple_mode::SIMPLE_BLUE
                         } else {
-                            ui.visuals().extreme_bg_color
+                            Color32::WHITE
                         };
                         let stroke = if selected {
-                            egui::Stroke::new(1.0, super::app_theme::ACCENT)
+                            egui::Stroke::new(2.0, super::simple_mode::SIMPLE_BLUE)
                         } else {
                             egui::Stroke::new(1.0, super::app_theme::HAIRLINE)
+                        };
+                        let ink = if selected {
+                            Color32::WHITE
+                        } else {
+                            Color32::from_rgb(32, 36, 44)
                         };
                         let response = super::app_theme::surface_frame(ui)
                             .fill(fill)
@@ -3523,7 +3525,11 @@ impl DrillApp {
                             .corner_radius(super::app_theme::CORNER_SM)
                             .inner_margin(egui::Margin::symmetric(10, 6))
                             .show(ui, |ui| {
-                                ui.label(format!("{}  {name}", index + 1));
+                                ui.label(
+                                    egui::RichText::new(format!("{}  {name}", index + 1))
+                                        .color(ink)
+                                        .size(if selected { 16.0 } else { 14.0 }),
+                                );
                             })
                             .response
                             .interact(Sense::click())
@@ -4045,51 +4051,6 @@ impl DrillApp {
         let rect = align.anchor_size(anchor, galley.size()).expand2(padding);
         painter.rect_filled(rect, 5.0, plate);
         painter.galley(rect.min + padding, galley, color);
-    }
-
-    /// Draws the small numbered badge marking a selected performer's rank in
-    /// the current click order (1 = first clicked). Callers gate on
-    /// `self.selected.len() >= 2` first — a badge on a single selected dot
-    /// is just noise. Positioned at the dot's bottom-right, a deliberately
-    /// different corner from the locked-badge "L" at top-right
-    /// (`pos + Vec2::new(7.0, -8.0)`), so a performer that is both locked
-    /// and selected shows both badges without overlap. The radius grows
-    /// with digit count so 10+ ranks aren't clipped.
-    pub(crate) fn paint_selection_rank_badge(
-        &self,
-        painter: &egui::Painter,
-        pos: Pos2,
-        index: usize,
-    ) {
-        let Some(rank) = self
-            .selected
-            .iter()
-            .position(|&i| i == index)
-            .map(|p| p + 1)
-        else {
-            return;
-        };
-        let mut digits: u32 = 1;
-        let mut remaining = rank;
-        while remaining >= 10 {
-            remaining /= 10;
-            digits += 1;
-        }
-        let radius = 7.5 + 2.3 * (digits - 1) as f32;
-        let center = pos + Vec2::new(8.0, 9.0);
-        painter.circle_filled(center, radius, Color32::from_rgb(245, 197, 66));
-        painter.circle_stroke(
-            center,
-            radius,
-            Stroke::new(1.0, Color32::from_black_alpha(200)),
-        );
-        painter.text(
-            center,
-            egui::Align2::CENTER_CENTER,
-            rank.to_string(),
-            egui::FontId::proportional(10.0),
-            Color32::BLACK,
-        );
     }
 
     pub(crate) fn show_recent_projects(&mut self, ctx: &egui::Context) {

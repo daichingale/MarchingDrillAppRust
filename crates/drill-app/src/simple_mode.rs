@@ -401,7 +401,7 @@ enum ChromeMotion {
 
 /// Filled controls use a deeper blue than the light accent wash. White text
 /// on the accent itself fails contrast; this stays in the same blue family.
-const SIMPLE_BLUE: Color32 = Color32::from_rgb(20, 96, 200);
+pub(crate) const SIMPLE_BLUE: Color32 = Color32::from_rgb(20, 96, 200);
 const SIMPLE_ORANGE: Color32 = Color32::from_rgb(196, 112, 24);
 const SIMPLE_INK: Color32 = Color32::from_rgb(28, 32, 40);
 const SIMPLE_CARD: Color32 = Color32::WHITE;
@@ -427,7 +427,9 @@ const SIMPLE_TEMPO_MIN: i32 = 40;
 const SIMPLE_TEMPO_MAX: i32 = 208;
 /// Same reach as the simple-field pointer. Ghost dots are not in this test.
 const SIMPLE_DOT_HIT_RADIUS: f32 = 18.0;
-const PREVIOUS_GHOST_RADIUS: f32 = 4.0;
+const PREVIOUS_GHOST_RADIUS: f32 = 2.25;
+/// A short hop is not worth a line through an 80-person block.
+const PATH_LINE_STEPS: f32 = 4.0;
 const PREVIOUS_GHOST_SEGMENTS: usize = 8;
 const PREVIOUS_TOGGLE_HEIGHT: f32 = 48.0;
 /// One nudge of the shared song offset. Small enough to fix a late entrance
@@ -435,7 +437,22 @@ const PREVIOUS_TOGGLE_HEIGHT: f32 = 48.0;
 const SIMPLE_SONG_NUDGE_SECONDS: f32 = 0.05;
 
 fn previous_ghost_color() -> Color32 {
-    Color32::from_rgba_unmultiplied(120, 126, 136, 140)
+    Color32::from_rgba_unmultiplied(90, 98, 112, 56)
+}
+
+/// Identical pictures have no ghost. A fraction of a step is the same spot.
+fn previous_ghost_separated(previous: Point, current: Point) -> bool {
+    (previous.x - current.x).hypot(previous.y - current.y) > 0.05
+}
+
+/// Lines are for a real move, or for the person you are looking at.
+fn movement_line_visible(distance: f32, step: f32, selected: bool) -> bool {
+    let minimum = if selected {
+        0.05
+    } else {
+        (step * PATH_LINE_STEPS).max(0.05)
+    };
+    distance > minimum
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -486,6 +503,10 @@ pub(crate) enum PhoneIcon {
     NoteOff,
     Minus,
     Plus,
+    Chart,
+    Book,
+    Counts,
+    Sheet,
 }
 
 fn simple_choice_button(
@@ -512,7 +533,7 @@ fn paint_phone_icon(painter: &egui::Painter, center: Pos2, icon: PhoneIcon, colo
     paint_phone_icon_at(painter, center, icon, color, 1.0);
 }
 
-fn paint_phone_icon_at(
+pub(crate) fn paint_phone_icon_at(
     painter: &egui::Painter,
     center: Pos2,
     icon: PhoneIcon,
@@ -691,6 +712,51 @@ fn paint_phone_icon_at(
         PhoneIcon::Plus => {
             painter.line_segment([p(-6.0, 0.0), p(6.0, 0.0)], stroke);
             painter.line_segment([p(0.0, -6.0), p(0.0, 6.0)], stroke);
+        }
+        PhoneIcon::Chart => {
+            painter.rect_stroke(
+                egui::Rect::from_center_size(center, egui::vec2(16.0 * s, 12.0 * s)),
+                1.5 * s,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            painter.circle_filled(p(-3.0, 1.0), 1.6 * s, color);
+            painter.circle_filled(p(2.5, -1.5), 1.6 * s, color);
+            painter.circle_filled(p(4.0, 2.5), 1.6 * s, color);
+        }
+        PhoneIcon::Book => {
+            painter.line_segment([p(0.0, -7.0), p(0.0, 7.0)], stroke);
+            painter.add(egui::Shape::line(
+                vec![p(0.0, -7.0), p(-8.0, -5.0), p(-8.0, 7.0), p(0.0, 5.0)],
+                stroke,
+            ));
+            painter.add(egui::Shape::line(
+                vec![p(0.0, -7.0), p(8.0, -5.0), p(8.0, 7.0), p(0.0, 5.0)],
+                stroke,
+            ));
+        }
+        PhoneIcon::Counts => {
+            for row in [-5.0_f32, 0.0, 5.0] {
+                painter.circle_stroke(p(-6.0, row), 1.7 * s, stroke);
+                painter.line_segment([p(-2.0, row), p(7.0, row)], stroke);
+            }
+        }
+        PhoneIcon::Sheet => {
+            painter.add(egui::Shape::line(
+                vec![
+                    p(-6.0, -7.0),
+                    p(4.0, -7.0),
+                    p(7.0, -4.0),
+                    p(7.0, 7.0),
+                    p(-6.0, 7.0),
+                    p(-6.0, -7.0),
+                ],
+                stroke,
+            ));
+            painter.line_segment([p(4.0, -7.0), p(4.0, -4.0)], stroke);
+            painter.line_segment([p(4.0, -4.0), p(7.0, -4.0)], stroke);
+            painter.line_segment([p(-3.0, -1.0), p(3.0, -1.0)], stroke);
+            painter.line_segment([p(-3.0, 2.5), p(3.0, 2.5)], stroke);
         }
     }
 }
@@ -1123,6 +1189,14 @@ impl DrillApp {
         self.set_simple_mode(!full);
         self.field_tool = FieldTool::Select;
         if !full {
+            // Set 3 has a previous picture, so the faint ghosts are on screen.
+            self.navigate_to_set(2);
+            self.nav_glide.settle();
+            self.simple_mode.show_previous = true;
+            self.simple_mode.previous_key_is_draft = true;
+            self.simple_mode.previous_key_draft = self.simple_mode.draft_path_override.clone();
+            self.simple_mode.previous_key =
+                Some(self.simple_draft_path().to_string_lossy().into_owned());
             return;
         }
         self.full_legacy_chrome = false;
@@ -1160,6 +1234,14 @@ impl DrillApp {
                 self.speed = 0.0;
                 self.count_position = 4.0;
             }
+            "cast-play-mid" => {
+                self.navigate_to_set(2);
+                self.nav_glide.settle();
+                self.playing = true;
+                self.speed = 0.0;
+                let counts = self.document.sets.get(2).map(|set| set.counts).unwrap_or(1);
+                self.count_position = f32::from(counts) * 0.5;
+            }
             _ => {}
         }
     }
@@ -1173,7 +1255,7 @@ impl DrillApp {
     /// `guide-collapsed`, `guide-song`, `full-selected`, `full-collapsed`,
     /// `full-timeline`, `full-multi`, `full-list`, `full-export`, `cast`,
     /// `cast-full`, `cast-one`, `cast-many`, `cast-roster`, `cast-timeline`,
-    /// or `cast-export`.
+    /// `cast-export`, `cast-play`, or `cast-play-mid`.
     pub(crate) fn apply_qa_simple_fixture(&mut self) {
         let Ok(stage) = std::env::var("DRILLFORGE_QA_SIMPLE") else {
             return;
@@ -5656,7 +5738,6 @@ impl DrillApp {
         // A modal owns the bottom of the window. Hide the floating strips so
         // they cannot cover the reset row, the key chart, or a sheet.
         if !self.simple_modal_open() {
-            self.simple_overlay_sets(&ctx, field, &mut block);
             self.simple_overlay_symmetry(&ctx, field, &mut block);
             let mut toolbar_top = field.bottom() - 8.0;
             if self.simple_toolbar_open() {
@@ -5667,11 +5748,9 @@ impl DrillApp {
                 toolbar_top = rect.top();
             }
             self.simple_overlay_song(&ctx, field, toolbar_top, &mut block);
-            let mut ceiling = toolbar_top - 8.0;
-            if !self.document.sets.is_empty() {
-                ceiling = ceiling.min(field.bottom() - 66.0);
-            }
-            self.simple_overlay_front_labels(&ctx, field, ceiling, &mut block);
+            let sets_anchor = toolbar_top - 8.0;
+            let sets_rect = self.simple_overlay_sets(&ctx, field, sets_anchor, &mut block);
+            self.simple_overlay_front_labels(&ctx, field, sets_anchor, sets_rect, &mut block);
         }
         self.simple_mode.overlay_block = block;
     }
@@ -5681,7 +5760,8 @@ impl DrillApp {
         &self,
         ctx: &egui::Context,
         field: egui::Rect,
-        ceiling: f32,
+        dock_ceiling: f32,
+        sets: Option<egui::Rect>,
         block: &mut Option<egui::Rect>,
     ) {
         let options = self.field_render_options(false);
@@ -5714,10 +5794,15 @@ impl DrillApp {
             egui::Id::new("simple-front-labels"),
         ));
         for (point, id) in marks {
+            let anchor = to_screen(point);
+            let ceiling = sets
+                .filter(|strip| anchor.x < strip.right() + 12.0)
+                .map(|strip| strip.top() - 8.0)
+                .unwrap_or(dock_ceiling);
             let chip = paint_front_chip(
                 &painter,
                 field,
-                to_screen(point),
+                anchor,
                 ceiling,
                 i18n::registered(self.locale, id),
             );
@@ -5776,15 +5861,17 @@ impl DrillApp {
         &mut self,
         ctx: &egui::Context,
         field: egui::Rect,
+        bottom: f32,
         block: &mut Option<egui::Rect>,
-    ) {
+    ) -> Option<egui::Rect> {
         let set_count = self.document.sets.len();
         if set_count == 0 {
-            return;
+            return None;
         }
-        let pos = field.left_bottom() + egui::Vec2::new(10.0, -58.0);
+        let pos = egui::pos2(field.left() + 10.0, bottom);
         let response = egui::Area::new(egui::Id::new("simple-overlay-sets"))
             .order(egui::Order::Foreground)
+            .pivot(egui::Align2::LEFT_BOTTOM)
             .fixed_pos(pos)
             .show(ctx, |ui| {
                 egui::Frame::new()
@@ -5803,6 +5890,7 @@ impl DrillApp {
                     });
             });
         overlay_union(block, response.response.rect);
+        Some(response.response.rect)
     }
 
     fn simple_overlay_chrome(
@@ -7659,20 +7747,31 @@ impl DrillApp {
                 .filter(|(kind, _, _)| *kind == ChromeMotion::Empty)
                 .map(|(_, ease, _)| 0.86 + 0.14 * ease)
                 .unwrap_or(1.0);
-            let faded = Color32::from_rgba_unmultiplied(20, 96, 200, 90);
+            let faded = Color32::from_rgba_unmultiplied(20, 96, 200, 170);
             painter.circle_filled(
                 center,
                 46.0 * pop,
-                Color32::from_rgba_unmultiplied(76, 163, 255, 28),
+                Color32::from_rgba_unmultiplied(76, 163, 255, 36),
             );
             paint_phone_icon_at(&painter, center, PhoneIcon::PersonPlus, faded, 2.4 * pop);
-            painter.text(
-                center + egui::Vec2::new(0.0, 52.0 * pop),
-                egui::Align2::CENTER_TOP,
-                i18n::registered(self.locale, "simple-mode.082"),
-                egui::FontId::proportional(13.0),
+            let hint = i18n::registered(self.locale, "simple-mode.082");
+            let galley = painter.layout_no_wrap(
+                hint.to_owned(),
+                egui::FontId::proportional(20.0),
                 SIMPLE_BLUE,
             );
+            let pad = egui::vec2(14.0, 8.0);
+            let plate = egui::Align2::CENTER_TOP
+                .anchor_size(center + egui::vec2(0.0, 58.0 * pop), galley.size())
+                .expand2(pad);
+            painter.rect_filled(plate, 12.0, Color32::from_white_alpha(245));
+            painter.rect_stroke(
+                plate,
+                12.0,
+                Stroke::new(1.0, super::app_theme::HAIRLINE),
+                egui::StrokeKind::Inside,
+            );
+            painter.galley(plate.min + pad, galley, SIMPLE_BLUE);
         }
         if interactive {
             self.field_pointer = response.hover_pos().map(from_screen);
@@ -7763,9 +7862,6 @@ impl DrillApp {
                         egui::FontId::proportional(14.0),
                         SIMPLE_BLUE,
                     );
-                }
-                if self.selected.len() >= 2 {
-                    self.paint_selection_rank_badge(&painter, pos, index);
                 }
             }
         }
@@ -7868,7 +7964,7 @@ impl DrillApp {
         ) {
             return;
         }
-        let Some(points) = self
+        let Some(previous) = self
             .document
             .sets
             .get(self.current_set - 1)
@@ -7876,8 +7972,23 @@ impl DrillApp {
         else {
             return;
         };
+        let current = self
+            .document
+            .sets
+            .get(self.current_set)
+            .map(|set| set.positions.as_slice());
+        let separated: Vec<Point> = previous
+            .iter()
+            .enumerate()
+            .filter(|(index, previous)| {
+                current
+                    .and_then(|points| points.get(*index))
+                    .is_none_or(|now| previous_ghost_separated(**previous, *now))
+            })
+            .map(|(_, point)| *point)
+            .collect();
         let Some(mesh) =
-            prepare_previous_ghost_mesh(&mut self.simple_mode.ghost_mesh, points, to_screen)
+            prepare_previous_ghost_mesh(&mut self.simple_mode.ghost_mesh, &separated, to_screen)
         else {
             return;
         };
@@ -7889,15 +8000,31 @@ impl DrillApp {
             return;
         }
         let only = self.simple_focus_index();
-        let ink = Color32::from_rgba_unmultiplied(20, 96, 200, 180);
+        let step = self.document.grid.horizontal_units
+            / f32::from(self.document.grid.horizontal_steps.max(1));
         for (index, start, end) in simple_indexed_paths(&self.document, self.current_set) {
             if only.is_some_and(|focus| focus != index) {
                 continue;
             }
+            let travel = (start.x - end.x).hypot(start.y - end.y);
+            let selected = self.selected.contains(&index);
+            if !movement_line_visible(travel, step, selected) {
+                continue;
+            }
+            let ink = if selected {
+                Color32::from_rgba_unmultiplied(20, 96, 200, 200)
+            } else {
+                Color32::from_rgba_unmultiplied(20, 96, 200, 110)
+            };
             let from = to_screen(start);
             let to = to_screen(end);
-            painter.line_segment([from, to], Stroke::new(2.5, ink));
-            painter.circle_stroke(to, 8.0, Stroke::new(1.5, ink));
+            painter.line_segment(
+                [from, to],
+                Stroke::new(if selected { 2.0 } else { 1.4 }, ink),
+            );
+            if selected {
+                painter.circle_stroke(to, 6.0, Stroke::new(1.5, ink));
+            }
         }
     }
 
@@ -12928,6 +13055,132 @@ mod tests {
         assert_eq!(loaded.sets.len(), 6);
         assert_eq!(loaded.sets[3].counts, doc.sets[3].counts);
         assert_eq!(loaded.sections.len(), doc.sections.len());
+    }
+
+    #[test]
+    fn short_moves_skip_the_path_line_unless_selected() {
+        let step = 0.5;
+        assert!(!movement_line_visible(step * 2.0, step, false));
+        assert!(movement_line_visible(step * 5.0, step, false));
+        assert!(movement_line_visible(step * 2.0, step, true));
+        assert!(!movement_line_visible(0.0, step, true));
+        let same = Point { x: 4.0, y: 4.0 };
+        assert!(!previous_ghost_separated(same, same));
+        assert!(previous_ghost_separated(
+            same,
+            Point {
+                x: same.x + 1.0,
+                y: same.y
+            }
+        ));
+    }
+
+    #[test]
+    fn dragging_twenty_people_snaps_then_undo_restores_them() {
+        let mut app = DrillApp::default();
+        app.install_document(qa_cast_document());
+        app.set_simple_mode(false);
+        app.navigate_to_set(0);
+        app.nav_glide.settle();
+        app.count_position = 0.0;
+        app.playing = false;
+        app.replace_selection((0..20).collect());
+        let before: Vec<Point> = app.document.sets[0]
+            .positions
+            .iter()
+            .take(20)
+            .copied()
+            .collect();
+        let origin = egui::pos2(400.0, 300.0);
+        app.begin_field_drag(origin);
+        app.update_field_drag(origin + egui::vec2(48.0, 0.0), 20.0, true);
+        let preview = app.drag_preview.clone().expect("preview");
+        assert_eq!(preview.len(), 20);
+        for (start, end) in before.iter().zip(preview.iter()) {
+            assert!((end.x - start.x).abs() > 0.2, "drag did not move {start:?}");
+            let snapped = app.document.grid.snap(*end);
+            assert!((snapped.x - end.x).abs() < 1e-3 && (snapped.y - end.y).abs() < 1e-3);
+        }
+        app.commit_field_drag();
+        let moved = app.document.sets[0].positions[0];
+        assert_ne!(moved, before[0]);
+        assert!(app.history.can_undo());
+        assert!(app.history.undo(&mut app.document));
+        assert_eq!(app.document.sets[0].positions[0], before[0]);
+        assert!(app.history.redo(&mut app.document));
+        assert_eq!(app.document.sets[0].positions[0], moved);
+    }
+
+    #[test]
+    fn range_select_keeps_only_dots_inside_the_rectangle() {
+        let points = [
+            Point { x: 1.0, y: 1.0 },
+            Point { x: 4.0, y: 4.0 },
+            Point { x: 9.0, y: 9.0 },
+        ];
+        let map = |point: Point| egui::pos2(point.x * 10.0, point.y * 10.0);
+        let marquee = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(50.0, 50.0));
+        let hit: Vec<usize> = points
+            .iter()
+            .enumerate()
+            .filter(|(_, point)| marquee.contains(map(**point)))
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(hit, vec![0, 1]);
+    }
+
+    #[test]
+    fn midway_count_sits_between_the_two_pictures() {
+        let doc = qa_cast_document();
+        let mut mid = Vec::new();
+        doc.positions_at(2, 0.5, &mut mid);
+        let start = doc.sets[2].positions[0];
+        let end = doc.sets[3].positions[0];
+        assert!((start.x - end.x).hypot(start.y - end.y) > 0.4);
+        let at = mid[0];
+        let expected = Point {
+            x: (start.x + end.x) * 0.5,
+            y: (start.y + end.y) * 0.5,
+        };
+        assert!(
+            (at.x - expected.x).hypot(at.y - expected.y) < 0.2,
+            "mid {at:?} expected near {expected:?}"
+        );
+    }
+
+    #[test]
+    fn current_set_export_is_one_chart_and_the_file_reopens() {
+        let doc = qa_cast_document();
+        let state = super::print_state::PrintState::default();
+        let all = state.report(&doc, 4, &[]);
+        let charts = all
+            .items
+            .iter()
+            .filter(|item| matches!(item, drill_export::page::PageItem::FieldDiagram { .. }))
+            .count();
+        assert_eq!(charts, 6);
+        let mut one = super::print_state::PrintState::default();
+        one.current_set_only = true;
+        one.scope_set = 2;
+        let narrowed = one.report(&doc, 4, &[]);
+        let one_chart = narrowed
+            .items
+            .iter()
+            .filter(|item| matches!(item, drill_export::page::PageItem::FieldDiagram { .. }))
+            .count();
+        assert_eq!(one_chart, 1);
+        let dir = std::env::temp_dir().join(format!("drillforge-reopen-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("文化祭.drill.json");
+        let json = doc.to_json().expect("json");
+        drill_project::atomic_write(&path, json.as_bytes(), None).expect("write");
+        let loaded =
+            drill_core::Document::from_json(&std::fs::read_to_string(&path).expect("read"))
+                .expect("reload");
+        assert_eq!(loaded.title, doc.title);
+        assert_eq!(loaded.sets[2].positions, doc.sets[2].positions);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

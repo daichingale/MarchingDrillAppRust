@@ -1153,10 +1153,36 @@ fn marker_digits(label: &str) -> String {
     label.chars().take(2).collect()
 }
 
+fn channel_luminance(channel: u8) -> f32 {
+    let scaled = f32::from(channel) / 255.0;
+    if scaled <= 0.04045 {
+        scaled / 12.92
+    } else {
+        ((scaled + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn relative_luminance(fill: [u8; 3]) -> f32 {
+    0.2126 * channel_luminance(fill[0])
+        + 0.7152 * channel_luminance(fill[1])
+        + 0.0722 * channel_luminance(fill[2])
+}
+
+fn contrast_ratio(lighter: f32, darker: f32) -> f32 {
+    let (hi, lo) = if lighter >= darker {
+        (lighter, darker)
+    } else {
+        (darker, lighter)
+    };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+/// Dark ink on light fills, white ink on dark fills. The choice is whichever
+/// pair has the higher contrast, so orange and gold stay readable.
 fn ink_on(fill: [u8; 3]) -> Rgba {
-    let luminance =
-        0.2126 * f32::from(fill[0]) + 0.7152 * f32::from(fill[1]) + 0.0722 * f32::from(fill[2]);
-    if luminance > 160.0 {
+    let background = relative_luminance(fill);
+    let dark = relative_luminance([20, 24, 32]);
+    if contrast_ratio(background, dark) >= contrast_ratio(background, 1.0) {
         Rgba(20, 24, 32, 255)
     } else {
         Rgba(255, 255, 255, 255)
@@ -1709,6 +1735,46 @@ mod tests {
             }
             other => panic!("expected a label, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn light_fills_use_dark_numbers_and_dark_fills_use_white() {
+        let mut doc = Document::blank(2);
+        doc.performers[0].color = Some([196, 132, 24]).into();
+        doc.performers[1].color = Some([32, 92, 196]).into();
+        let positions = doc.sets[0].positions.clone();
+        let options = RenderOptions {
+            symbol_override: Some(Symbol::Circle),
+            label_inside: true,
+            show_labels: true,
+            ..RenderOptions::default()
+        };
+        let mut out = DisplayList::new();
+        build_field_2d(
+            &Scene {
+                positions: &positions,
+                document: &doc,
+                viewport: Viewport {
+                    size: Vec2 { x: 800.0, y: 600.0 },
+                    ui_scale: 1.0,
+                },
+                options: &options,
+                theme: &Theme::PRINT_LIGHT,
+            },
+            &mut BuildScratch,
+            &mut out,
+        );
+        let colors: Vec<Rgba> = out
+            .layer(Layer::DotLabel)
+            .iter()
+            .filter_map(|cmd| match cmd {
+                DrawCmd::Text { color, .. } => Some(*color),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(colors.len(), 2);
+        assert_eq!(colors[0], Rgba(20, 24, 32, 255));
+        assert_eq!(colors[1], Rgba(255, 255, 255, 255));
     }
 
     #[test]

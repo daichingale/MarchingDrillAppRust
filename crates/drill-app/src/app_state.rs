@@ -175,28 +175,95 @@ pub(crate) fn cull_offscreen_dots(performers: usize) -> bool {
     performers >= LIGHT_PLAYBACK_MIN
 }
 
-fn print_output_card(ui: &mut egui::Ui, selected: bool, label: &str) -> bool {
+fn print_kind_label(locale: Locale, kind: drill_export::report::ReportKind) -> &'static str {
+    match kind {
+        drill_export::report::ReportKind::SetChart => i18n::registered(locale, "app-state.011"),
+        drill_export::report::ReportKind::PerformerDrillBook => {
+            i18n::registered(locale, "app-state.012")
+        }
+        drill_export::report::ReportKind::CountSheet => i18n::registered(locale, "app-state.013"),
+        drill_export::report::ReportKind::ProductionSheet => text(locale, Text::ShowSheet),
+    }
+}
+
+fn print_kind_icon(kind: drill_export::report::ReportKind) -> simple_mode::PhoneIcon {
+    match kind {
+        drill_export::report::ReportKind::SetChart => simple_mode::PhoneIcon::Chart,
+        drill_export::report::ReportKind::PerformerDrillBook => simple_mode::PhoneIcon::Book,
+        drill_export::report::ReportKind::CountSheet => simple_mode::PhoneIcon::Counts,
+        drill_export::report::ReportKind::ProductionSheet => simple_mode::PhoneIcon::Sheet,
+    }
+}
+
+fn print_output_card(
+    ui: &mut egui::Ui,
+    selected: bool,
+    label: &str,
+    icon: simple_mode::PhoneIcon,
+) -> bool {
     let fill = if selected {
         app_theme::ACCENT_SOFT
     } else {
         Color32::WHITE
     };
     let stroke = if selected {
-        app_theme::ACCENT
+        simple_mode::SIMPLE_BLUE
     } else {
         app_theme::HAIRLINE
     };
-    let button = egui::Button::new(
-        egui::RichText::new(label)
-            .size(16.0)
-            .strong()
-            .color(Color32::from_rgb(32, 36, 44)),
-    )
-    .fill(fill)
-    .stroke(Stroke::new(if selected { 2.0 } else { 1.0 }, stroke))
-    .min_size(egui::vec2(240.0, 56.0))
-    .corner_radius(8.0);
-    ui.add(button).clicked()
+    let ink = Color32::from_rgb(32, 36, 44);
+    let width = ui.available_width().clamp(220.0, 268.0);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 64.0), Sense::click());
+    if response.hovered() && !selected {
+        ui.painter()
+            .rect_filled(rect, 8.0, Color32::from_rgb(244, 246, 250));
+    } else {
+        ui.painter().rect_filled(rect, 8.0, fill);
+    }
+    ui.painter().rect_stroke(
+        rect,
+        8.0,
+        Stroke::new(if selected { 2.0 } else { 1.0 }, stroke),
+        StrokeKind::Inside,
+    );
+    simple_mode::paint_phone_icon_at(
+        ui.painter(),
+        Pos2::new(rect.left() + 28.0, rect.center().y),
+        icon,
+        if selected {
+            simple_mode::SIMPLE_BLUE
+        } else {
+            ink
+        },
+        1.15,
+    );
+    ui.painter().text(
+        Pos2::new(rect.left() + 52.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(16.0),
+        ink,
+    );
+    response.clicked()
+}
+
+fn solid_export_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    let width = ui.available_width().clamp(180.0, 460.0);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 48.0), Sense::click());
+    let fill = if response.hovered() {
+        Color32::from_rgb(12, 72, 168)
+    } else {
+        simple_mode::SIMPLE_BLUE
+    };
+    ui.painter().rect_filled(rect, 8.0, fill);
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        egui::FontId::proportional(18.0),
+        Color32::WHITE,
+    );
+    response
 }
 
 /// How the move leaving this scene is timed and shaped. Straight and linear
@@ -3133,6 +3200,51 @@ impl DrillApp {
         .into();
     }
 
+    fn paint_print_preview(&mut self, painter: &egui::Painter, rect: egui::Rect) {
+        let positions = self
+            .document
+            .sets
+            .get(self.current_set)
+            .map(|set| set.positions.clone())
+            .unwrap_or_else(|| self.frame_positions.clone());
+        let options = drill_render::RenderOptions {
+            margin: 8.0,
+            show_labels: true,
+            dot_radius: 5.0,
+            label_size: 9.0,
+            field_center: None,
+            field_zoom: 1.0,
+            skip_offscreen: false,
+            extend_grid: false,
+            symbol_override: Some(Symbol::Circle),
+            label_inside: true,
+            ..drill_render::RenderOptions::default()
+        };
+        let mut list = drill_render::DisplayList::new();
+        let scene = drill_render::Scene {
+            document: &self.document,
+            positions: &positions,
+            viewport: drill_render::Viewport {
+                size: drill_render::Vec2 {
+                    x: rect.width(),
+                    y: rect.height(),
+                },
+                ui_scale: 1.0,
+            },
+            options: &options,
+            theme: &drill_render::Theme::PRINT_LIGHT,
+        };
+        drill_render::build_field_2d(&scene, &mut self.render_scratch, &mut list);
+        painter.rect_filled(rect, 6.0, Color32::WHITE);
+        egui_backend::paint(painter, rect.min, &list);
+        painter.rect_stroke(
+            rect,
+            6.0,
+            Stroke::new(1.0, app_theme::HAIRLINE),
+            StrokeKind::Inside,
+        );
+    }
+
     fn show_print_workspace(&mut self, context: &egui::Context) {
         self.print_state.poll(self.locale);
         if !self.print_state.open {
@@ -3140,14 +3252,46 @@ impl DrillApp {
         }
         let selected = self.selected.iter().copied().collect::<Vec<_>>();
         let mut open = self.print_state.open;
+        let mut dismiss = false;
         let mut notation = self.document.grid.coordinate_notation.clone();
         let mut notation_changed = false;
+        let screen = context.viewport_rect().shrink(16.0);
+        egui::Area::new("print-sheet-dim".into())
+            .order(egui::Order::Foreground)
+            .fixed_pos(context.viewport_rect().min)
+            .interactable(true)
+            .show(context, |ui| {
+                let (rect, _) =
+                    ui.allocate_exact_size(context.viewport_rect().size(), Sense::click());
+                ui.painter()
+                    .rect_filled(rect, 0.0, Color32::from_black_alpha(88));
+            });
         egui::Window::new(i18n::registered(self.locale, "app-state.007"))
             .open(&mut open)
-            .default_size(egui::vec2(920.0, 640.0))
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .order(egui::Order::Tooltip)
+            .fade_in(false)
+            .collapsible(false)
             .resizable(true)
+            .constrain_to(screen)
+            .default_size(egui::vec2(
+                (screen.width() - 24.0).min(980.0),
+                (screen.height() - 24.0).min(700.0),
+            ))
             .scroll(true)
             .show(context, |ui| {
+                ui.horizontal(|ui| {
+                    if ui
+                        .button(
+                            egui::RichText::new(text(self.locale, Text::BackToEdit))
+                                .size(16.0)
+                                .color(Color32::from_rgb(32, 36, 44)),
+                        )
+                        .clicked()
+                    {
+                        dismiss = true;
+                    }
+                });
                 ui.heading(i18n::registered(self.locale, "app-state.008"));
                 ui.label(i18n::registered(self.locale, "app-state.009"));
                 ui.add_space(8.0);
@@ -3155,25 +3299,17 @@ impl DrillApp {
                     ui.vertical(|ui| {
                         ui.set_min_width(248.0);
                         ui.set_max_width(268.0);
-                        for (kind, id) in [
-                            (drill_export::report::ReportKind::SetChart, "app-state.011"),
-                            (
-                                drill_export::report::ReportKind::PerformerDrillBook,
-                                "app-state.012",
-                            ),
-                            (
-                                drill_export::report::ReportKind::CountSheet,
-                                "app-state.013",
-                            ),
-                            (
-                                drill_export::report::ReportKind::ProductionSheet,
-                                "app-state.014",
-                            ),
+                        for kind in [
+                            drill_export::report::ReportKind::SetChart,
+                            drill_export::report::ReportKind::PerformerDrillBook,
+                            drill_export::report::ReportKind::CountSheet,
+                            drill_export::report::ReportKind::ProductionSheet,
                         ] {
                             if print_output_card(
                                 ui,
                                 self.print_state.kind == kind,
-                                i18n::registered(self.locale, id),
+                                print_kind_label(self.locale, kind),
+                                print_kind_icon(kind),
                             ) {
                                 self.print_state.kind = kind;
                             }
@@ -3184,99 +3320,104 @@ impl DrillApp {
                     ui.vertical(|ui| {
                         ui.set_min_width(420.0);
                         ui.strong(i18n::registered(self.locale, "app-state.032"));
-                        egui::ComboBox::from_id_salt("print-page-size")
-                            .selected_text(self.print_state.page_size_label())
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(
-                                    &mut self.print_state.settings.page_size,
-                                    drill_export::page::PageSize::A4,
-                                    "A4",
-                                );
-                                ui.selectable_value(
-                                    &mut self.print_state.settings.page_size,
-                                    drill_export::page::PageSize::Letter,
-                                    "Letter",
-                                );
-                                ui.selectable_value(
-                                    &mut self.print_state.settings.page_size,
-                                    drill_export::page::PageSize::Tabloid,
-                                    "Tabloid",
-                                );
-                            });
-                        egui::ComboBox::from_id_salt("print-orientation")
-                            .selected_text(self.print_state.orientation_label(self.locale))
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(
-                                    &mut self.print_state.settings.orientation,
-                                    drill_export::page::Orientation::Portrait,
-                                    i18n::registered(self.locale, "app-state.033"),
-                                );
-                                ui.selectable_value(
-                                    &mut self.print_state.settings.orientation,
-                                    drill_export::page::Orientation::Landscape,
-                                    i18n::registered(self.locale, "app-state.034"),
-                                );
-                            });
+                        let option_ink = Color32::from_rgb(32, 36, 44);
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            ui.label(
+                                egui::RichText::new(text(self.locale, Text::Paper))
+                                    .size(14.0)
+                                    .color(option_ink),
+                            );
+                            egui::ComboBox::from_id_salt("print-page-size")
+                                .width(108.0)
+                                .selected_text(self.print_state.page_size_label())
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut self.print_state.settings.page_size,
+                                        drill_export::page::PageSize::A4,
+                                        "A4",
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.print_state.settings.page_size,
+                                        drill_export::page::PageSize::Letter,
+                                        "Letter",
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.print_state.settings.page_size,
+                                        drill_export::page::PageSize::Tabloid,
+                                        "Tabloid",
+                                    );
+                                });
+                            ui.label(
+                                egui::RichText::new(text(self.locale, Text::Orientation))
+                                    .size(14.0)
+                                    .color(option_ink),
+                            );
+                            egui::ComboBox::from_id_salt("print-orientation")
+                                .width(108.0)
+                                .selected_text(self.print_state.orientation_label(self.locale))
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut self.print_state.settings.orientation,
+                                        drill_export::page::Orientation::Portrait,
+                                        i18n::registered(self.locale, "app-state.033"),
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.print_state.settings.orientation,
+                                        drill_export::page::Orientation::Landscape,
+                                        i18n::registered(self.locale, "app-state.034"),
+                                    );
+                                });
+                            ui.label(
+                                egui::RichText::new(text(self.locale, Text::Range))
+                                    .size(14.0)
+                                    .color(option_ink),
+                            );
+                            egui::ComboBox::from_id_salt("print-range")
+                                .width(128.0)
+                                .selected_text(if self.print_state.current_set_only {
+                                    text(self.locale, Text::ThisSet)
+                                } else {
+                                    text(self.locale, Text::AllSets)
+                                })
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut self.print_state.current_set_only,
+                                        false,
+                                        text(self.locale, Text::AllSets),
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.print_state.current_set_only,
+                                        true,
+                                        text(self.locale, Text::ThisSet),
+                                    );
+                                });
+                        });
                         ui.add_space(8.0);
                         ui.strong(i18n::registered(self.locale, "app-state.036"));
+                        self.print_state.scope_set = self.current_set;
                         let pages = self.print_state.page_count(
                             &self.document,
                             self.beats_per_measure,
                             &selected,
                         );
-                        let (w, h) = self.print_state.settings.dimensions_mm();
-                        ui.label(format!("{pages} · {w:.0} × {h:.0} mm"));
+                        ui.label(
+                            egui::RichText::new(i18n::page_summary(
+                                self.locale,
+                                pages,
+                                self.print_state.page_size_label(),
+                            ))
+                            .size(16.0)
+                            .color(option_ink),
+                        );
+                        let (page_w, page_h) = self.print_state.settings.dimensions_mm();
                         let available = ui.available_width().min(460.0);
-                        let ratio = h / w;
+                        let ratio = page_h / page_w;
                         let (rect, _) = ui.allocate_exact_size(
                             Vec2::new(available, (available * ratio).min(280.0)),
                             Sense::hover(),
                         );
-                        ui.painter().rect_filled(rect, 6.0, Color32::WHITE);
-                        ui.painter().rect_stroke(
-                            rect,
-                            6.0,
-                            Stroke::new(1.0, app_theme::HAIRLINE),
-                            StrokeKind::Inside,
-                        );
-                        let inner = rect.shrink(16.0);
-                        let kind_label = match self.print_state.kind {
-                            drill_export::report::ReportKind::SetChart => {
-                                i18n::registered(self.locale, "app-state.011")
-                            }
-                            drill_export::report::ReportKind::PerformerDrillBook => {
-                                i18n::registered(self.locale, "app-state.012")
-                            }
-                            drill_export::report::ReportKind::CountSheet => {
-                                i18n::registered(self.locale, "app-state.013")
-                            }
-                            drill_export::report::ReportKind::ProductionSheet => {
-                                i18n::registered(self.locale, "app-state.014")
-                            }
-                        };
-                        ui.painter().text(
-                            inner.left_top(),
-                            egui::Align2::LEFT_TOP,
-                            &self.document.title,
-                            egui::FontId::proportional(16.0),
-                            Color32::from_rgb(32, 36, 44),
-                        );
-                        ui.painter().text(
-                            Pos2::new(inner.left(), inner.top() + 28.0),
-                            egui::Align2::LEFT_TOP,
-                            kind_label,
-                            egui::FontId::proportional(14.0),
-                            app_theme::SECONDARY_TEXT,
-                        );
-                        for row in 0..6 {
-                            let y = inner.top() + 64.0 + row as f32 * 22.0;
-                            if y < inner.bottom() {
-                                ui.painter().line_segment(
-                                    [Pos2::new(inner.left(), y), Pos2::new(inner.right(), y)],
-                                    Stroke::new(1.0, app_theme::HAIRLINE),
-                                );
-                            }
-                        }
+                        self.paint_print_preview(ui.painter(), rect);
                         ui.add_space(12.0);
                         if let Some(progress) = self.print_state.progress() {
                             ui.add(
@@ -3290,42 +3431,32 @@ impl DrillApp {
                             {
                                 self.print_state.cancel();
                             }
-                        } else {
-                            let button = egui::Button::new(
-                                egui::RichText::new(text(self.locale, Text::Export))
-                                    .size(18.0)
-                                    .color(Color32::WHITE),
-                            )
-                            .fill(app_theme::ACCENT)
-                            .min_size(egui::vec2(180.0, 44.0));
-                            if ui.add(button).clicked()
-                                && let Some(path) = rfd::FileDialog::new()
-                                    .set_file_name(match self.print_state.kind {
-                                        drill_export::report::ReportKind::SetChart => {
-                                            "set_charts.pdf"
-                                        }
-                                        drill_export::report::ReportKind::PerformerDrillBook => {
-                                            "drill_book.pdf"
-                                        }
-                                        drill_export::report::ReportKind::CountSheet => {
-                                            "count_sheet.pdf"
-                                        }
-                                        drill_export::report::ReportKind::ProductionSheet => {
-                                            "production_sheet.pdf"
-                                        }
-                                    })
-                                    .add_filter("PDF", &["pdf"])
-                                    .save_file()
-                            {
-                                self.print_state.start(
-                                    &self.document,
-                                    self.beats_per_measure,
-                                    &selected,
-                                    path,
-                                    self.locale,
-                                    self.underlay_state.asset_bytes.clone(),
-                                );
-                            }
+                        } else if solid_export_button(ui, text(self.locale, Text::Export)).clicked()
+                            && let Some(path) = rfd::FileDialog::new()
+                                .set_file_name(match self.print_state.kind {
+                                    drill_export::report::ReportKind::SetChart => "set_charts.pdf",
+                                    drill_export::report::ReportKind::PerformerDrillBook => {
+                                        "drill_book.pdf"
+                                    }
+                                    drill_export::report::ReportKind::CountSheet => {
+                                        "count_sheet.pdf"
+                                    }
+                                    drill_export::report::ReportKind::ProductionSheet => {
+                                        "production_sheet.pdf"
+                                    }
+                                })
+                                .add_filter("PDF", &["pdf"])
+                                .save_file()
+                        {
+                            self.print_state.scope_set = self.current_set;
+                            self.print_state.start(
+                                &self.document,
+                                self.beats_per_measure,
+                                &selected,
+                                path,
+                                self.locale,
+                                self.underlay_state.asset_bytes.clone(),
+                            );
                         }
                         if !self.print_state.status.is_empty() {
                             ui.label(&self.print_state.status);
@@ -3545,6 +3676,9 @@ impl DrillApp {
                     });
                 });
             });
+        if dismiss {
+            open = false;
+        }
         self.print_state.open = open;
         if notation_changed {
             let mut grid = self.document.grid.clone();
