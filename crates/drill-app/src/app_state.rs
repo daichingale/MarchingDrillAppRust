@@ -2021,6 +2021,8 @@ impl DrillApp {
         self.field_tool = FieldTool::Select;
         self.field_pointer = None;
         self.simple_reset_session_view();
+        self.stop_simple_metronome();
+        self.refresh_external_song();
     }
 
     fn begin_simple_show(&mut self) {
@@ -3032,14 +3034,8 @@ impl DrillApp {
         self.navigation_seek_to_count(target_count);
         self.playing = false;
         self.audio_state.pause();
-        if let Some(track) = &self.document.audio {
-            self.audio_state
-                .seek_seconds(drill_core::audio::count_to_audio_time(
-                    track,
-                    &self.document.tempo,
-                    target_count as f32,
-                ));
-        }
+        self.stop_simple_metronome();
+        self.seek_audio_to_global(target_count as f32);
         self.status = i18n::registered(
             self.locale,
             if forward {
@@ -3587,15 +3583,9 @@ impl DrillApp {
         self.count_position = local_count;
         self.playing = false;
         self.audio_state.pause();
-        if let Some(track) = &self.document.audio {
-            let global = self.document.global_count(set_index, local_count);
-            self.audio_state
-                .seek_seconds(drill_core::audio::count_to_audio_time(
-                    track,
-                    &self.document.tempo,
-                    global,
-                ));
-        }
+        self.stop_simple_metronome();
+        let global = self.document.global_count(set_index, local_count);
+        self.seek_audio_to_global(global);
     }
 
     /// Jump to a set's first exact count without changing the working
@@ -3610,14 +3600,8 @@ impl DrillApp {
         self.navigation_seek_to_count(target);
         self.playing = false;
         self.audio_state.pause();
-        if let Some(track) = &self.document.audio {
-            self.audio_state
-                .seek_seconds(drill_core::audio::count_to_audio_time(
-                    track,
-                    &self.document.tempo,
-                    target as f32,
-                ));
-        }
+        self.stop_simple_metronome();
+        self.seek_audio_to_global(target as f32);
         self.status = format!(
             "{}: {set_name}",
             i18n::registered(self.locale, "set-navigator.010"),
@@ -3642,14 +3626,8 @@ impl DrillApp {
         self.navigation_seek_to_count(target);
         self.playing = false;
         self.audio_state.pause();
-        if let Some(track) = &self.document.audio {
-            self.audio_state
-                .seek_seconds(drill_core::audio::count_to_audio_time(
-                    track,
-                    &self.document.tempo,
-                    target as f32,
-                ));
-        }
+        self.stop_simple_metronome();
+        self.seek_audio_to_global(target as f32);
         self.status = format!(
             "{} {}",
             i18n::registered(self.locale, "go-to-count.008"),
@@ -3662,6 +3640,7 @@ impl DrillApp {
             self.playing = false;
             self.count_in_remaining = None;
             self.audio_state.pause();
+            self.stop_simple_metronome();
             return;
         }
         let global = self
@@ -3690,16 +3669,34 @@ impl DrillApp {
         }
     }
 
+    /// File position for a global count, using the same mapping as full mode.
+    fn audio_seconds_at_global(&self, global: f32) -> Option<f32> {
+        self.document.audio.as_ref().map(|track| {
+            drill_core::audio::count_to_audio_time(track, &self.document.tempo, global)
+        })
+    }
+
+    fn seek_audio_to_global(&self, global: f32) {
+        if let Some(seconds) = self.audio_seconds_at_global(global) {
+            self.audio_state.seek_seconds(seconds);
+        }
+    }
+
     /// Start the reference track at the playhead. A count-in calls this only
     /// after the four beats, so the audio does not run ahead of the picture.
+    /// Simple mode may keep the song quiet and run the metronome instead.
     fn begin_playback_audio(&mut self) {
+        if self.simple_mode.enabled {
+            self.align_simple_listening();
+            return;
+        }
         if let Some(track) = &self.document.audio {
             let global = self
                 .document
                 .global_count(self.current_set, self.count_position);
-            let seconds =
-                drill_core::audio::count_to_audio_time(track, &self.document.tempo, global);
-            self.audio_state.seek_seconds(seconds);
+            if let Some(seconds) = self.audio_seconds_at_global(global) {
+                self.audio_state.seek_seconds(seconds);
+            }
             self.audio_state.set_mix(track.gain_linear(), track.muted);
             self.audio_state.play();
         }
@@ -4799,8 +4796,11 @@ impl DrillApp {
         self.dirty = recovered;
         self.status = i18n::registered(self.locale, "app-ui.069").into();
         if let Some((bytes, name)) = embedded_audio {
+            self.simple_mode.song_missing = false;
             self.audio_state.start_decode_bytes(bytes, &name);
             self.status = format!("プロジェクトを開きました · 埋込音源 {name} を準備中…");
+        } else {
+            self.refresh_external_song();
         }
         if let Some((bytes, name)) = embedded_image {
             self.underlay_state.load_bytes(bytes, name);

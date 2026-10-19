@@ -199,6 +199,9 @@ impl eframe::App for DrillApp {
                             self.dirty = true;
                         }
                     }
+                    if self.playing {
+                        self.begin_playback_audio();
+                    }
                     self.status = self.audio_state.status.text(self.locale);
                 }
                 audio_state::DecodeEvent::Failed(error) => {
@@ -229,7 +232,8 @@ impl eframe::App for DrillApp {
         }
         if self.playing {
             let counting_in = self.tick_count_in(dt);
-            let audio_count = if counting_in {
+            let follow_song = self.simple_follows_song_clock();
+            let audio_count = if counting_in || !follow_song {
                 None
             } else if let (Some(seconds), Some(track)) = (
                 self.audio_state.clock_seconds(),
@@ -264,15 +268,10 @@ impl eframe::App for DrillApp {
                     controller::PlaybackDecision::Seek(count) => self.seek_global(count),
                     controller::PlaybackDecision::LoopTo(count) => {
                         self.seek_global(count);
-                        if audio_count.is_some()
-                            && let Some(track) = &self.document.audio
-                        {
-                            let seconds = drill_core::audio::count_to_audio_time(
-                                track,
-                                &self.document.tempo,
-                                count,
-                            );
-                            self.audio_state.seek_seconds(seconds);
+                        if self.simple_mode.enabled {
+                            self.align_simple_listening();
+                        } else if audio_count.is_some() {
+                            self.seek_audio_to_global(count);
                         }
                     }
                     controller::PlaybackDecision::StopAt(count) => {
@@ -280,6 +279,7 @@ impl eframe::App for DrillApp {
                         self.playing = false;
                         self.count_in_remaining = None;
                         self.audio_state.pause();
+                        self.stop_simple_metronome();
                         self.note_simple_playback_finished();
                     }
                 }

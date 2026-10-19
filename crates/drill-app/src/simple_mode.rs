@@ -36,6 +36,9 @@ enum MetronomeFailure {
 #[allow(dead_code)]
 pub(crate) struct MetronomeState {
     pub bpm: f32,
+    /// Show-relative seconds the click should line up with. The silence asset
+    /// is only a carrier; clicks are scheduled on the output timeline.
+    anchor_seconds: f64,
     running: bool,
     output: Option<drill_audio::AudioOutput>,
     open_job: Option<Job<drill_audio::AudioOutput>>,
@@ -48,6 +51,7 @@ impl Default for MetronomeState {
     fn default() -> Self {
         Self {
             bpm: 120.0,
+            anchor_seconds: 0.0,
             running: false,
             output: None,
             open_job: None,
@@ -119,7 +123,7 @@ impl MetronomeState {
                         && output.set_clicks(settings, schedule, voices).is_ok()
                         && self.start_when_ready
                     {
-                        output.seek(0);
+                        output.seek(self.anchor_source_frames());
                         output.play();
                         self.running = true;
                         self.start_when_ready = false;
@@ -156,6 +160,44 @@ impl MetronomeState {
             self.begin_open();
         } else {
             self.begin_schedule();
+        }
+    }
+
+    /// Clicks from `show_seconds` (0 at count 0). A missing device records the
+    /// error on the worker and leaves the drill free to keep moving.
+    pub fn start_at(&mut self, bpm: f32, show_seconds: f64) {
+        let bpm = bpm.clamp(30.0, 300.0);
+        self.anchor_seconds = if show_seconds.is_finite() {
+            show_seconds.max(0.0)
+        } else {
+            0.0
+        };
+        if (bpm - self.bpm).abs() > f32::EPSILON {
+            self.bpm = bpm;
+            if self.output.is_some() {
+                self.start_when_ready = true;
+                self.running = false;
+                self.begin_schedule();
+                return;
+            }
+        } else if self.running {
+            if let Some(output) = &self.output {
+                output.seek(self.anchor_source_frames());
+                output.play();
+            }
+            return;
+        }
+        self.start();
+    }
+
+    /// Source frames of the 48 kHz silence carrier. `seek` converts those into
+    /// the output timeline the click schedule is written on.
+    fn anchor_source_frames(&self) -> u64 {
+        const SOURCE_RATE: f64 = 48_000.0;
+        if self.anchor_seconds.is_finite() && self.anchor_seconds > 0.0 {
+            (self.anchor_seconds * SOURCE_RATE).round() as u64
+        } else {
+            0
         }
     }
 
@@ -333,6 +375,11 @@ pub(crate) struct SimpleModeState {
     pub(super) mirror_moves: bool,
     /// Where unpaired partners are heading during a drag. Cleared on release.
     mirror_preview: Vec<Point>,
+    /// The song path is on the show, but the file is not on this machine.
+    /// The drill still opens. Session-only; the path stays in the file.
+    pub(crate) song_missing: bool,
+    /// Metronome used when the song is muted (slow) or not loaded.
+    metronome: MetronomeState,
 }
 
 /// One short chrome animation. Cleared as soon as it settles so the window
@@ -383,6 +430,9 @@ const SIMPLE_DOT_HIT_RADIUS: f32 = 18.0;
 const PREVIOUS_GHOST_RADIUS: f32 = 4.0;
 const PREVIOUS_GHOST_SEGMENTS: usize = 8;
 const PREVIOUS_TOGGLE_HEIGHT: f32 = 48.0;
+/// One nudge of the shared song offset. Small enough to fix a late entrance
+/// without jumping a whole beat.
+const SIMPLE_SONG_NUDGE_SECONDS: f32 = 0.05;
 
 fn previous_ghost_color() -> Color32 {
     Color32::from_rgba_unmultiplied(120, 126, 136, 140)
@@ -430,6 +480,10 @@ enum PhoneIcon {
     ChevronDown,
     Tools,
     Mirror,
+    Note,
+    NoteOff,
+    Minus,
+    Plus,
 }
 
 fn simple_choice_button(
@@ -626,6 +680,36 @@ fn paint_phone_icon_at(
                 stroke,
             ));
         }
+        PhoneIcon::Note => paint_note_glyph(painter, center, s, color, false),
+        PhoneIcon::NoteOff => paint_note_glyph(painter, center, s, color, true),
+        PhoneIcon::Minus => {
+            painter.line_segment([p(-6.0, 0.0), p(6.0, 0.0)], stroke);
+        }
+        PhoneIcon::Plus => {
+            painter.line_segment([p(-6.0, 0.0), p(6.0, 0.0)], stroke);
+            painter.line_segment([p(0.0, -6.0), p(0.0, 6.0)], stroke);
+        }
+    }
+}
+
+fn paint_note_glyph(
+    painter: &egui::Painter,
+    center: Pos2,
+    scale: f32,
+    color: Color32,
+    crossed: bool,
+) {
+    let s = scale.max(0.4);
+    let stroke = Stroke::new((2.0 * s).max(1.15), color);
+    let p = |x: f32, y: f32| center + egui::Vec2::new(x * s, y * s);
+    painter.circle_filled(p(-2.2, 5.0), 3.4 * s, color);
+    painter.line_segment([p(1.0, 3.6), p(1.0, -8.0)], stroke);
+    painter.add(egui::Shape::line(
+        vec![p(1.0, -8.0), p(7.5, -4.0), p(1.2, -1.5)],
+        stroke,
+    ));
+    if crossed {
+        painter.line_segment([p(-7.0, -7.0), p(7.0, 7.0)], stroke);
     }
 }
 
@@ -801,6 +885,7 @@ impl DrillApp {
         self.onboarding.welcome_seen = true;
         self.onboarding.show_welcome = false;
         if was_enabled && !enabled {
+            self.simple_mode.metronome.stop();
             self.simple_mode.return_hint = true;
             if self.simple_mode.scene_loop {
                 self.simple_mode.scene_loop = false;
@@ -1003,8 +1088,9 @@ impl DrillApp {
     /// `empty`, `placed`, `play`, `glossary`, `selected`, `recent`, `full`,
     /// `move`, `save`, `done`, `line`, `step`, `circle`, `nudge`, `walk`,
     /// `shows`, `hints`, `memo`, `numbers`, `shape`, `block`, `count`,
-    /// `places`, `pair`, `order`, `sheet`, `recover`, `ghosts`, `mirror`, `guide-place`,
-    /// `guide-move`, `guide-play`, `guide-playing`, or `guide-collapsed`.
+    /// `places`, `pair`, `order`, `sheet`, `recover`, `ghosts`, `mirror`,
+    /// `guide-place`, `guide-move`, `guide-play`, `guide-playing`,
+    /// `guide-collapsed`, or `guide-song`.
     pub(crate) fn apply_qa_simple_fixture(&mut self) {
         let Ok(stage) = std::env::var("DRILLFORGE_QA_SIMPLE") else {
             return;
@@ -1420,6 +1506,21 @@ impl DrillApp {
                     &mut self.frame_positions,
                 );
             }
+            "guide-song" => {
+                self.apply_qa_simple_guide("guide-play");
+                self.onboarding.simple_pictogram_done = true;
+                self.simple_mode.hint_closed = true;
+                let path = std::env::temp_dir().join("文化祭ステージ.wav");
+                write_qa_song_wav(&path);
+                let mut track = drill_core::audio::AudioTrack {
+                    path: path.display().to_string(),
+                    duration_seconds: 0.25,
+                    ..drill_core::audio::AudioTrack::default()
+                };
+                apply_simple_song_offset(&mut track, 0.4);
+                let _ = self.simple_commit_song(Some(track), "simple-mode.340");
+                self.simple_mode.song_missing = false;
+            }
             "guide-collapsed" => {
                 self.onboarding.simple_pictogram_done = true;
                 self.onboarding.simple_toolbar_collapsed = true;
@@ -1487,6 +1588,7 @@ impl DrillApp {
         if !self.playing && self.simple_mode.scene_loop {
             self.simple_apply_watch_range();
         }
+        self.poll_simple_metronome();
         self.simple_try_arrow_nudge(ui);
         self.autosave_simple_draft(ui.ctx());
         self.expire_simple_saved_note(ui.ctx());
@@ -2383,6 +2485,25 @@ impl DrillApp {
                     blocked = true;
                 }
             }
+            let (song_rect, song_click) = self.simple_pictogram_tile(
+                ui,
+                PictogramTile {
+                    icon: PhoneIcon::Note,
+                    label: i18n::registered(self.locale, "simple-mode.340"),
+                    tip: i18n::registered(self.locale, "simple-mode.341"),
+                    width: SIMPLE_TILE,
+                    enabled: true,
+                    active: self.document.audio.is_some() && !self.simple_mode.song_missing,
+                    pulse: false,
+                    filled: false,
+                    compact: true,
+                    time,
+                },
+            );
+            let _ = song_rect;
+            if song_click {
+                self.simple_pick_and_import_song();
+            }
             let (undo_rect, undo_click) = self.simple_pictogram_tile(
                 ui,
                 PictogramTile {
@@ -2970,6 +3091,9 @@ impl DrillApp {
 
     fn simple_toggle_slow(&mut self) {
         self.speed = if self.simple_is_slow() { 1.0 } else { 0.5 };
+        if self.playing {
+            self.align_simple_listening();
+        }
     }
 
     fn simple_everyone_selected(&self) -> bool {
@@ -5307,6 +5431,7 @@ impl DrillApp {
         self.simple_overlay_chrome(&ctx, field, &mut block);
         self.simple_overlay_symmetry(&ctx, field, &mut block);
         self.simple_overlay_recovery(&ctx, field, &mut block);
+        self.simple_overlay_song(&ctx, field, &mut block);
         if self.simple_toolbar_open() {
             self.simple_overlay_toolbar(&ctx, field, fade, &mut block);
         } else {
@@ -5884,63 +6009,392 @@ impl DrillApp {
         let Some(action) = self.simple_primary_action() else {
             return;
         };
-        let (icon, label) = match action {
-            SimplePrimary::Next => (
-                PhoneIcon::Next,
-                i18n::registered(self.locale, "simple-mode.078"),
-            ),
-            SimplePrimary::Pause => (
-                PhoneIcon::Pause,
-                i18n::registered(self.locale, "simple-mode.089"),
-            ),
-            SimplePrimary::Play if self.simple_offers_replay() => (
-                PhoneIcon::Play,
-                i18n::registered(self.locale, "simple-mode.124"),
-            ),
-            SimplePrimary::Play => (
-                PhoneIcon::Play,
-                i18n::registered(self.locale, "simple-mode.088"),
-            ),
-        };
-        let (rect, response) =
-            ui.allocate_exact_size(egui::Vec2::new(ui.available_width(), 56.0), Sense::click());
-        let fill = if response.hovered() {
-            Color32::from_rgb(16, 82, 176)
-        } else {
-            SIMPLE_BLUE
-        };
-        ui.painter().rect_filled(rect, rect.height() / 2.0, fill);
-        let font = egui::FontId::proportional(18.0);
-        let galley = ui
-            .painter()
-            .layout_no_wrap(label.to_owned(), font, Color32::WHITE);
-        let gap = 10.0;
-        let icon_w = 22.0;
-        let total = icon_w + gap + galley.size().x;
-        let left = rect.center().x - total / 2.0;
-        paint_phone_icon(
-            ui.painter(),
-            Pos2::new(left + icon_w / 2.0, rect.center().y),
-            icon,
-            Color32::WHITE,
-        );
-        ui.painter().galley(
-            Pos2::new(left + icon_w + gap, rect.center().y - galley.size().y / 2.0),
-            galley,
-            Color32::WHITE,
-        );
-        if response.clicked() {
-            self.simple_mode.overlap_note = false;
-            match action {
-                SimplePrimary::Next => {
-                    self.simple_mode.finished_playback = false;
-                    let revision = self.history.revision();
-                    self.duplicate_current_set();
-                    self.simple_mark(revision, "simple-mode.078");
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            let (icon, label) = match action {
+                SimplePrimary::Next => (
+                    PhoneIcon::Next,
+                    i18n::registered(self.locale, "simple-mode.078"),
+                ),
+                SimplePrimary::Pause => (
+                    PhoneIcon::Pause,
+                    i18n::registered(self.locale, "simple-mode.089"),
+                ),
+                SimplePrimary::Play if self.simple_offers_replay() => (
+                    PhoneIcon::Play,
+                    i18n::registered(self.locale, "simple-mode.124"),
+                ),
+                SimplePrimary::Play => (
+                    PhoneIcon::Play,
+                    i18n::registered(self.locale, "simple-mode.088"),
+                ),
+            };
+            let width = ui.available_width().max(48.0);
+            let (rect, response) =
+                ui.allocate_exact_size(egui::Vec2::new(width, 56.0), Sense::click());
+            let fill = if response.hovered() {
+                Color32::from_rgb(16, 82, 176)
+            } else {
+                SIMPLE_BLUE
+            };
+            ui.painter().rect_filled(rect, rect.height() / 2.0, fill);
+            let font = egui::FontId::proportional(18.0);
+            let galley = ui
+                .painter()
+                .layout_no_wrap(label.to_owned(), font, Color32::WHITE);
+            let gap = 10.0;
+            let icon_w = 22.0;
+            let total = icon_w + gap + galley.size().x;
+            let left = rect.center().x - total / 2.0;
+            paint_phone_icon(
+                ui.painter(),
+                Pos2::new(left + icon_w / 2.0, rect.center().y),
+                icon,
+                Color32::WHITE,
+            );
+            ui.painter().galley(
+                Pos2::new(left + icon_w + gap, rect.center().y - galley.size().y / 2.0),
+                galley,
+                Color32::WHITE,
+            );
+            if response.clicked() {
+                self.simple_mode.overlap_note = false;
+                match action {
+                    SimplePrimary::Next => {
+                        self.simple_mode.finished_playback = false;
+                        let revision = self.history.revision();
+                        self.duplicate_current_set();
+                        self.simple_mark(revision, "simple-mode.078");
+                    }
+                    SimplePrimary::Pause => self.toggle_playback(ui.ctx()),
+                    SimplePrimary::Play => self.simple_start_play(ui.ctx()),
                 }
-                SimplePrimary::Pause => self.toggle_playback(ui.ctx()),
-                SimplePrimary::Play => self.simple_start_play(ui.ctx()),
             }
+        });
+    }
+
+    /// Song name and sync controls, floating above the toolbar. The field
+    /// stays full-window; this pill only steals its own clicks.
+    fn simple_overlay_song(
+        &mut self,
+        ctx: &egui::Context,
+        field: egui::Rect,
+        block: &mut Option<egui::Rect>,
+    ) {
+        if self.document.audio.is_none() {
+            return;
+        }
+        let pos = Pos2::new(field.center().x, field.bottom() - 96.0);
+        let response = egui::Area::new(egui::Id::new("simple-overlay-song"))
+            .order(egui::Order::Foreground)
+            .pivot(egui::Align2::CENTER_BOTTOM)
+            .fixed_pos(pos)
+            .sense(Sense::click())
+            .show(ctx, |ui| {
+                egui::Frame::new()
+                    .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 230))
+                    .stroke(Stroke::new(1.0, super::app_theme::HAIRLINE))
+                    .corner_radius(22.0)
+                    .inner_margin(egui::Margin::symmetric(10, 6))
+                    .show(ui, |ui| {
+                        self.simple_song_overlay_ui(ui);
+                    });
+            });
+        overlay_union(block, response.response.rect);
+    }
+
+    fn simple_song_overlay_ui(&mut self, ui: &mut egui::Ui) {
+        if self.simple_mode.song_missing {
+            ui.label(
+                egui::RichText::new(i18n::registered(self.locale, "simple-mode.347"))
+                    .size(14.0)
+                    .color(SIMPLE_WARN),
+            );
+            return;
+        }
+        let time = ui.input(|input| input.time) as f32;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            if let Some(track) = &self.document.audio {
+                let name = simple_song_name(&track.path);
+                ui.label(
+                    egui::RichText::new(
+                        i18n::registered(self.locale, "simple-mode.342").replace("{0}", &name),
+                    )
+                    .size(12.0)
+                    .color(super::app_theme::SECONDARY_TEXT),
+                );
+            }
+            let (downbeat, downbeat_click) = self.simple_pictogram_tile(
+                ui,
+                PictogramTile {
+                    icon: PhoneIcon::Note,
+                    label: i18n::registered(self.locale, "simple-mode.343"),
+                    tip: "",
+                    width: 108.0,
+                    enabled: true,
+                    active: false,
+                    pulse: false,
+                    filled: false,
+                    compact: false,
+                    time,
+                },
+            );
+            let _ = downbeat;
+            if downbeat_click {
+                self.simple_mark_downbeat();
+            }
+            let (earlier, earlier_click) = self.simple_pictogram_tile(
+                ui,
+                PictogramTile {
+                    icon: PhoneIcon::Minus,
+                    label: "",
+                    tip: i18n::registered(self.locale, "simple-mode.344"),
+                    width: SIMPLE_HIT,
+                    enabled: true,
+                    active: false,
+                    pulse: false,
+                    filled: false,
+                    compact: true,
+                    time,
+                },
+            );
+            let _ = earlier;
+            if earlier_click {
+                self.simple_nudge_song(-1);
+            }
+            let (later, later_click) = self.simple_pictogram_tile(
+                ui,
+                PictogramTile {
+                    icon: PhoneIcon::Plus,
+                    label: "",
+                    tip: i18n::registered(self.locale, "simple-mode.345"),
+                    width: SIMPLE_HIT,
+                    enabled: true,
+                    active: false,
+                    pulse: false,
+                    filled: false,
+                    compact: true,
+                    time,
+                },
+            );
+            let _ = later;
+            if later_click {
+                self.simple_nudge_song(1);
+            }
+            let (remove, remove_click) = self.simple_pictogram_tile(
+                ui,
+                PictogramTile {
+                    icon: PhoneIcon::NoteOff,
+                    label: i18n::registered(self.locale, "simple-mode.346"),
+                    tip: "",
+                    width: 88.0,
+                    enabled: true,
+                    active: false,
+                    pulse: false,
+                    filled: false,
+                    compact: false,
+                    time,
+                },
+            );
+            let _ = remove;
+            if remove_click {
+                self.simple_remove_song();
+            }
+        });
+    }
+
+    fn simple_pick_and_import_song(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter(
+                i18n::registered(self.locale, "simple-mode.349"),
+                &["mp3", "wav"],
+            )
+            .pick_file()
+        else {
+            return;
+        };
+        let _ = self.simple_import_song(path);
+    }
+
+    fn simple_import_song(&mut self, path: std::path::PathBuf) -> bool {
+        if !simple_song_extension_ok(&path) || !path.is_file() {
+            return false;
+        }
+        let track = drill_core::audio::AudioTrack {
+            path: path.display().to_string(),
+            ..drill_core::audio::AudioTrack::default()
+        };
+        if !self.simple_commit_song(Some(track), "simple-mode.340") {
+            return false;
+        }
+        self.simple_mode.song_missing = false;
+        self.audio_state.start_decode(path);
+        if self.playing {
+            self.align_simple_listening();
+        }
+        true
+    }
+
+    fn simple_remove_song(&mut self) {
+        if self.document.audio.is_none() {
+            return;
+        }
+        if self.simple_commit_song(None, "simple-mode.346") {
+            self.simple_mode.song_missing = false;
+            self.audio_state.clear();
+            if self.playing {
+                self.align_simple_listening();
+            }
+        }
+    }
+
+    fn simple_mark_downbeat(&mut self) {
+        if self.simple_mode.song_missing {
+            return;
+        }
+        let Some(heard) = self.simple_heard_song_seconds() else {
+            return;
+        };
+        let Some(mut track) = self.document.audio.clone() else {
+            return;
+        };
+        apply_simple_song_offset(&mut track, simple_downbeat_offset(heard));
+        if !self.simple_commit_song(Some(track), "simple-mode.343") {
+            return;
+        }
+        self.nav_glide.settle();
+        self.seek_global(0.0);
+        self.simple_mode.hold_count = false;
+        self.simple_mode.finished_playback = false;
+        if self.playing {
+            self.align_simple_listening();
+        } else {
+            self.seek_audio_to_global(0.0);
+        }
+    }
+
+    fn simple_nudge_song(&mut self, steps: i32) {
+        if steps == 0 || self.simple_mode.song_missing {
+            return;
+        }
+        let Some(mut track) = self.document.audio.clone() else {
+            return;
+        };
+        let note = if steps < 0 {
+            "simple-mode.344"
+        } else {
+            "simple-mode.345"
+        };
+        let offset = simple_nudged_offset(track.offset_seconds, steps);
+        apply_simple_song_offset(&mut track, offset);
+        if !self.simple_commit_song(Some(track), note) {
+            return;
+        }
+        if self.playing {
+            self.align_simple_listening();
+        } else {
+            let global = self
+                .document
+                .global_count(self.current_set, self.count_position);
+            self.seek_audio_to_global(global);
+        }
+    }
+
+    fn simple_commit_song(
+        &mut self,
+        track: Option<drill_core::audio::AudioTrack>,
+        note: &'static str,
+    ) -> bool {
+        let revision = self.history.revision();
+        let changed = self.execute_edit(
+            Edit::SetAudioTrack { audio: track },
+            i18n::registered(self.locale, "simple-mode.348"),
+        );
+        if changed {
+            self.audio_draft = self.document.audio.clone();
+            self.audio_draft_dirty = false;
+            self.simple_mark(revision, note);
+        }
+        changed
+    }
+
+    fn simple_heard_song_seconds(&self) -> Option<f32> {
+        let track = self.document.audio.as_ref()?;
+        if let Some(clock) = self.audio_state.clock_seconds() {
+            return Some(clock);
+        }
+        let global = self
+            .document
+            .global_count(self.current_set, self.count_position);
+        Some(simple_song_seconds(track, &self.document.tempo, global))
+    }
+
+    /// True when simple-mode playback should follow the song's sample clock.
+    /// Slow playback leaves the clock alone and steps the drill from the tempo
+    /// map, so the picture can be half speed while the song stays quiet.
+    pub(crate) fn simple_follows_song_clock(&self) -> bool {
+        if !self.simple_mode.enabled {
+            return true;
+        }
+        simple_song_audible(
+            self.document.audio.is_some(),
+            self.simple_mode.song_missing,
+            self.simple_is_slow(),
+        )
+    }
+
+    pub(crate) fn align_simple_listening(&mut self) {
+        if !self.simple_mode.enabled {
+            return;
+        }
+        let global = self
+            .document
+            .global_count(self.current_set, self.count_position);
+        if self.simple_follows_song_clock() {
+            self.simple_mode.metronome.stop();
+            if let Some(track) = &self.document.audio {
+                let seconds =
+                    drill_core::audio::count_to_audio_time(track, &self.document.tempo, global);
+                self.audio_state.seek_seconds(seconds);
+                self.audio_state.set_mix(track.gain_linear(), track.muted);
+                self.audio_state.play();
+            }
+            return;
+        }
+        self.audio_state.pause();
+        let seconds = f64::from(self.document.tempo.seconds_at(global));
+        let bpm = simple_opening_bpm(&self.document.tempo) as f32;
+        self.simple_mode.metronome.start_at(bpm, seconds);
+    }
+
+    pub(crate) fn stop_simple_metronome(&mut self) {
+        self.simple_mode.metronome.stop();
+    }
+
+    pub(crate) fn poll_simple_metronome(&mut self) {
+        if !self.simple_mode.enabled || !self.playing {
+            self.simple_mode.metronome.stop();
+        }
+        self.simple_mode.metronome.poll();
+    }
+
+    /// External path on the shared [`drill_core::audio::AudioTrack`]. A missing
+    /// file sets a flag and leaves the show open. Embedded bytes are handled
+    /// by the project loader before this runs.
+    pub(crate) fn refresh_external_song(&mut self) {
+        let Some(track) = self.document.audio.clone() else {
+            self.simple_mode.song_missing = false;
+            self.audio_state.clear();
+            return;
+        };
+        if simple_stored_song_available(&track.path) {
+            self.simple_mode.song_missing = false;
+            self.audio_state
+                .start_decode(std::path::PathBuf::from(&track.path));
+        } else {
+            self.simple_mode.song_missing = true;
+            self.audio_state.clear();
         }
     }
 
@@ -8844,6 +9298,87 @@ fn prepare_previous_ghost_mesh(
             slot.as_ref().expect("ghost mesh slot"),
         ))
     }
+}
+
+fn write_qa_song_wav(path: &std::path::Path) {
+    let samples = 2_000u32;
+    let data_len = samples * 2;
+    let mut bytes = Vec::with_capacity(44 + data_len as usize);
+    bytes.extend_from_slice(b"RIFF");
+    bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
+    bytes.extend_from_slice(b"WAVE");
+    bytes.extend_from_slice(b"fmt ");
+    bytes.extend_from_slice(&16u32.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&8_000u32.to_le_bytes());
+    bytes.extend_from_slice(&16_000u32.to_le_bytes());
+    bytes.extend_from_slice(&2u16.to_le_bytes());
+    bytes.extend_from_slice(&16u16.to_le_bytes());
+    bytes.extend_from_slice(b"data");
+    bytes.extend_from_slice(&data_len.to_le_bytes());
+    bytes.extend(std::iter::repeat_n(0u8, data_len as usize));
+    let _ = std::fs::write(path, bytes);
+}
+
+fn simple_song_extension_ok(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("mp3") || ext.eq_ignore_ascii_case("wav"))
+}
+
+fn simple_stored_song_available(path: &str) -> bool {
+    let path = std::path::Path::new(path);
+    simple_song_extension_ok(path) && path.is_file()
+}
+
+fn simple_song_name(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(path)
+        .to_string()
+}
+
+/// File position that lines up with scene 1, beat 1 (global count 0).
+fn simple_downbeat_offset(file_seconds: f32) -> f32 {
+    if file_seconds.is_finite() {
+        file_seconds
+    } else {
+        0.0
+    }
+}
+
+fn simple_nudged_offset(offset: f32, steps: i32) -> f32 {
+    let base = if offset.is_finite() { offset } else { 0.0 };
+    base + steps as f32 * SIMPLE_SONG_NUDGE_SECONDS
+}
+
+/// The song is heard only at normal speed, and only when the file is here.
+/// Slow playback keeps the metronome and leaves the recording quiet.
+fn simple_song_audible(has_track: bool, missing: bool, slow: bool) -> bool {
+    has_track && !missing && !slow
+}
+
+fn apply_simple_song_offset(track: &mut drill_core::audio::AudioTrack, offset: f32) {
+    let offset = if offset.is_finite() { offset } else { 0.0 };
+    track.offset_seconds = offset;
+    if offset >= 0.0
+        && let Ok(anchors) = drill_core::audio::AnchorMap::from_offset(f64::from(offset))
+    {
+        track.anchors = anchors;
+        return;
+    }
+    track.anchors = drill_core::audio::AnchorMap::default();
+}
+
+fn simple_song_seconds(
+    track: &drill_core::audio::AudioTrack,
+    tempo: &drill_core::tempo::TempoMap,
+    global_count: f32,
+) -> f32 {
+    drill_core::audio::count_to_audio_time(track, tempo, global_count)
 }
 
 #[cfg(test)]
@@ -12009,6 +12544,72 @@ mod tests {
         app.autosave_simple_draft(&ctx);
         assert!(path.exists());
         assert!(app.simple_mode.check_until.is_some());
+    }
+
+    fn attach_song(app: &mut DrillApp, path: &str, offset: f32) {
+        let mut track = drill_core::audio::AudioTrack {
+            path: path.to_string(),
+            duration_seconds: 180.0,
+            offset_seconds: offset,
+            ..drill_core::audio::AudioTrack::default()
+        };
+        apply_simple_song_offset(&mut track, offset);
+        assert!(app.simple_commit_song(Some(track), "simple-mode.340"));
+    }
+
+    #[test]
+    fn song_sync_offset_persists_in_the_shared_audio_track() {
+        let dir = std::env::temp_dir().join(format!(
+            "drillforge-song-{}-{}",
+            std::process::id(),
+            "offset"
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let draft = dir.join("simple-draft.drill.json");
+        let mut app = empty_simple_app();
+        app.simple_mode.draft_path_override = Some(draft.clone());
+        app.place_performer_at(Point { x: 8.0, y: 6.0 }, true);
+        attach_song(&mut app, "文化祭ステージ.mp3", 1.25);
+        app.simple_nudge_song(2);
+        app.simple_nudge_song(-1);
+        let offset = app.document.audio.as_ref().unwrap().offset_seconds;
+        assert!((offset - 1.30).abs() < 1e-4);
+        let at_four = simple_song_seconds(
+            app.document.audio.as_ref().unwrap(),
+            &app.document.tempo,
+            4.0,
+        );
+        assert!((at_four - (1.30 + 2.0)).abs() < 1e-3);
+        app.simple_nudge_song(-40);
+        let negative = app.document.audio.as_ref().unwrap();
+        assert!(negative.offset_seconds < 0.0);
+        assert!(negative.anchors.is_empty());
+        assert!(app.history.undo(&mut app.document));
+        assert!((app.document.audio.as_ref().unwrap().offset_seconds - 1.30).abs() < 1e-4);
+        let json = app.document.to_json().expect("json");
+        let loaded = drill_core::Document::from_json(&json).expect("reload");
+        let loaded_track = loaded.audio.as_ref().expect("song");
+        assert!((loaded_track.offset_seconds - 1.30).abs() < 1e-4);
+        assert!((simple_song_seconds(loaded_track, &loaded.tempo, 0.0) - 1.30).abs() < 1e-3);
+        assert_eq!(loaded_track.anchors.anchors().len(), 1);
+        assert!(app.write_simple_draft());
+        app.set_simple_mode(false);
+        assert!((app.document.audio.as_ref().unwrap().offset_seconds - 1.30).abs() < 1e-4);
+        let mut reopened = DrillApp::default();
+        reopened.onboarding.welcome_seen = true;
+        reopened.onboarding.prefer_simple = true;
+        reopened.onboarding.show_welcome = false;
+        reopened.simple_mode.draft_path_override = Some(draft);
+        reopened.open_into_preferred_editor();
+        assert!(reopened.simple_mode.enabled);
+        assert_eq!(reopened.document.performers.len(), 1);
+        assert!((reopened.document.audio.as_ref().unwrap().offset_seconds - 1.30).abs() < 1e-4);
+        assert!(reopened.simple_mode.song_missing);
+        assert!(!reopened.document.sets.is_empty());
+        assert!(include_str!("i18n_generated.rs").contains(
+            "(Locale::Ja, \"simple-mode.347\") => \"曲が見つかりません。もう一度選んでください\""
+        ));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -12045,6 +12646,13 @@ mod tests {
         assert!(!collapsed.simple_toolbar_open());
         assert_eq!(collapsed.document.performers.len(), 2);
         assert_eq!(collapsed.document.sets.len(), 2);
+
+        let mut song = empty_simple_app();
+        song.apply_qa_simple_guide("guide-song");
+        let loaded = song.document.audio.as_ref().expect("song");
+        assert!(!song.simple_mode.song_missing);
+        assert!(simple_song_name(&loaded.path).contains("文化祭"));
+        assert!(song.simple_toolbar_open());
     }
 
     #[test]
@@ -12566,5 +13174,94 @@ mod tests {
         let radial_before = app.document.sets[0].positions.clone();
         app.apply_radial_selection(2);
         assert_ne!(app.document.sets[0].positions, radial_before);
+    }
+    #[test]
+    fn song_position_follows_pause_seek_step_and_scene_start() {
+        let mut app = moved_pair();
+        attach_song(&mut app, "reference.wav", 1.5);
+        let tempo = app.document.tempo.clone();
+        let track = |app: &DrillApp| app.document.audio.clone().unwrap();
+        let global = |app: &DrillApp| {
+            app.document
+                .global_count(app.current_set, app.count_position)
+        };
+        app.navigate_to_set(0);
+        app.nav_glide.settle();
+        assert!((global(&app) - 0.0).abs() < 1e-3);
+        assert!((app.audio_seconds_at_global(0.0).unwrap() - 1.5).abs() < 1e-3);
+
+        app.simple_step_beat(4);
+        app.nav_glide.settle();
+        let at_step = global(&app);
+        assert!((at_step - 4.0).abs() < 1e-3);
+        let mapped = app.audio_seconds_at_global(at_step).unwrap();
+        assert!((mapped - simple_song_seconds(&track(&app), &tempo, at_step)).abs() < 1e-4);
+        assert!((mapped - 3.5).abs() < 1e-3);
+
+        let context = egui::Context::default();
+        app.toggle_playback(&context);
+        assert!(app.playing);
+        app.toggle_playback(&context);
+        assert!(!app.playing);
+        assert!((global(&app) - 4.0).abs() < 1e-3);
+        assert!((app.audio_seconds_at_global(global(&app)).unwrap() - 3.5).abs() < 1e-3);
+
+        app.navigate_to_set(1);
+        app.nav_glide.settle();
+        let scene = global(&app);
+        assert!((scene - 16.0).abs() < 1e-3);
+        assert!((app.audio_seconds_at_global(scene).unwrap() - 9.5).abs() < 1e-3);
+
+        app.navigate_to_set(0);
+        app.nav_glide.settle();
+        assert!((global(&app) - 0.0).abs() < 1e-3);
+        assert!((app.audio_seconds_at_global(0.0).unwrap() - 1.5).abs() < 1e-3);
+
+        app.simple_mark_downbeat();
+        assert!((global(&app) - 0.0).abs() < 1e-3);
+        assert!((app.document.audio.as_ref().unwrap().offset_seconds - 1.5).abs() < 1e-3);
+        app.navigate_to_global_count(4);
+        app.nav_glide.settle();
+        app.simple_mark_downbeat();
+        assert!((global(&app) - 0.0).abs() < 1e-3);
+        let anchored = app.document.audio.as_ref().unwrap().offset_seconds;
+        assert!((anchored - 3.5).abs() < 1e-3);
+        assert!((simple_song_seconds(&track(&app), &tempo, 0.0) - 3.5).abs() < 1e-3);
+        assert!((simple_song_seconds(&track(&app), &tempo, 4.0) - 5.5).abs() < 1e-3);
+
+        app.simple_toggle_slow();
+        assert!(app.simple_is_slow());
+        assert!(!app.simple_follows_song_clock());
+        assert!(!simple_song_audible(true, false, true));
+        app.toggle_playback(&context);
+        assert!(app.playing);
+        app.toggle_playback(&context);
+        assert!(!app.playing);
+        assert!(!app.document.sets.is_empty());
+    }
+
+    #[test]
+    fn missing_song_and_absent_output_still_play_the_picture() {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 8.0, y: 6.0 }, true);
+        app.duplicate_current_set();
+        attach_song(&mut app, "no-such-song.mp3", 0.0);
+        app.refresh_external_song();
+        assert!(app.simple_mode.song_missing);
+        assert!(app.document.audio.is_some());
+        assert_eq!(app.document.performers.len(), 1);
+        let context = egui::Context::default();
+        app.toggle_playback(&context);
+        assert!(app.playing);
+        app.simple_step_beat(1);
+        app.toggle_playback(&context);
+        assert!(!app.playing);
+        assert!(simple_song_extension_ok(std::path::Path::new("a.wav")));
+        assert!(simple_song_extension_ok(std::path::Path::new("a.MP3")));
+        assert!(!simple_song_extension_ok(std::path::Path::new("a.ogg")));
+        assert_eq!(
+            simple_song_name("folder/文化祭ステージ.mp3"),
+            "文化祭ステージ.mp3"
+        );
     }
 }
