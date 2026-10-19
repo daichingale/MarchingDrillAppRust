@@ -284,8 +284,11 @@ impl DrillApp {
         let Some(bounds) = self.selection_screen_bounds(screen) else {
             return;
         };
-        let width = (visible.width() - 8.0).min(460.0);
-        let height = 108.0;
+        // One row for a single person (no distribute). A second person adds
+        // one more button, so the bar grows instead of dropping 「その他」 alone.
+        let single = self.selected.len() < 2;
+        let width = (visible.width() - 8.0).min(if single { 560.0 } else { 720.0 });
+        let height = if single { 52.0 } else { 88.0 };
         let above = bounds.min.y - 8.0 - height;
         let below = bounds.max.y + 8.0;
         let mut origin = egui::pos2(bounds.center().x - width * 0.5, above);
@@ -399,7 +402,7 @@ impl DrillApp {
     fn full_visible_field(&self, screen: egui::Rect) -> egui::Rect {
         let top = 136.0;
         let bottom = if self.full_timeline_expanded {
-            300.0
+            340.0
         } else {
             118.0
         };
@@ -472,7 +475,7 @@ impl DrillApp {
         let screen = ui.ctx().viewport_rect();
         let top = 46.0;
         let bottom = if self.full_timeline_expanded {
-            292.0
+            340.0
         } else {
             112.0
         };

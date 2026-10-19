@@ -1120,7 +1120,7 @@ impl DrillApp {
     /// `places`, `pair`, `order`, `sheet`, `recover`, `ghosts`, `mirror`,
     /// `guide-place`, `guide-move`, `guide-play`, `guide-playing`,
     /// `guide-collapsed`, `guide-song`, `full-selected`, `full-collapsed`,
-    /// `full-timeline`, `full-multi`, or `full-list`.
+    /// `full-timeline`, `full-multi`, `full-list`, or `full-export`.
     pub(crate) fn apply_qa_simple_fixture(&mut self) {
         let Ok(stage) = std::env::var("DRILLFORGE_QA_SIMPLE") else {
             return;
@@ -1168,8 +1168,13 @@ impl DrillApp {
             self.full_inspector_collapsed = true;
         }
         if stage == "full-timeline" {
+            // A second set gives the count track a real IN→OUT span.
+            self.duplicate_current_set();
+            self.navigate_to_set(0);
+            self.nav_glide.settle();
             self.full_timeline_expanded = true;
             self.full_inspector_collapsed = true;
+            self.clear_selection();
         }
         if stage == "full-multi" {
             self.replace_selection([0, 1].into_iter().collect());
@@ -1178,6 +1183,10 @@ impl DrillApp {
         if stage == "full-list" {
             self.clear_selection();
             self.full_inspector_collapsed = false;
+        }
+        if stage == "full-export" {
+            self.print_state.open = true;
+            self.full_inspector_collapsed = true;
         }
         if stage == "move" || stage == "play" || stage == "done" {
             self.duplicate_current_set();
