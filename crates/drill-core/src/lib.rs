@@ -25,6 +25,7 @@ pub mod show_heatmap;
 pub mod snapshot;
 pub mod stadium;
 pub mod svg;
+pub mod symmetry;
 pub mod tempo;
 pub mod transition;
 pub mod underlay;
