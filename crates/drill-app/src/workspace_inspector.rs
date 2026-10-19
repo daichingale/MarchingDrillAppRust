@@ -1804,7 +1804,7 @@ impl DrillApp {
         );
     }
 
-    fn show_section_picker(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn show_section_picker(&mut self, ui: &mut egui::Ui) {
         if self.document.sections.is_empty() || self.document.performers.is_empty() {
             return;
         }
@@ -1850,7 +1850,7 @@ impl DrillApp {
     }
 
     #[rustfmt::skip]
-    fn show_performer_properties(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn show_performer_properties(&mut self, ui: &mut egui::Ui) {
         self.ensure_performer_draft();
         let editable = self.is_editable_set_start();
         let single = self.selected.len() == 1;

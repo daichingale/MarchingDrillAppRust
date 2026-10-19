@@ -457,6 +457,8 @@ pub(crate) struct PictogramTile<'a> {
     pub(crate) filled: bool,
     pub(crate) compact: bool,
     pub(crate) time: f32,
+    /// When set, every tile stays `width` instead of growing to fit the label.
+    pub(crate) lock_width: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -1118,7 +1120,7 @@ impl DrillApp {
     /// `places`, `pair`, `order`, `sheet`, `recover`, `ghosts`, `mirror`,
     /// `guide-place`, `guide-move`, `guide-play`, `guide-playing`,
     /// `guide-collapsed`, `guide-song`, `full-selected`, `full-collapsed`,
-    /// or `full-timeline`.
+    /// `full-timeline`, `full-multi`, or `full-list`.
     pub(crate) fn apply_qa_simple_fixture(&mut self) {
         let Ok(stage) = std::env::var("DRILLFORGE_QA_SIMPLE") else {
             return;
@@ -1168,6 +1170,14 @@ impl DrillApp {
         if stage == "full-timeline" {
             self.full_timeline_expanded = true;
             self.full_inspector_collapsed = true;
+        }
+        if stage == "full-multi" {
+            self.replace_selection([0, 1].into_iter().collect());
+            self.full_inspector_collapsed = false;
+        }
+        if stage == "full-list" {
+            self.clear_selection();
+            self.full_inspector_collapsed = false;
         }
         if stage == "move" || stage == "play" || stage == "done" {
             self.duplicate_current_set();
@@ -2419,6 +2429,7 @@ impl DrillApp {
                     filled: false,
                     compact: false,
                     time,
+                    lock_width: false,
                 },
             );
             self.simple_mode.action_place = Some(place_rect);
@@ -2442,6 +2453,7 @@ impl DrillApp {
                     filled: false,
                     compact: false,
                     time,
+                    lock_width: false,
                 },
             );
             self.simple_mode.action_move = Some(move_rect);
@@ -2471,6 +2483,7 @@ impl DrillApp {
                     filled: mirror_on,
                     compact: false,
                     time,
+                    lock_width: false,
                 },
             );
             let _ = mirror_rect;
@@ -2500,6 +2513,7 @@ impl DrillApp {
                     filled: false,
                     compact: false,
                     time,
+                    lock_width: false,
                 },
             );
             self.simple_mode.action_next = Some(next_rect);
@@ -2543,6 +2557,7 @@ impl DrillApp {
                     filled: true,
                     compact: false,
                     time,
+                    lock_width: false,
                 },
             );
             self.simple_mode.action_play = Some(play_rect);
@@ -2571,6 +2586,7 @@ impl DrillApp {
                     filled: false,
                     compact: false,
                     time,
+                    lock_width: false,
                 },
             );
             let _ = song_rect;
@@ -2595,6 +2611,7 @@ impl DrillApp {
                     filled: false,
                     compact: false,
                     time,
+                    lock_width: false,
                 },
             );
             let _ = undo_rect;
@@ -2620,6 +2637,7 @@ impl DrillApp {
                     filled: false,
                     compact: false,
                     time,
+                    lock_width: false,
                 },
             );
             let _ = redo_rect;
@@ -2668,6 +2686,7 @@ impl DrillApp {
                     filled: false,
                     compact: false,
                     time,
+                    lock_width: false,
                 },
             );
             let _ = hide_rect;
@@ -2692,6 +2711,7 @@ impl DrillApp {
                     filled: false,
                     compact: false,
                     time,
+                    lock_width: false,
                 },
             );
             let _ = keys_rect;
@@ -2748,7 +2768,9 @@ impl DrillApp {
                 .size()
                 .x
         };
-        let width = if text_w == 0.0 {
+        let width = if tile.lock_width {
+            tile.width
+        } else if text_w == 0.0 {
             tile.width.max(SIMPLE_HIT)
         } else {
             tile.width.max(text_w + 18.0).clamp(SIMPLE_HIT, 120.0)
@@ -2835,6 +2857,10 @@ impl DrillApp {
         };
         paint_phone_icon_at(ui.painter(), icon_pos, tile.icon, icon_color, icon_scale);
         if !tile.compact && !tile.label.is_empty() {
+            let previous_clip = ui.clip_rect();
+            if tile.lock_width {
+                ui.set_clip_rect(previous_clip.intersect(rect.shrink(4.0)));
+            }
             ui.painter().text(
                 rect.center() + egui::Vec2::new(0.0, 24.0),
                 egui::Align2::CENTER_CENTER,
@@ -2842,6 +2868,9 @@ impl DrillApp {
                 egui::FontId::proportional(SIMPLE_LABEL),
                 ink,
             );
+            if tile.lock_width {
+                ui.set_clip_rect(previous_clip);
+            }
         }
         let tip = if tile.compact && !tile.label.is_empty() {
             format!("{}\n{}", tile.label, tile.tip)
@@ -5744,6 +5773,7 @@ impl DrillApp {
                                     filled: false,
                                     compact: true,
                                     time: 0.0,
+                                    lock_width: false,
                                 },
                             );
                             let _ = open_rect;
@@ -5763,6 +5793,7 @@ impl DrillApp {
                                     filled: false,
                                     compact: true,
                                     time: 0.0,
+                                    lock_width: false,
                                 },
                             );
                             let _ = more_rect;
@@ -5783,6 +5814,7 @@ impl DrillApp {
                                         filled: false,
                                         compact: false,
                                         time: 0.0,
+                                        lock_width: false,
                                     },
                                 );
                                 let _ = close_rect;
@@ -5915,6 +5947,7 @@ impl DrillApp {
                                 filled: false,
                                 compact: true,
                                 time: 0.0,
+                                lock_width: false,
                             },
                         );
                         let _ = rect;
@@ -6330,6 +6363,7 @@ impl DrillApp {
                     filled: false,
                     compact: false,
                     time,
+                    lock_width: false,
                 },
             );
             let _ = downbeat;
@@ -6355,6 +6389,7 @@ impl DrillApp {
                     filled: false,
                     compact: false,
                     time,
+                    lock_width: false,
                 },
             );
             let _ = earlier;
@@ -6380,6 +6415,7 @@ impl DrillApp {
                     filled: false,
                     compact: false,
                     time,
+                    lock_width: false,
                 },
             );
             let _ = later;
@@ -6405,6 +6441,7 @@ impl DrillApp {
                     filled: false,
                     compact: false,
                     time,
+                    lock_width: false,
                 },
             );
             let _ = remove;

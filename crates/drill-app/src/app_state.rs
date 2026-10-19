@@ -1027,6 +1027,10 @@ pub(crate) struct DrillApp {
     /// Studio was the old implicit dark theme. Migrated once per session,
     /// without rewriting a saved choice the person picks afterward.
     full_daylight_ready: bool,
+    /// Roster search in the right panel. Session only.
+    full_roster_query: String,
+    /// Instrument chips that narrow the roster. Empty means everyone.
+    full_section_filter: Vec<drill_core::SectionId>,
     /// Shortcut registry, settings, and the key chart. The user's own chords
     /// live in the app settings file, never in the drill.
     keybindings: keybindings::KeyBindings,
@@ -1195,6 +1199,8 @@ impl Default for DrillApp {
             full_inspector_collapsed: true,
             full_timeline_expanded: false,
             full_daylight_ready: false,
+            full_roster_query: String::new(),
+            full_section_filter: Vec::new(),
             keybindings: keybindings::KeyBindings::default(),
             move_check: rehearsal_checks::MoveCheck::default(),
             set_comparison: None,

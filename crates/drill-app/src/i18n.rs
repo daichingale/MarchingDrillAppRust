@@ -91,6 +91,16 @@ pub enum Text {
     Song,
     Symmetry,
     PreviousSet,
+    Delete,
+    Add,
+    More,
+    NoPerformers,
+    PlaceHint,
+    RosterSearch,
+    NoMatches,
+    Markers,
+    Parts,
+    Sets,
 }
 
 impl Text {
@@ -98,7 +108,7 @@ impl Text {
     /// the catalog completeness test fail during review rather than leaking a
     /// fallback string into a release build.
     #[cfg(test)]
-    pub const ALL: [Self; 42] = [
+    pub const ALL: [Self; 52] = [
         Self::File,
         Self::Edit,
         Self::Playback,
@@ -141,6 +151,16 @@ impl Text {
         Self::Song,
         Self::Symmetry,
         Self::PreviousSet,
+        Self::Delete,
+        Self::Add,
+        Self::More,
+        Self::NoPerformers,
+        Self::PlaceHint,
+        Self::RosterSearch,
+        Self::NoMatches,
+        Self::Markers,
+        Self::Parts,
+        Self::Sets,
     ];
 }
 
@@ -236,6 +256,26 @@ pub fn text(locale: Locale, key: Text) -> &'static str {
         (Locale::En, Text::Symmetry) => "Symmetry",
         (Locale::Ja, Text::PreviousSet) => "前の場面",
         (Locale::En, Text::PreviousSet) => "Previous set",
+        (Locale::Ja, Text::Delete) => "削除",
+        (Locale::En, Text::Delete) => "Delete",
+        (Locale::Ja, Text::Add) => "追加",
+        (Locale::En, Text::Add) => "Add",
+        (Locale::Ja, Text::More) => "その他",
+        (Locale::En, Text::More) => "More",
+        (Locale::Ja, Text::NoPerformers) => "演者がまだいません",
+        (Locale::En, Text::NoPerformers) => "No performers yet",
+        (Locale::Ja, Text::PlaceHint) => "配置でフィールドをタップ",
+        (Locale::En, Text::PlaceHint) => "Tap the field with Place",
+        (Locale::Ja, Text::RosterSearch) => "名前か番号",
+        (Locale::En, Text::RosterSearch) => "Name or number",
+        (Locale::Ja, Text::NoMatches) => "該当する演者はいません",
+        (Locale::En, Text::NoMatches) => "No matching performers",
+        (Locale::Ja, Text::Markers) => "本番マーカー",
+        (Locale::En, Text::Markers) => "Production markers",
+        (Locale::Ja, Text::Parts) => "パート",
+        (Locale::En, Text::Parts) => "Parts",
+        (Locale::Ja, Text::Sets) => "セット",
+        (Locale::En, Text::Sets) => "Sets",
     }
 }
 

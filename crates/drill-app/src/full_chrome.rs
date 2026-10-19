@@ -17,11 +17,11 @@ fn paper(margin: i8) -> egui::Frame {
 }
 
 impl DrillApp {
-    pub(super) fn show_full_chrome(&mut self, ui: &mut egui::Ui, set_counts: f32) {
+    pub(super) fn show_full_chrome(&mut self, ui: &mut egui::Ui) {
         self.show_full_top_bar(ui);
         self.show_full_tool_dock(ui);
         self.show_full_context_bar(ui);
-        self.show_full_inspector(ui, set_counts);
+        self.show_full_inspector(ui);
         self.show_full_timeline(ui);
     }
 
@@ -55,13 +55,14 @@ impl DrillApp {
                 icon,
                 label,
                 tip,
-                width: 62.0,
+                width: 68.0,
                 enabled,
                 active,
                 pulse: false,
                 filled: false,
                 compact: false,
                 time: ui.input(|input| input.time as f32),
+                lock_width: true,
             },
         );
         clicked && enabled
@@ -200,7 +201,14 @@ impl DrillApp {
             add,
             super::keybindings::Action::Command(UiCommand::AddPerformer),
         );
-        if self.full_tile(ui, PhoneIcon::Plus, add, &add_tip, true, false) {
+        if self.full_tile(
+            ui,
+            PhoneIcon::Plus,
+            text(self.locale, Text::Add),
+            &add_tip,
+            true,
+            false,
+        ) {
             self.execute_command(UiCommand::AddPerformer, &ctx);
         }
         let remove = UiCommand::RemoveSelectedPerformers.label(self.locale);
@@ -212,7 +220,7 @@ impl DrillApp {
         if self.full_tile(
             ui,
             PhoneIcon::Minus,
-            remove,
+            text(self.locale, Text::Delete),
             &remove_tip,
             !self.selected.is_empty(),
             false,
@@ -267,73 +275,92 @@ impl DrillApp {
             return;
         }
         let screen = ui.ctx().viewport_rect();
-        let anchor = self
-            .selection_screen_anchor(screen)
-            .unwrap_or(screen.center());
-        let mut pos = anchor + egui::vec2(-24.0, -72.0);
-        pos.x = pos.x.clamp(screen.left() + 8.0, screen.right() - 280.0);
-        pos.y = pos.y.clamp(screen.top() + 140.0, screen.bottom() - 180.0);
+        let visible = self.full_visible_field(screen);
+        if visible.width() < 120.0 || visible.height() < 48.0 {
+            return;
+        }
+        let Some(bounds) = self.selection_screen_bounds(screen) else {
+            return;
+        };
+        let width = (visible.width() - 8.0).min(460.0);
+        let height = 108.0;
+        let above = bounds.min.y - 8.0 - height;
+        let below = bounds.max.y + 8.0;
+        let mut origin = egui::pos2(bounds.center().x - width * 0.5, above);
+        if above < visible.top() && below + height <= visible.bottom() {
+            origin.y = below;
+        } else if above < visible.top() {
+            origin.y = visible.top();
+        }
+        origin.x = origin.x.clamp(
+            visible.left(),
+            (visible.right() - width).max(visible.left()),
+        );
+        origin.y = origin.y.clamp(
+            visible.top(),
+            (visible.bottom() - height).max(visible.top()),
+        );
         egui::Area::new("full-context-bar".into())
             .order(egui::Order::Foreground)
-            .fixed_pos(pos)
+            .fixed_pos(origin)
             .show(ui.ctx(), |ui| {
                 paper(6).show(ui, |ui| {
-                    ui.set_max_width(screen.width() - 24.0);
-                    egui::ScrollArea::horizontal()
-                        .id_salt("full-context-scroll")
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    egui::RichText::new(super::i18n::people_selected(
-                                        self.locale,
-                                        self.selected.len(),
-                                    ))
-                                    .strong(),
-                                );
-                                self.context_command(ui, UiCommand::AlignHorizontal);
-                                if ui.button(text(self.locale, Text::OnGrid)).clicked() {
-                                    self.snap_selected_to_grid();
-                                }
-                                if ui.button(text(self.locale, Text::FlipCenterLine)).clicked() {
-                                    self.mirror_selection_across_field();
-                                }
-                                self.context_command(ui, UiCommand::DistributeHorizontal);
-                                ui.menu_button(text(self.locale, Text::Arrange), |ui| {
-                                    for command in [
-                                        UiCommand::AlignVertical,
-                                        UiCommand::DistributeVertical,
-                                        UiCommand::FlipHorizontal,
-                                        UiCommand::FlipVertical,
-                                        UiCommand::MakeLine,
-                                    ] {
-                                        self.context_command(ui, command);
+                    let inner = (width - 14.0).max(160.0);
+                    ui.set_width(inner);
+                    ui.set_max_width(inner);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            egui::RichText::new(super::i18n::people_selected(
+                                self.locale,
+                                self.selected.len(),
+                            ))
+                            .strong(),
+                        );
+                        self.context_command(ui, UiCommand::AlignHorizontal);
+                        if ui.button(text(self.locale, Text::OnGrid)).clicked() {
+                            self.snap_selected_to_grid();
+                        }
+                        if ui.button(text(self.locale, Text::FlipCenterLine)).clicked() {
+                            self.mirror_selection_across_field();
+                        }
+                        self.context_command(ui, UiCommand::DistributeHorizontal);
+                        ui.menu_button(text(self.locale, Text::Arrange), |ui| {
+                            for command in [
+                                UiCommand::AlignVertical,
+                                UiCommand::DistributeVertical,
+                                UiCommand::FlipHorizontal,
+                                UiCommand::FlipVertical,
+                                UiCommand::MakeLine,
+                            ] {
+                                self.context_command(ui, command);
+                            }
+                        });
+                        ui.menu_button(text(self.locale, Text::More), |ui| {
+                            ui.menu_button(text(self.locale, Text::Pinwheel), |ui| {
+                                ui.horizontal_wrapped(|ui| {
+                                    for degrees in [-90.0_f32, -45.0, -15.0, 15.0, 45.0, 90.0] {
+                                        let label = if degrees > 0.0 {
+                                            format!("+{degrees:.0}°")
+                                        } else {
+                                            format!("{degrees:.0}°")
+                                        };
+                                        if ui.button(label).clicked() {
+                                            let points = self.selected_points();
+                                            self.commit_layout(editing::rotate_about_centroid(
+                                                &points,
+                                                degrees.to_radians(),
+                                            ));
+                                            ui.close();
+                                        }
                                     }
                                 });
-                                ui.menu_button(text(self.locale, Text::Pinwheel), |ui| {
-                                    ui.horizontal_wrapped(|ui| {
-                                        for degrees in [-90.0_f32, -45.0, -15.0, 15.0, 45.0, 90.0] {
-                                            let label = if degrees > 0.0 {
-                                                format!("+{degrees:.0}°")
-                                            } else {
-                                                format!("{degrees:.0}°")
-                                            };
-                                            if ui.button(label).clicked() {
-                                                let points = self.selected_points();
-                                                self.commit_layout(editing::rotate_about_centroid(
-                                                    &points,
-                                                    degrees.to_radians(),
-                                                ));
-                                                ui.close();
-                                            }
-                                        }
-                                    });
-                                });
-                                self.context_command(ui, UiCommand::CopyFormation);
-                                self.context_command(ui, UiCommand::PasteFormation);
-                                self.context_command(ui, UiCommand::LockSelection);
-                                self.context_command(ui, UiCommand::HideSelection);
                             });
+                            self.context_command(ui, UiCommand::CopyFormation);
+                            self.context_command(ui, UiCommand::PasteFormation);
+                            self.context_command(ui, UiCommand::LockSelection);
+                            self.context_command(ui, UiCommand::HideSelection);
                         });
+                    });
                 });
             });
     }
@@ -353,20 +380,29 @@ impl DrillApp {
         }
     }
 
-    fn selection_screen_anchor(&self, screen: egui::Rect) -> Option<Pos2> {
-        if self.frame_positions.is_empty() {
-            return None;
+    /// Field area that is not covered by the floating toolbar, inspector, or timeline.
+    fn full_visible_field(&self, screen: egui::Rect) -> egui::Rect {
+        let top = 136.0;
+        let bottom = if self.full_timeline_expanded {
+            380.0
+        } else {
+            118.0
+        };
+        let right = if self.full_inspector_collapsed || !self.show_inspector {
+            16.0
+        } else {
+            332.0
+        };
+        let min = screen.left_top() + egui::vec2(12.0, top);
+        let max = screen.right_bottom() - egui::vec2(right, bottom);
+        if max.x <= min.x || max.y <= min.y {
+            return egui::Rect::from_min_size(min, egui::Vec2::ZERO);
         }
-        let (mut x, mut y, mut count) = (0.0_f32, 0.0_f32, 0.0_f32);
-        for &index in &self.selected {
-            let Some(point) = self.frame_positions.get(index) else {
-                continue;
-            };
-            x += point.x;
-            y += point.y;
-            count += 1.0;
-        }
-        if count == 0.0 {
+        egui::Rect::from_min_max(min, max)
+    }
+
+    fn selection_screen_bounds(&self, screen: egui::Rect) -> Option<egui::Rect> {
+        if self.selected.is_empty() || self.frame_positions.is_empty() {
             return None;
         }
         let grid = &self.document.grid;
@@ -381,25 +417,31 @@ impl DrillApp {
             Some(self.field_viewport.center),
             self.field_viewport.zoom,
         );
-        let local = map.map(Point {
-            x: x / count,
-            y: y / count,
-        });
-        Some(screen.min + egui::vec2(local.x, local.y))
+        let mut bounds = None;
+        for &index in &self.selected {
+            let Some(point) = self.frame_positions.get(index).copied() else {
+                continue;
+            };
+            let local = map.map(point);
+            let at = screen.min + egui::vec2(local.x, local.y);
+            let dot = egui::Rect::from_center_size(at, egui::vec2(36.0, 36.0));
+            bounds = Some(bounds.map_or(dot, |existing: egui::Rect| existing.union(dot)));
+        }
+        bounds
     }
 
-    fn show_full_inspector(&mut self, ui: &mut egui::Ui, set_counts: f32) {
+    fn show_full_inspector(&mut self, ui: &mut egui::Ui) {
         let screen = ui.ctx().viewport_rect();
         let top = 46.0;
         let bottom = if self.full_timeline_expanded {
-            260.0
+            372.0
         } else {
             112.0
         };
         if self.full_inspector_collapsed || !self.show_inspector {
             egui::Area::new("full-inspector-tab".into())
                 .order(egui::Order::Foreground)
-                .fixed_pos(egui::pos2(screen.right() - 72.0, screen.top() + top + 4.0))
+                .fixed_pos(egui::pos2(screen.right() - 92.0, screen.top() + top + 4.0))
                 .show(ui.ctx(), |ui| {
                     paper(4).show(ui, |ui| {
                         let label = text(self.locale, Text::Inspector);
@@ -436,9 +478,192 @@ impl DrillApp {
                             .layout(egui::Layout::top_down(egui::Align::Min)),
                     );
                     child.set_clip_rect(rect);
-                    self.show_workspace_inspector(&mut child, set_counts);
+                    egui::ScrollArea::vertical()
+                        .id_salt("full-inspector-scroll")
+                        .auto_shrink([false, false])
+                        .show(&mut child, |ui| {
+                            self.show_full_inspector_body(ui);
+                        });
                 });
             });
+    }
+
+    fn show_full_inspector_body(&mut self, ui: &mut egui::Ui) {
+        if self.selected.is_empty() {
+            self.show_full_roster(ui);
+            return;
+        }
+        ui.horizontal(|ui| {
+            if self.selected.len() > 1 {
+                ui.label(
+                    egui::RichText::new(super::i18n::people_selected(
+                        self.locale,
+                        self.selected.len(),
+                    ))
+                    .strong(),
+                );
+            }
+            if ui.button(text(self.locale, Text::ClearSelection)).clicked() {
+                self.clear_selection();
+            }
+        });
+        if self.selected.is_empty() {
+            self.show_full_roster(ui);
+            return;
+        }
+        self.show_performer_properties(ui);
+    }
+
+    fn show_full_roster(&mut self, ui: &mut egui::Ui) {
+        let mut query = self.full_roster_query.clone();
+        let search = ui.add(
+            egui::TextEdit::singleline(&mut query)
+                .hint_text(text(self.locale, Text::RosterSearch))
+                .desired_width(ui.available_width().clamp(80.0, 284.0)),
+        );
+        ui.painter().rect_stroke(
+            search.rect,
+            6.0,
+            Stroke::new(1.0, super::app_theme::HAIRLINE),
+            egui::StrokeKind::Inside,
+        );
+        if search.changed() {
+            self.full_roster_query = query.clone();
+        }
+        let sections: Vec<(drill_core::SectionId, String)> = self
+            .document
+            .sections
+            .iter()
+            .map(|section| (section.id, section.name.clone()))
+            .collect();
+        if !sections.is_empty() {
+            ui.horizontal_wrapped(|ui| {
+                for (id, name) in &sections {
+                    let on = self.full_section_filter.contains(id);
+                    if ui.selectable_label(on, name).clicked() {
+                        if on {
+                            self.full_section_filter.retain(|section| section != id);
+                        } else {
+                            self.full_section_filter.push(*id);
+                        }
+                    }
+                }
+            });
+        }
+        if self.document.performers.is_empty() {
+            ui.add_space(8.0);
+            ui.label(text(self.locale, Text::NoPerformers));
+            ui.label(
+                egui::RichText::new(text(self.locale, Text::PlaceHint))
+                    .color(super::app_theme::SECONDARY_TEXT),
+            );
+            if ui.button(FieldTool::Place.label(self.locale)).clicked() {
+                self.set_field_tool(FieldTool::Place);
+            }
+            return;
+        }
+        let filter = self.full_section_filter.clone();
+        let mut rows = Vec::new();
+        for (index, performer) in self.document.performers.iter().enumerate() {
+            if !self.is_selectable_index(index) {
+                continue;
+            }
+            if !filter.is_empty() && !filter.contains(&performer.section) {
+                continue;
+            }
+            let (number, name) = split_performer_label(&performer.label);
+            let section_name = self
+                .document
+                .sections
+                .iter()
+                .find(|section| section.id == performer.section)
+                .map(|section| section.name.clone())
+                .unwrap_or_default();
+            let haystack = format!("{number} {name} {section_name}");
+            if !query.is_empty() && !haystack.to_lowercase().contains(&query.to_lowercase()) {
+                continue;
+            }
+            rows.push((index, number, name, section_name));
+        }
+        rows.sort_by(|left, right| {
+            roster_number_order(&left.1, &right.1).then_with(|| left.2.cmp(&right.2))
+        });
+        if rows.is_empty() {
+            ui.label(text(self.locale, Text::NoMatches));
+            return;
+        }
+        for (index, number, name, section) in rows {
+            self.full_roster_row(ui, index, &number, &name, &section);
+        }
+    }
+
+    fn full_roster_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        index: usize,
+        number: &str,
+        name: &str,
+        section: &str,
+    ) {
+        let selected = self.selected.contains(&index);
+        let width = ui.available_width().max(40.0);
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 28.0), Sense::click());
+        let fill = if selected {
+            super::app_theme::ACCENT_SOFT
+        } else if response.hovered() {
+            super::app_theme::ACCENT_HOVER
+        } else {
+            Color32::TRANSPARENT
+        };
+        if fill != Color32::TRANSPARENT {
+            ui.painter().rect_filled(rect, 6.0, fill);
+        }
+        let ink = Color32::from_rgb(32, 36, 44);
+        let font = egui::FontId::proportional(13.0);
+        let clip = ui.clip_rect();
+        let number_rect = egui::Rect::from_min_max(
+            rect.left_top(),
+            egui::pos2(rect.left() + 48.0, rect.bottom()),
+        );
+        let name_rect = egui::Rect::from_min_max(
+            egui::pos2(rect.left() + 48.0, rect.top()),
+            egui::pos2((rect.right() - 88.0).max(rect.left() + 48.0), rect.bottom()),
+        );
+        let section_rect = egui::Rect::from_min_max(
+            egui::pos2((rect.right() - 84.0).max(rect.left()), rect.top()),
+            rect.right_bottom(),
+        );
+        ui.set_clip_rect(clip.intersect(number_rect.shrink(4.0)));
+        ui.painter().text(
+            rect.left_center() + egui::vec2(6.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+            number,
+            font.clone(),
+            ink,
+        );
+        ui.set_clip_rect(clip.intersect(name_rect));
+        ui.painter().text(
+            name_rect.left_center(),
+            egui::Align2::LEFT_CENTER,
+            name,
+            font.clone(),
+            ink,
+        );
+        ui.set_clip_rect(clip.intersect(section_rect.shrink2(egui::vec2(4.0, 0.0))));
+        ui.painter().text(
+            section_rect.right_center() + egui::vec2(-4.0, 0.0),
+            egui::Align2::RIGHT_CENTER,
+            section,
+            font,
+            super::app_theme::SECONDARY_TEXT,
+        );
+        ui.set_clip_rect(clip);
+        if response.clicked() {
+            let additive = ui.input(|input| {
+                input.modifiers.shift || input.modifiers.command || input.modifiers.ctrl
+            });
+            self.select_performer_from_list(index, additive);
+        }
     }
 
     fn show_full_timeline(&mut self, ui: &mut egui::Ui) {
@@ -455,7 +680,7 @@ impl DrillApp {
                         ui.set_min_width(screen.width() - 16.0);
                         ui.set_max_width(screen.width() - 16.0);
                         if self.full_timeline_expanded {
-                            ui.set_max_height(240.0);
+                            ui.set_max_height(360.0);
                         }
                         ui.horizontal(|ui| {
                             if ui
@@ -471,20 +696,7 @@ impl DrillApp {
                             if ui.button(text(self.locale, Text::RangeStart)).clicked() {
                                 self.jump_to_show_start();
                             }
-                            let total = self.document.timeline_counts().max(1) as f32;
-                            let mut global = self
-                                .document
-                                .global_count(self.current_set, self.count_position)
-                                .clamp(0.0, total);
-                            if ui
-                                .add_sized(
-                                    [220.0, 18.0],
-                                    egui::Slider::new(&mut global, 0.0..=total).show_value(false),
-                                )
-                                .changed()
-                            {
-                                self.seek_global(global);
-                            }
+                            self.full_count_scrub(ui, 200.0);
                             self.show_playback_speed_presets(ui);
                             if ui
                                 .selectable_label(
@@ -498,9 +710,24 @@ impl DrillApp {
                         });
                         self.show_set_card_strip(ui);
                         if self.full_timeline_expanded {
+                            ui.collapsing(text(self.locale, Text::Sets), |ui| {
+                                ui.horizontal_wrapped(|ui| {
+                                    self.context_command(ui, UiCommand::DuplicateSet);
+                                    self.context_command(ui, UiCommand::DeleteSet);
+                                });
+                            });
+                            ui.collapsing(text(self.locale, Text::Parts), |ui| {
+                                self.show_section_picker(ui);
+                            });
+                            ui.collapsing(text(self.locale, Text::Markers), |ui| {
+                                let mut markers =
+                                    std::mem::take(&mut self.production_markers_panel);
+                                markers.show(self, ui);
+                                self.production_markers_panel = markers;
+                            });
                             egui::ScrollArea::vertical()
                                 .id_salt("full-timeline-extra")
-                                .max_height(150.0)
+                                .max_height(120.0)
                                 .show(ui, |ui| {
                                     self.show_timeline_playback_bar(ui);
                                     let (playhead_set, playhead_count) = self.render_playhead();
@@ -537,5 +764,47 @@ impl DrillApp {
         if let Some((set_index, local_count)) = change.seek {
             self.scrub_to(set_index, local_count);
         }
+    }
+
+    /// Count scrub with a visible rail. The stock slider paints a white
+    /// handle on the white timeline, which reads as an empty oval.
+    fn full_count_scrub(&mut self, ui: &mut egui::Ui, width: f32) {
+        let total = self.document.timeline_counts().max(1) as f32;
+        let global = self
+            .document
+            .global_count(self.current_set, self.count_position)
+            .clamp(0.0, total);
+        let (rect, response) =
+            ui.allocate_exact_size(egui::vec2(width, 22.0), Sense::click_and_drag());
+        let rail = egui::Rect::from_center_size(rect.center(), egui::vec2(width - 12.0, 6.0));
+        ui.painter()
+            .rect_filled(rail, 3.0, Color32::from_rgb(168, 176, 188));
+        let t = (global / total).clamp(0.0, 1.0);
+        let x = rail.left() + t * rail.width();
+        let filled = egui::Rect::from_min_max(
+            rail.left_top(),
+            egui::pos2(x.max(rail.left()), rail.bottom()),
+        );
+        ui.painter()
+            .rect_filled(filled, 2.0, super::app_theme::ACCENT);
+        let handle = egui::pos2(x, rail.center().y);
+        ui.painter().circle_filled(handle, 7.0, Color32::WHITE);
+        ui.painter()
+            .circle_stroke(handle, 7.0, Stroke::new(2.0, super::app_theme::ACCENT));
+        if (response.dragged() || response.clicked())
+            && let Some(pointer) = response.interact_pointer_pos()
+        {
+            let next = ((pointer.x - rail.left()) / rail.width().max(1.0)).clamp(0.0, 1.0);
+            self.seek_global(next * total);
+        }
+    }
+}
+
+fn roster_number_order(left: &str, right: &str) -> std::cmp::Ordering {
+    match (left.parse::<i64>(), right.parse::<i64>()) {
+        (Ok(a), Ok(b)) => a.cmp(&b).then_with(|| left.cmp(right)),
+        (Ok(_), Err(_)) => std::cmp::Ordering::Less,
+        (Err(_), Ok(_)) => std::cmp::Ordering::Greater,
+        (Err(_), Err(_)) => left.cmp(right),
     }
 }

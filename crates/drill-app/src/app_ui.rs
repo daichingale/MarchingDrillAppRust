@@ -2116,7 +2116,7 @@ impl eframe::App for DrillApp {
                             }
                         });
                     });
-                if self.selected.is_empty() {
+                if self.selected.is_empty() && self.full_legacy_chrome {
                     let card = Rect::from_min_size(
                         rect.left_top() + Vec2::new(18.0, 42.0),
                         Vec2::new(310.0, 76.0),
@@ -2704,7 +2704,7 @@ impl eframe::App for DrillApp {
             }
         });
         if !self.full_legacy_chrome && !self.focus_field {
-            self.show_full_chrome(ui, set_counts);
+            self.show_full_chrome(ui);
         }
         self.show_section_manager(ui.ctx());
         self.show_subset_snapshot_workspace(ui.ctx());
