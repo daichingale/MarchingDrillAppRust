@@ -80,6 +80,30 @@ pub enum Text {
     CrashTitle,
     CrashHint,
     CopyReportPath,
+    SimpleMode,
+    DetailedMode,
+    OnGrid,
+    FlipCenterLine,
+    Arrange,
+    Pinwheel,
+    Inspector,
+    Timeline,
+    Song,
+    Symmetry,
+    PreviousSet,
+    Delete,
+    Add,
+    More,
+    NoPerformers,
+    PlaceHint,
+    RosterSearch,
+    NoMatches,
+    Markers,
+    Parts,
+    Sets,
+    NoName,
+    PlaybackOptions,
+    Collapse,
 }
 
 impl Text {
@@ -87,7 +111,7 @@ impl Text {
     /// the catalog completeness test fail during review rather than leaking a
     /// fallback string into a release build.
     #[cfg(test)]
-    pub const ALL: [Self; 31] = [
+    pub const ALL: [Self; 55] = [
         Self::File,
         Self::Edit,
         Self::Playback,
@@ -119,6 +143,30 @@ impl Text {
         Self::CrashTitle,
         Self::CrashHint,
         Self::CopyReportPath,
+        Self::SimpleMode,
+        Self::DetailedMode,
+        Self::OnGrid,
+        Self::FlipCenterLine,
+        Self::Arrange,
+        Self::Pinwheel,
+        Self::Inspector,
+        Self::Timeline,
+        Self::Song,
+        Self::Symmetry,
+        Self::PreviousSet,
+        Self::Delete,
+        Self::Add,
+        Self::More,
+        Self::NoPerformers,
+        Self::PlaceHint,
+        Self::RosterSearch,
+        Self::NoMatches,
+        Self::Markers,
+        Self::Parts,
+        Self::Sets,
+        Self::NoName,
+        Self::PlaybackOptions,
+        Self::Collapse,
     ];
 }
 
@@ -192,6 +240,70 @@ pub fn text(locale: Locale, key: Text) -> &'static str {
         }
         (Locale::Ja, Text::CopyReportPath) => "レポートの場所をコピー",
         (Locale::En, Text::CopyReportPath) => "Copy Report Location",
+        (Locale::Ja, Text::SimpleMode) => "かんたん",
+        (Locale::En, Text::SimpleMode) => "Simple",
+        (Locale::Ja, Text::DetailedMode) => "くわしく",
+        (Locale::En, Text::DetailedMode) => "Detailed",
+        (Locale::Ja, Text::OnGrid) => "マス目へ",
+        (Locale::En, Text::OnGrid) => "On the grid",
+        (Locale::Ja, Text::FlipCenterLine) => "中央線で反転",
+        (Locale::En, Text::FlipCenterLine) => "Flip on the center line",
+        (Locale::Ja, Text::Arrange) => "整列",
+        (Locale::En, Text::Arrange) => "Arrange",
+        (Locale::Ja, Text::Pinwheel) => "ピンウィール",
+        (Locale::En, Text::Pinwheel) => "Pinwheel",
+        (Locale::Ja, Text::Inspector) => "詳細",
+        (Locale::En, Text::Inspector) => "Details",
+        (Locale::Ja, Text::Timeline) => "タイムライン",
+        (Locale::En, Text::Timeline) => "Timeline",
+        (Locale::Ja, Text::Song) => "曲",
+        (Locale::En, Text::Song) => "Song",
+        (Locale::Ja, Text::Symmetry) => "左右対称",
+        (Locale::En, Text::Symmetry) => "Symmetry",
+        (Locale::Ja, Text::PreviousSet) => "前の場面",
+        (Locale::En, Text::PreviousSet) => "Previous set",
+        (Locale::Ja, Text::Delete) => "削除",
+        (Locale::En, Text::Delete) => "Delete",
+        (Locale::Ja, Text::Add) => "追加",
+        (Locale::En, Text::Add) => "Add",
+        (Locale::Ja, Text::More) => "その他",
+        (Locale::En, Text::More) => "More",
+        (Locale::Ja, Text::NoPerformers) => "演者がまだいません",
+        (Locale::En, Text::NoPerformers) => "No performers yet",
+        (Locale::Ja, Text::PlaceHint) => "配置でフィールドをタップ",
+        (Locale::En, Text::PlaceHint) => "Tap the field with Place",
+        (Locale::Ja, Text::RosterSearch) => "名前か番号",
+        (Locale::En, Text::RosterSearch) => "Name or number",
+        (Locale::Ja, Text::NoMatches) => "該当する演者はいません",
+        (Locale::En, Text::NoMatches) => "No matching performers",
+        (Locale::Ja, Text::Markers) => "本番マーカー",
+        (Locale::En, Text::Markers) => "Production markers",
+        (Locale::Ja, Text::Parts) => "パート",
+        (Locale::En, Text::Parts) => "Parts",
+        (Locale::Ja, Text::Sets) => "セット",
+        (Locale::En, Text::Sets) => "Sets",
+        (Locale::Ja, Text::NoName) => "名前なし",
+        (Locale::En, Text::NoName) => "No name",
+        (Locale::Ja, Text::PlaybackOptions) => "再生の設定",
+        (Locale::En, Text::PlaybackOptions) => "Playback options",
+        (Locale::Ja, Text::Collapse) => "閉じる",
+        (Locale::En, Text::Collapse) => "Collapse",
+    }
+}
+
+/// How many people are in the working group, for the floating selection bar.
+pub fn people_selected(locale: Locale, count: usize) -> String {
+    match locale {
+        Locale::Ja => format!("{count}人選択中"),
+        Locale::En => format!("{count} selected"),
+    }
+}
+
+/// How many people are in the roster list, without saying they are selected.
+pub fn roster_count(locale: Locale, count: usize) -> String {
+    match locale {
+        Locale::Ja => format!("{count}人"),
+        Locale::En => format!("{count} people"),
     }
 }
 

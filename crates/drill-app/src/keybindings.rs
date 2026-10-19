@@ -919,8 +919,8 @@ impl super::DrillApp {
             commands: self.command_context(),
             locale: self.locale,
             can_nudge: self.key_nudge_allowed(),
-            symmetry_ok: simple && !self.playing,
-            ghost_ok: simple && self.current_set > 0,
+            symmetry_ok: !self.playing,
+            ghost_ok: self.current_set > 0,
             song_import_ok: simple,
             song_sync_ok: simple && self.document.audio.is_some() && !self.simple_mode.song_missing,
             song_remove_ok: simple && self.document.audio.is_some(),
@@ -1737,8 +1737,8 @@ mod tests {
             },
             locale: Locale::En,
             can_nudge: true,
-            symmetry_ok: surface == Surface::Simple,
-            ghost_ok: surface == Surface::Simple,
+            symmetry_ok: true,
+            ghost_ok: true,
             song_import_ok: surface == Surface::Simple,
             song_sync_ok: surface == Surface::Simple,
             song_remove_ok: surface == Surface::Simple,
@@ -1866,12 +1866,18 @@ mod tests {
             map.resolve_gated(Chord::plain(egui::Key::B), &simple),
             Some(Action::ToggleSymmetry)
         );
-        assert_eq!(map.resolve_gated(Chord::plain(egui::Key::B), &full), None);
+        assert_eq!(
+            map.resolve_gated(Chord::plain(egui::Key::B), &full),
+            Some(Action::ToggleSymmetry)
+        );
         assert_eq!(
             map.resolve_gated(Chord::plain(egui::Key::H), &simple),
             Some(Action::TogglePreviousGhost)
         );
-        assert_eq!(map.resolve_gated(Chord::plain(egui::Key::H), &full), None);
+        assert_eq!(
+            map.resolve_gated(Chord::plain(egui::Key::H), &full),
+            Some(Action::TogglePreviousGhost)
+        );
         assert_eq!(
             map.resolve(Chord::plain(egui::Key::Num1)),
             Some(Action::MarkDownbeat)
@@ -2063,7 +2069,7 @@ mod tests {
         app.perform_key_action(Action::ToolSelect, &ctx);
         assert_eq!(app.field_tool, FieldTool::Select);
         app.perform_key_action(Action::ToggleSymmetry, &ctx);
-        assert!(app.key_mirror_on());
+        assert!(!app.key_mirror_on());
         let shown = app.document.grid.show_step_grid;
         app.perform_key_action(Action::ToggleGrid, &ctx);
         assert_ne!(app.document.grid.show_step_grid, shown);

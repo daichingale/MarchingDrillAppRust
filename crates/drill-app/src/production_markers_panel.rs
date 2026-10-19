@@ -50,7 +50,7 @@ impl ProductionMarkersPanel {
         }
     }
 
-    pub(super) fn show(&mut self, app: &mut DrillApp, ui: &mut egui::Ui) {
+    pub(crate) fn show(&mut self, app: &mut DrillApp, ui: &mut egui::Ui) {
         ui.separator();
         ui.heading(i18n::registered(app.locale, "production-markers.001"));
         ui.small(i18n::registered(app.locale, "production-markers.002"));

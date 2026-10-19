@@ -7,7 +7,7 @@ use drill_core::clinic;
 use drill_core::rhythm_sync;
 
 impl DrillApp {
-    pub(super) fn show_workspace_inspector(&mut self, ui: &mut egui::Ui, set_counts: f32) {
+    pub(crate) fn show_workspace_inspector(&mut self, ui: &mut egui::Ui, set_counts: f32) {
         let global_count = self
             .document
             .global_count(self.current_set, self.count_position);
@@ -1804,7 +1804,7 @@ impl DrillApp {
         );
     }
 
-    fn show_section_picker(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn show_section_picker(&mut self, ui: &mut egui::Ui) {
         if self.document.sections.is_empty() || self.document.performers.is_empty() {
             return;
         }
@@ -1850,7 +1850,7 @@ impl DrillApp {
     }
 
     #[rustfmt::skip]
-    fn show_performer_properties(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn show_performer_properties(&mut self, ui: &mut egui::Ui) {
         self.ensure_performer_draft();
         let editable = self.is_editable_set_start();
         let single = self.selected.len() == 1;
@@ -1862,13 +1862,6 @@ impl DrillApp {
             .collect();
         let enter = ui.input(|input| input.key_pressed(egui::Key::Enter));
         if single {
-            if let Some(&index) = self.selected.iter().next()
-                && let Some(performer) = self.document.performers.get(index)
-            {
-                let color = performer.resolved_color(&self.document.sections);
-                let (swatch, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
-                ui.painter().rect_filled(swatch, 3.0, Color32::from_rgb(color[0], color[1], color[2]));
-            }
             if let Some(&first) = self.selected.iter().next() {
                 let segments = continuity::performer_continuity(&self.document, first);
                 if let Some(seg) = segments.iter().find(|s| s.from_set == self.current_set) {
@@ -2012,11 +2005,6 @@ impl DrillApp {
                 ));
             }
         }
-        ui.horizontal(|ui| {
-            ui.label(super::i18n::registered(self.locale, "workspace-inspector.217"));
-            let facing = ui.add_enabled(false, egui::Button::new("—"));
-            facing.on_disabled_hover_text(super::i18n::registered(self.locale, "workspace-inspector.218"));
-        });
         if !editable {
             ui.small(self.formation_edit_lock_reason());
         }
