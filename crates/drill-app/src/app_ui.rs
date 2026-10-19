@@ -307,10 +307,6 @@ impl eframe::App for DrillApp {
             render_count / set_counts,
             &mut self.frame_positions,
         );
-        self.command_palette.open_if_requested(ui.ctx());
-        if !self.simple_mode.enabled {
-            self.set_navigator.open_if_requested(ui.ctx());
-        }
         let palette_open = self.command_palette.is_open();
         // Preview cancellation has priority over the normal Escape command
         // (which clears selection). A visible proposed formation is a pending,
@@ -364,12 +360,8 @@ impl eframe::App for DrillApp {
         if exit_focus_field {
             self.execute_command(UiCommand::ToggleFocusField, ui.ctx());
         }
-        if !palette_open
-            && !exit_focus_field
-            && let Some(command) =
-                commands::consume_shortcut(ui, self.command_context(), self.locale)
-        {
-            self.execute_command(command, ui.ctx());
+        if !palette_open && !self.set_navigator.is_open() && !exit_focus_field {
+            self.handle_global_keys(ui);
         }
 
         // Always sampled (see `PerfHud::record`'s doc comment), and placed
@@ -395,6 +387,9 @@ impl eframe::App for DrillApp {
             },
             self.locale,
         );
+
+        self.show_key_surfaces(ui.ctx());
+        self.show_command_surfaces(ui.ctx());
 
         if self.simple_mode.enabled {
             self.ensure_simple_chrome(ui.ctx());
@@ -769,7 +764,14 @@ impl eframe::App for DrillApp {
                         .button(super::i18n::registered(self.locale, "rehearsal.009"))
                         .clicked()
                     {
-                        self.shortcut_help_open = true;
+                        self.keybindings.cheat_open = true;
+                        ui.close();
+                    }
+                    if ui
+                        .button(super::i18n::registered(self.locale, "shortcuts.020"))
+                        .clicked()
+                    {
+                        self.keybindings.settings_open = true;
                         ui.close();
                     }
                     if ui
@@ -823,6 +825,18 @@ impl eframe::App for DrillApp {
                     ui.label(super::i18n::registered(self.locale, "app-ui.066"));
                     ui.label(super::i18n::registered(self.locale, "app-ui.067"));
                 });
+                let toolbar_label = self.toolbar_toggle_label();
+                if ui
+                    .button(toolbar_label)
+                    .on_hover_text(self.key_tip(
+                        ui.ctx(),
+                        toolbar_label,
+                        super::keybindings::Action::ToggleToolbar,
+                    ))
+                    .clicked()
+                {
+                    self.full_toolbar_collapsed = !self.full_toolbar_collapsed;
+                }
             });
         }
 
@@ -864,7 +878,7 @@ impl eframe::App for DrillApp {
                         ));
                     });
                 });
-        } else {
+        } else if !self.full_toolbar_collapsed {
             ui.horizontal_wrapped(|ui| {
                 ui.label(
                     egui::RichText::new("DRILLFORGE")
@@ -928,7 +942,11 @@ impl eframe::App for DrillApp {
                 }
                 if ui
                     .button(text(self.locale, Text::Save))
-                    .on_hover_text(super::i18n::registered(self.locale, "app-ui.026"))
+                    .on_hover_text(self.key_tip(
+                        ui.ctx(),
+                        super::i18n::registered(self.locale, "app-ui.026"),
+                        super::keybindings::Action::Command(UiCommand::Save),
+                    ))
                     .clicked()
                 {
                     self.save_dialog();
@@ -952,6 +970,11 @@ impl eframe::App for DrillApp {
                     } else {
                         text(self.locale, Text::Play)
                     })
+                    .on_hover_text(self.key_tip(
+                        ui.ctx(),
+                        UiCommand::PlayPause.label(self.locale),
+                        super::keybindings::Action::Command(UiCommand::PlayPause),
+                    ))
                     .clicked()
                 {
                     self.toggle_playback(ui.ctx());
@@ -969,7 +992,11 @@ impl eframe::App for DrillApp {
                         self.history.can_undo(),
                         egui::Button::new(self.undo_button_label()),
                     )
-                    .on_hover_text(super::i18n::registered(self.locale, "app-ui.160"))
+                    .on_hover_text(self.key_tip(
+                        ui.ctx(),
+                        super::i18n::registered(self.locale, "app-ui.160"),
+                        super::keybindings::Action::Command(UiCommand::Undo),
+                    ))
                     .clicked()
                 {
                     self.execute_command(UiCommand::Undo, ui.ctx());
@@ -979,7 +1006,11 @@ impl eframe::App for DrillApp {
                         self.history.can_redo(),
                         egui::Button::new(self.redo_button_label()),
                     )
-                    .on_hover_text(super::i18n::registered(self.locale, "app-ui.161"))
+                    .on_hover_text(self.key_tip(
+                        ui.ctx(),
+                        super::i18n::registered(self.locale, "app-ui.161"),
+                        super::keybindings::Action::Command(UiCommand::Redo),
+                    ))
                     .clicked()
                 {
                     self.execute_command(UiCommand::Redo, ui.ctx());
@@ -2987,28 +3018,9 @@ impl eframe::App for DrillApp {
             None => {}
         }
         self.onboarding.persist_if_changed();
-        if let Some(command) =
-            self.command_palette
-                .show(ui.ctx(), self.command_context(), self.locale)
-        {
-            self.execute_command(command, ui.ctx());
-        }
-        if let Some(set_index) =
-            self.set_navigator
-                .show(ui.ctx(), &self.document, self.current_set, self.locale)
-        {
-            self.navigate_to_set(set_index);
-        }
-        if let Some(count) =
-            self.go_to_count
-                .show(ui.ctx(), self.document.timeline_counts(), self.locale)
-        {
-            self.navigate_to_global_count(count);
-        }
         self.show_close_guard(ui.ctx());
         self.show_document_open_guard(ui.ctx());
         self.show_recent_projects(ui.ctx());
-        self.show_shortcut_help(ui.ctx());
         if let Some(message) = self.presence.show(ui.ctx(), self.locale) {
             self.status = message;
         }
@@ -3421,7 +3433,11 @@ impl DrillApp {
         let previous = UiCommand::PreviousSet.enabled(context, self.locale);
         let previous_response = ui
             .add_enabled(previous.is_ok(), egui::Button::new("◀"))
-            .on_hover_text(super::i18n::registered(self.locale, "core-edit.001"));
+            .on_hover_text(self.key_tip(
+                ui.ctx(),
+                super::i18n::registered(self.locale, "core-edit.001"),
+                super::keybindings::Action::Command(UiCommand::PreviousSet),
+            ));
         let previous_response = match previous {
             Ok(()) => previous_response,
             Err(reason) => previous_response.on_disabled_hover_text(reason),
@@ -3444,7 +3460,11 @@ impl DrillApp {
         let next = UiCommand::NextSet.enabled(context, self.locale);
         let next_response = ui
             .add_enabled(next.is_ok(), egui::Button::new("▶"))
-            .on_hover_text(super::i18n::registered(self.locale, "core-edit.002"));
+            .on_hover_text(self.key_tip(
+                ui.ctx(),
+                super::i18n::registered(self.locale, "core-edit.002"),
+                super::keybindings::Action::Command(UiCommand::NextSet),
+            ));
         let next_response = match next {
             Ok(()) => next_response,
             Err(reason) => next_response.on_disabled_hover_text(reason),
@@ -3454,7 +3474,11 @@ impl DrillApp {
         }
         if ui
             .button(super::i18n::registered(self.locale, "core-edit.003"))
-            .on_hover_text(super::i18n::registered(self.locale, "core-edit.004"))
+            .on_hover_text(self.key_tip(
+                ui.ctx(),
+                super::i18n::registered(self.locale, "core-edit.004"),
+                super::keybindings::Action::Command(UiCommand::DuplicateSet),
+            ))
             .clicked()
         {
             self.execute_command(UiCommand::DuplicateSet, ui.ctx());
@@ -3473,9 +3497,14 @@ impl DrillApp {
         }
         ui.separator();
         for tool in [FieldTool::Select, FieldTool::Move, FieldTool::Place] {
+            let action = match tool {
+                FieldTool::Select => super::keybindings::Action::ToolSelect,
+                FieldTool::Move => super::keybindings::Action::ToolMove,
+                FieldTool::Place => super::keybindings::Action::ToolPlace,
+            };
             if ui
                 .selectable_label(self.field_tool == tool, tool.label(self.locale))
-                .on_hover_text(tool.hover(self.locale))
+                .on_hover_text(self.key_tip(ui.ctx(), tool.hover(self.locale), action))
                 .clicked()
             {
                 self.set_field_tool(tool);
@@ -3502,7 +3531,11 @@ impl DrillApp {
                 remove.is_ok(),
                 egui::Button::new(super::i18n::registered(self.locale, "core-edit.007")),
             )
-            .on_hover_text(super::i18n::registered(self.locale, "core-edit.008"));
+            .on_hover_text(self.key_tip(
+                ui.ctx(),
+                super::i18n::registered(self.locale, "core-edit.008"),
+                super::keybindings::Action::Command(UiCommand::RemoveSelectedPerformers),
+            ));
         let remove_response = match remove {
             Ok(()) => remove_response,
             Err(reason) => remove_response.on_disabled_hover_text(reason),

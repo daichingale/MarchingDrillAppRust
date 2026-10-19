@@ -32,6 +32,8 @@ mod i18n;
 mod import_state;
 #[path = "inspector_media.rs"]
 mod inspector_media;
+#[path = "keybindings.rs"]
+mod keybindings;
 #[path = "legal_notices.rs"]
 mod legal_notices;
 #[path = "marking_menu.rs"]
@@ -1010,8 +1012,12 @@ pub(crate) struct DrillApp {
     /// Session-only. Faint dots for where everyone stands in the next scene.
     /// Not stored in the drill file.
     show_next_places: bool,
-    /// Session-only list of keyboard shortcuts. Not stored in the drill file.
-    shortcut_help_open: bool,
+    /// Session-only. Hides the full-editor tool strip without adding a row
+    /// over the field. Not stored in the drill file.
+    full_toolbar_collapsed: bool,
+    /// Shortcut registry, settings, and the key chart. The user's own chords
+    /// live in the app settings file, never in the drill.
+    keybindings: keybindings::KeyBindings,
     /// People who pass too close, and people whose step is too long for the
     /// count, on the move leaving the current scene. Rebuilt each full-mode
     /// frame. Never written into the document.
@@ -1172,7 +1178,8 @@ impl Default for DrillApp {
             show_dot_labels: true,
             labels_while_playing: false,
             show_next_places: false,
-            shortcut_help_open: false,
+            full_toolbar_collapsed: false,
+            keybindings: keybindings::KeyBindings::default(),
             move_check: rehearsal_checks::MoveCheck::default(),
             set_comparison: None,
             set_count_draft: None,
@@ -1907,7 +1914,17 @@ impl DrillApp {
     }
 
     fn command_menu(&mut self, ui: &mut egui::Ui, menu: CommandMenu) {
-        if let Some(command) = commands::show_menu(ui, menu, self.command_context(), self.locale) {
+        let ctx = ui.ctx().clone();
+        let labels = self.keybindings.map.command_labels(&ctx);
+        let locale = self.locale;
+        let context = self.command_context();
+        if let Some(command) = commands::show_menu_labeled(ui, menu, context, locale, &|command| {
+            labels
+                .iter()
+                .find(|(candidate, _)| *candidate == command)
+                .map(|(_, shortcut)| shortcut.clone())
+                .unwrap_or_default()
+        }) {
             self.execute_command(command, ui.ctx());
         }
     }
@@ -3168,7 +3185,9 @@ impl DrillApp {
             ..Self::default()
         };
         app.open_into_preferred_editor();
+        app.keybindings.load();
         app.apply_qa_simple_fixture();
+        app.apply_qa_keys();
         app
     }
 

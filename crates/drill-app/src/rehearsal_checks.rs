@@ -193,35 +193,6 @@ impl DrillApp {
         }
     }
 
-    pub(super) fn show_shortcut_help(&mut self, ctx: &egui::Context) {
-        if !self.shortcut_help_open {
-            return;
-        }
-        let mut open = true;
-        egui::Window::new(i18n::registered(self.locale, "rehearsal.007"))
-            .open(&mut open)
-            .default_width(440.0)
-            .resizable(true)
-            .scroll(true)
-            .show(ctx, |ui| {
-                ui.set_min_width(280.0);
-                ui.label(i18n::registered(self.locale, "rehearsal.008"));
-                ui.separator();
-                let locale = self.locale;
-                for spec in super::commands::SPECS {
-                    let Some(shortcut) = spec.shortcut else {
-                        continue;
-                    };
-                    ui.label(format!(
-                        "{}    {}",
-                        spec.command.label(locale),
-                        ui.ctx().format_shortcut(&shortcut.value())
-                    ));
-                }
-            });
-        self.shortcut_help_open = open;
-    }
-
     fn focus_checked_people(&mut self, indices: &[usize]) {
         let next: BTreeSet<usize> = indices
             .iter()

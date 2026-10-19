@@ -147,6 +147,7 @@ impl Shortcut {
     /// happened to sit earlier would permanently shadow a more specific one
     /// sharing its base key. See
     /// `no_shortcut_is_shadowed_by_a_looser_earlier_spec`.
+    #[cfg(test)]
     fn is_extra_specific(self) -> bool {
         matches!(self, Self::CommandShift(_) | Self::CommandAlt(_))
     }
@@ -196,6 +197,7 @@ pub(crate) fn command_for_chord(
 /// key, then falls back to `SPECS`' declared order -- which stays free to
 /// track menu display, not shortcut priority. No heap allocation: this runs
 /// on every frame a keyboard shortcut could fire.
+#[cfg(test)]
 pub(crate) fn consume_shortcut(
     ui: &mut egui::Ui,
     context: Context,
@@ -739,22 +741,46 @@ pub(crate) fn specs(menu: Menu) -> impl Iterator<Item = &'static Spec> {
 
 /// Renders one native desktop menu and returns the selected command.
 /// Command execution deliberately remains in the application controller.
+///
+/// The shortcut text is the historical binding. The live keymap uses
+/// [`show_menu_labeled`] so a rebound chord stays in the menu.
+#[cfg(test)]
 pub(crate) fn show_menu(
     ui: &mut egui::Ui,
     menu: Menu,
     context: Context,
     locale: Locale,
 ) -> Option<Command> {
+    let ctx = ui.ctx().clone();
+    show_menu_labeled(ui, menu, context, locale, &|command| {
+        spec_shortcut_text(&ctx, command)
+    })
+}
+
+#[cfg(test)]
+fn spec_shortcut_text(ctx: &egui::Context, command: Command) -> String {
+    SPECS
+        .iter()
+        .find(|spec| spec.command == command)
+        .and_then(|spec| spec.shortcut)
+        .map(|shortcut| ctx.format_shortcut(&shortcut.value()))
+        .unwrap_or_default()
+}
+
+pub(crate) fn show_menu_labeled(
+    ui: &mut egui::Ui,
+    menu: Menu,
+    context: Context,
+    locale: Locale,
+    shortcut_of: &dyn Fn(Command) -> String,
+) -> Option<Command> {
     let mut chosen = None;
     for spec in specs(menu) {
-        let label = if let Some(shortcut) = spec.shortcut {
-            format!(
-                "{}    {}",
-                spec.command.label(locale),
-                ui.ctx().format_shortcut(&shortcut.value())
-            )
-        } else {
+        let shortcut = shortcut_of(spec.command);
+        let label = if shortcut.is_empty() {
             spec.command.label(locale).to_owned()
+        } else {
+            format!("{}    {shortcut}", spec.command.label(locale))
         };
         let enabled = spec.command.enabled(context, locale);
         let response = ui.add_enabled(enabled.is_ok(), egui::Button::new(&label));

@@ -18,25 +18,11 @@ pub(crate) struct CommandPalette {
 }
 
 impl CommandPalette {
-    /// Opens only when the canvas owns the keyboard. Cmd/Ctrl+K must retain
-    /// its native meaning while naming a set, editing a marker, or typing in
-    /// any other text field.
-    pub(crate) fn open_if_requested(&mut self, context: &egui::Context) {
-        if self.open || context.egui_wants_keyboard_input() || context.text_edit_focused() {
-            return;
-        }
-        let requested = context.input_mut(|input| {
-            input.consume_shortcut(&egui::KeyboardShortcut::new(
-                egui::Modifiers::COMMAND,
-                egui::Key::K,
-            ))
-        });
-        if requested {
-            self.open = true;
-            self.query.clear();
-            self.selected = 0;
-            self.focus_query = true;
-        }
+    pub(crate) fn open(&mut self) {
+        self.open = true;
+        self.query.clear();
+        self.selected = 0;
+        self.focus_query = true;
     }
 
     pub(crate) fn is_open(&self) -> bool {
@@ -48,6 +34,7 @@ impl CommandPalette {
         context: &egui::Context,
         command_context: Context,
         locale: Locale,
+        shortcut_of: &dyn Fn(Command) -> String,
     ) -> Option<Command> {
         if !self.open {
             return None;
@@ -121,10 +108,7 @@ impl CommandPalette {
                         for (index, spec) in candidates.iter().enumerate() {
                             let enabled = spec.command.enabled(command_context, locale);
                             let selected = index == self.selected;
-                            let shortcut = spec
-                                .shortcut
-                                .map(|shortcut| context.format_shortcut(&shortcut.value()))
-                                .unwrap_or_default();
+                            let shortcut = shortcut_of(spec.command);
                             let label = if shortcut.is_empty() {
                                 spec.command.label(locale).to_owned()
                             } else {
