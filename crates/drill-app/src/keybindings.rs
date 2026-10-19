@@ -497,20 +497,20 @@ impl KeyMap {
         self.overrides.insert(action.id().to_string(), vec![chord]);
     }
 
-    pub(crate) fn primary_text(&self, ctx: &egui::Context, action: Action) -> String {
+    pub(crate) fn primary_text(&self, locale: Locale, action: Action) -> String {
         self.chords(action)
             .first()
-            .map(|chord| ctx.format_shortcut(&chord.egui()))
+            .map(|chord| chord_label(*chord, locale))
             .unwrap_or_default()
     }
 
-    pub(crate) fn command_labels(&self, ctx: &egui::Context) -> Vec<(Command, String)> {
+    pub(crate) fn command_labels(&self, locale: Locale) -> Vec<(Command, String)> {
         commands::SPECS
             .iter()
             .map(|spec| {
                 (
                     spec.command,
-                    self.primary_text(ctx, Action::Command(spec.command)),
+                    self.primary_text(locale, Action::Command(spec.command)),
                 )
             })
             .collect()
@@ -866,7 +866,7 @@ impl super::DrillApp {
     }
 
     pub(crate) fn show_command_surfaces(&mut self, ctx: &egui::Context) {
-        let labels = self.keybindings.map.command_labels(ctx);
+        let labels = self.keybindings.map.command_labels(self.locale);
         let command_context = self.command_context();
         let locale = self.locale;
         if let Some(command) = self
@@ -895,8 +895,8 @@ impl super::DrillApp {
         }
     }
 
-    pub(crate) fn key_tip(&self, ctx: &egui::Context, label: &str, action: Action) -> String {
-        let shortcut = self.keybindings.map.primary_text(ctx, action);
+    pub(crate) fn key_tip(&self, _ctx: &egui::Context, label: &str, action: Action) -> String {
+        let shortcut = self.keybindings.map.primary_text(self.locale, action);
         if shortcut.is_empty() {
             label.to_string()
         } else {
@@ -1067,8 +1067,8 @@ impl super::DrillApp {
             .title_bar(false)
             .vscroll(false)
             .default_size(egui::vec2(
-                700.0_f32.min(bounds.width()),
-                (bounds.height() - 8.0).min(640.0),
+                760.0_f32.min(bounds.width()),
+                bounds.height() - 8.0,
             ))
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .frame(paper_frame())
@@ -1080,12 +1080,12 @@ impl super::DrillApp {
         light_paper(ui);
         ui.set_min_width(560.0);
         ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new(self.settings_title())
-                    .size(22.0)
-                    .strong()
-                    .color(INK),
-            );
+            let title = self.settings_title().to_owned();
+            let galley = ui
+                .painter()
+                .layout_no_wrap(title, egui::FontId::proportional(22.0), INK);
+            let (rect, _) = ui.allocate_exact_size(galley.size(), egui::Sense::hover());
+            ui.painter().galley(rect.left_top(), galley, INK);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button(self.close_word()).clicked() {
                     self.keybindings.settings_open = false;
@@ -1132,18 +1132,17 @@ impl super::DrillApp {
         }
         let query = self.keybindings.query.clone();
         let rows = self.visible_actions(ui.ctx(), &query);
-        let bounds_h = ui.ctx().viewport_rect().shrink(16.0).height();
-        let mut chrome = 168.0;
-        if self.keybindings.recording.is_some() {
-            chrome += 72.0;
-        }
-        if self.keybindings.pending.is_some() {
-            chrome += 60.0;
-        }
-        if self.keybindings.confirm_reset {
-            chrome += 48.0;
-        }
-        let scroll_height = (bounds_h - chrome).max(120.0);
+        let footer = if self.keybindings.confirm_reset {
+            88.0
+        } else {
+            40.0
+        };
+        let available = ui.available_height();
+        let scroll_height = if available.is_finite() {
+            (available - footer).max(120.0)
+        } else {
+            (ui.ctx().viewport_rect().height() - 220.0).max(120.0)
+        };
         egui::ScrollArea::vertical()
             .max_height(scroll_height)
             .auto_shrink([false, false])
@@ -1184,14 +1183,23 @@ impl super::DrillApp {
                 let armed = self.keybindings.recording == Some(action);
                 let changed = chords != default_chords(action);
                 ui.horizontal(|ui| {
-                    ui.label(name);
+                    let name_width = (ui.available_width() - 220.0).max(180.0);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(name_width, 24.0),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(name).color(INK)).truncate(),
+                            );
+                        },
+                    );
                     if chords.is_empty() {
                         if key_chip(ui, unbound, armed).clicked() {
                             self.arm(action, search_id, ui.ctx());
                         }
                     } else {
                         for chord in &chords {
-                            let text = ui.ctx().format_shortcut(&chord.egui());
+                            let text = chord_label(*chord, self.locale);
                             if key_chip(ui, &text, armed).clicked() {
                                 self.arm(action, search_id, ui.ctx());
                             }
@@ -1350,7 +1358,7 @@ impl super::DrillApp {
                                 keycap(ui, unbound);
                             } else {
                                 for chord in chords {
-                                    keycap(ui, &ui.ctx().format_shortcut(&chord.egui()));
+                                    keycap(ui, &chord_label(chord, self.locale));
                                 }
                             }
                         });
@@ -1366,7 +1374,7 @@ impl super::DrillApp {
             .collect()
     }
 
-    fn matches_query(&self, ctx: &egui::Context, action: Action, query: &str) -> bool {
+    fn matches_query(&self, _ctx: &egui::Context, action: Action, query: &str) -> bool {
         let query = query.trim().to_lowercase();
         if query.is_empty() {
             return true;
@@ -1375,7 +1383,7 @@ impl super::DrillApp {
             return true;
         }
         self.keybindings.map.chords(action).iter().any(|chord| {
-            ctx.format_shortcut(&chord.egui())
+            chord_label(*chord, self.locale)
                 .to_lowercase()
                 .contains(&query)
         })
@@ -1568,6 +1576,86 @@ fn light_paper(ui: &mut egui::Ui) {
     visuals.selection.bg_fill = super::app_theme::ACCENT_SOFT;
 }
 
+fn chord_label(chord: Chord, locale: Locale) -> String {
+    let mut parts = Vec::new();
+    if chord.command {
+        parts.push("Ctrl".to_string());
+    }
+    if chord.alt {
+        parts.push("Alt".to_string());
+    }
+    if chord.shift {
+        parts.push("Shift".to_string());
+    }
+    parts.push(key_label(chord.key, locale));
+    parts.join("+")
+}
+
+fn key_label(key: egui::Key, locale: Locale) -> String {
+    let japanese = locale == Locale::Ja;
+    match key {
+        egui::Key::ArrowLeft => "←".to_string(),
+        egui::Key::ArrowRight => "→".to_string(),
+        egui::Key::ArrowUp => "↑".to_string(),
+        egui::Key::ArrowDown => "↓".to_string(),
+        egui::Key::Comma => {
+            if japanese {
+                "，".to_string()
+            } else {
+                ",".to_string()
+            }
+        }
+        egui::Key::Period => {
+            if japanese {
+                "．".to_string()
+            } else {
+                ".".to_string()
+            }
+        }
+        egui::Key::Home => {
+            if japanese {
+                "先頭".to_string()
+            } else {
+                "Home".to_string()
+            }
+        }
+        egui::Key::End => {
+            if japanese {
+                "末尾".to_string()
+            } else {
+                "End".to_string()
+            }
+        }
+        egui::Key::Space => {
+            if japanese {
+                "空白".to_string()
+            } else {
+                "Space".to_string()
+            }
+        }
+        egui::Key::PageUp => {
+            if japanese {
+                "前ページ".to_string()
+            } else {
+                "Page Up".to_string()
+            }
+        }
+        egui::Key::PageDown => {
+            if japanese {
+                "次ページ".to_string()
+            } else {
+                "Page Down".to_string()
+            }
+        }
+        egui::Key::Escape => "Esc".to_string(),
+        egui::Key::Backspace => "⌫".to_string(),
+        egui::Key::Delete => "Del".to_string(),
+        egui::Key::Enter => "Enter".to_string(),
+        egui::Key::Tab => "Tab".to_string(),
+        other => other.symbol_or_name().to_string(),
+    }
+}
+
 fn paint_category_icon(ui: &mut egui::Ui, category: Category) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
     paint_category_icon_in(ui.painter(), rect, category);
@@ -1593,52 +1681,117 @@ fn paint_chevron(painter: &egui::Painter, center: egui::Pos2, open: bool) {
 fn paint_category_icon_in(painter: &egui::Painter, rect: egui::Rect, category: Category) {
     let center = rect.center();
     let color = super::app_theme::ACCENT;
+    let stroke = egui::Stroke::new(1.6, color);
     match category {
         Category::Tools => {
-            painter.rect_filled(rect.shrink(3.0), 3.0, color);
-        }
-        Category::Playback => {
-            // A transport button, not a second triangle beside the collapse chevron.
-            painter.circle_stroke(center, 6.5, egui::Stroke::new(1.6, color));
-            painter.rect_filled(
-                egui::Rect::from_center_size(center, egui::vec2(4.5, 4.5)),
-                1.0,
-                color,
-            );
-        }
-        Category::Sets => {
-            painter.rect_stroke(
-                rect.shrink(3.0),
-                2.0,
-                egui::Stroke::new(1.5, color),
-                egui::StrokeKind::Inside,
+            // Pointer.
+            painter.line_segment(
+                [
+                    center + egui::vec2(-5.0, -6.0),
+                    center + egui::vec2(-1.0, 5.0),
+                ],
+                stroke,
             );
             painter.line_segment(
                 [
-                    rect.left_center() + egui::vec2(4.0, 0.0),
-                    rect.right_center() + egui::vec2(-4.0, 0.0),
+                    center + egui::vec2(-5.0, -6.0),
+                    center + egui::vec2(4.0, -1.0),
                 ],
-                egui::Stroke::new(1.5, color),
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    center + egui::vec2(4.0, -1.0),
+                    center + egui::vec2(-1.0, 5.0),
+                ],
+                stroke,
             );
         }
+        Category::Playback => {
+            painter.line_segment(
+                [
+                    center + egui::vec2(-4.0, -5.0),
+                    center + egui::vec2(5.0, 0.0),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    center + egui::vec2(5.0, 0.0),
+                    center + egui::vec2(-4.0, 5.0),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    center + egui::vec2(-4.0, 5.0),
+                    center + egui::vec2(-4.0, -5.0),
+                ],
+                stroke,
+            );
+        }
+        Category::Sets => {
+            for offset in [-4.0, 0.0, 4.0] {
+                painter.line_segment(
+                    [
+                        center + egui::vec2(-6.0, offset),
+                        center + egui::vec2(6.0, offset),
+                    ],
+                    stroke,
+                );
+            }
+        }
         Category::Edit => {
-            painter.circle_stroke(center, 5.0, egui::Stroke::new(1.5, color));
+            painter.line_segment(
+                [
+                    center + egui::vec2(-5.0, 5.0),
+                    center + egui::vec2(4.0, -4.0),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    center + egui::vec2(2.0, -6.0),
+                    center + egui::vec2(6.0, -2.0),
+                ],
+                stroke,
+            );
         }
         Category::View => {
-            painter.circle_filled(center, 3.0, color);
-            painter.circle_stroke(center, 6.0, egui::Stroke::new(1.5, color));
+            painter.circle_stroke(center, 3.0, stroke);
+            painter.line_segment(
+                [
+                    center + egui::vec2(-7.0, 0.0),
+                    center + egui::vec2(7.0, 0.0),
+                ],
+                stroke,
+            );
         }
         Category::File => {
-            painter.rect_filled(rect.shrink(4.0), 2.0, color);
+            painter.rect_stroke(rect.shrink(3.0), 2.0, stroke, egui::StrokeKind::Inside);
+            painter.line_segment(
+                [
+                    rect.right_top() + egui::vec2(-7.0, 3.0),
+                    rect.right_top() + egui::vec2(-3.0, 7.0),
+                ],
+                stroke,
+            );
         }
         Category::Song => {
-            painter.circle_filled(center + egui::vec2(-2.0, 3.0), 3.0, color);
+            painter.circle_stroke(center + egui::vec2(-2.0, 3.0), 3.0, stroke);
             painter.line_segment(
                 [
                     center + egui::vec2(1.0, 3.0),
                     center + egui::vec2(1.0, -6.0),
                 ],
-                egui::Stroke::new(1.5, color),
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    center + egui::vec2(1.0, -6.0),
+                    center + egui::vec2(5.0, -4.0),
+                ],
+                stroke,
             );
         }
     }
@@ -1714,6 +1867,28 @@ fn recorded_chord(ctx: &egui::Context) -> Option<Recorded> {
 mod tests {
     use super::super::DrillApp;
     use super::*;
+
+    #[test]
+    fn shortcut_names_use_symbols() {
+        let comma = Chord::plain(egui::Key::Comma);
+        assert_eq!(chord_label(comma, Locale::Ja), "，");
+        assert_eq!(chord_label(comma, Locale::En), ",");
+        let alt_left = Chord {
+            command: false,
+            shift: false,
+            alt: true,
+            key: egui::Key::ArrowLeft,
+        };
+        assert_eq!(chord_label(alt_left, Locale::Ja), "Alt+←");
+        assert_eq!(
+            chord_label(Chord::plain(egui::Key::Home), Locale::Ja),
+            "先頭"
+        );
+        assert_eq!(
+            chord_label(Chord::plain(egui::Key::Home), Locale::En),
+            "Home"
+        );
+    }
 
     fn ready_gate(surface: Surface) -> DispatchGate {
         DispatchGate {

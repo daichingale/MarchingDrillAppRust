@@ -1113,6 +1113,57 @@ impl DrillApp {
         }
     }
 
+    fn apply_qa_cast(&mut self, stage: &str) {
+        self.onboarding.show_welcome = false;
+        self.show_guidance = false;
+        self.onboarding.coach_dismissed = true;
+        self.simple_mode.return_hint = false;
+        self.install_document(qa_cast_document());
+        let full = stage != "cast";
+        self.set_simple_mode(!full);
+        self.field_tool = FieldTool::Select;
+        if !full {
+            return;
+        }
+        self.full_legacy_chrome = false;
+        self.full_inspector_collapsed = true;
+        self.full_timeline_expanded = false;
+        self.clear_selection();
+        match stage {
+            "cast-one" => {
+                self.replace_selection(std::iter::once(3).collect());
+                self.full_inspector_collapsed = false;
+            }
+            "cast-many" => {
+                self.replace_selection((0..20).collect());
+                self.full_inspector_collapsed = false;
+            }
+            "cast-roster" => {
+                self.full_inspector_collapsed = false;
+                if let Some(section) = self.document.sections.get(2) {
+                    self.full_section_filter = vec![section.id];
+                }
+            }
+            "cast-timeline" => {
+                self.full_timeline_expanded = true;
+                self.navigate_to_set(0);
+                self.nav_glide.settle();
+            }
+            "cast-export" => {
+                self.print_state.open = true;
+                self.full_inspector_collapsed = true;
+            }
+            "cast-play" => {
+                self.navigate_to_set(1);
+                self.nav_glide.settle();
+                self.playing = true;
+                self.speed = 0.0;
+                self.count_position = 4.0;
+            }
+            _ => {}
+        }
+    }
+
     /// Screenshot harness only. Seeds a frame when `DRILLFORGE_QA_SIMPLE` is
     /// `empty`, `placed`, `play`, `glossary`, `selected`, `recent`, `full`,
     /// `move`, `save`, `done`, `line`, `step`, `circle`, `nudge`, `walk`,
@@ -1120,11 +1171,17 @@ impl DrillApp {
     /// `places`, `pair`, `order`, `sheet`, `recover`, `ghosts`, `mirror`,
     /// `guide-place`, `guide-move`, `guide-play`, `guide-playing`,
     /// `guide-collapsed`, `guide-song`, `full-selected`, `full-collapsed`,
-    /// `full-timeline`, `full-multi`, `full-list`, or `full-export`.
+    /// `full-timeline`, `full-multi`, `full-list`, `full-export`, `cast`,
+    /// `cast-full`, `cast-one`, `cast-many`, `cast-roster`, `cast-timeline`,
+    /// or `cast-export`.
     pub(crate) fn apply_qa_simple_fixture(&mut self) {
         let Ok(stage) = std::env::var("DRILLFORGE_QA_SIMPLE") else {
             return;
         };
+        if stage == "cast" || stage.starts_with("cast-") {
+            self.apply_qa_cast(&stage);
+            return;
+        }
         self.onboarding.show_welcome = false;
         self.simple_mode.enabled = true;
         self.begin_simple_show();
@@ -2311,38 +2368,12 @@ impl DrillApp {
 
     fn simple_member_count(&self, ui: &mut egui::Ui) {
         let n = self.document.performers.len();
-        let caption = format!("{}{}", n, i18n::registered(self.locale, "simple-mode.084"));
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            if simple_shows_person_numeral(n) {
-                let (icon, _) = ui.allocate_exact_size(egui::Vec2::splat(22.0), Sense::hover());
-                paint_phone_icon_at(
-                    ui.painter(),
-                    icon.center(),
-                    PhoneIcon::Person,
-                    SIMPLE_BLUE,
-                    0.9,
-                );
-                ui.label(
-                    egui::RichText::new(n.to_string())
-                        .size(22.0)
-                        .strong()
-                        .color(SIMPLE_INK),
-                );
-            } else {
-                for _ in 0..n {
-                    let (icon, _) = ui.allocate_exact_size(egui::Vec2::splat(16.0), Sense::hover());
-                    paint_phone_icon_at(
-                        ui.painter(),
-                        icon.center(),
-                        PhoneIcon::Person,
-                        SIMPLE_BLUE,
-                        0.6,
-                    );
-                }
-            }
-        })
-        .response
+        let caption = super::i18n::roster_count(self.locale, n);
+        ui.label(
+            egui::RichText::new(caption.clone())
+                .size(20.0)
+                .color(SIMPLE_INK),
+        )
         .on_hover_text(caption);
     }
 
@@ -5636,8 +5667,62 @@ impl DrillApp {
                 toolbar_top = rect.top();
             }
             self.simple_overlay_song(&ctx, field, toolbar_top, &mut block);
+            let mut ceiling = toolbar_top - 8.0;
+            if !self.document.sets.is_empty() {
+                ceiling = ceiling.min(field.bottom() - 66.0);
+            }
+            self.simple_overlay_front_labels(&ctx, field, ceiling, &mut block);
         }
         self.simple_mode.overlay_block = block;
+    }
+
+    /// 客席 / 左 / 右 sit on the front sideline, above the set strip and the dock.
+    fn simple_overlay_front_labels(
+        &self,
+        ctx: &egui::Context,
+        field: egui::Rect,
+        ceiling: f32,
+        block: &mut Option<egui::Rect>,
+    ) {
+        let options = self.field_render_options(false);
+        let map = drill_render::FieldMap::with_view(
+            self.document.grid.width,
+            self.document.grid.height,
+            drill_render::Vec2 {
+                x: field.width(),
+                y: field.height(),
+            },
+            options.margin,
+            options.field_center,
+            options.field_zoom,
+        );
+        let to_screen = |point: drill_core::Point| {
+            let mapped = map.map(point);
+            Pos2::new(field.left() + mapped.x, field.top() + mapped.y)
+        };
+        let (left, right) = simple_side_anchors(&self.document.grid);
+        let marks = [
+            (left, "simple-mode.206"),
+            (right, "simple-mode.207"),
+            (
+                simple_audience_point(&self.document.grid),
+                "simple-mode.146",
+            ),
+        ];
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("simple-front-labels"),
+        ));
+        for (point, id) in marks {
+            let chip = paint_front_chip(
+                &painter,
+                field,
+                to_screen(point),
+                ceiling,
+                i18n::registered(self.locale, id),
+            );
+            overlay_union(block, chip);
+        }
     }
 
     fn simple_overlay_members(
@@ -7521,14 +7606,7 @@ impl DrillApp {
                 || self.simple_mode.empty_pan
                 || self.field_viewport.pan_last_pointer.is_some();
         }
-        let render_options = drill_render::RenderOptions {
-            margin: 0.0,
-            field_center: Some(self.field_viewport.center),
-            field_zoom: self.field_viewport.zoom,
-            skip_offscreen: super::cull_offscreen_dots(self.document.performers.len()),
-            extend_grid: true,
-            ..drill_render::RenderOptions::default()
-        };
+        let render_options = self.field_render_options(true);
         let scene = drill_render::Scene {
             document: &self.document,
             positions: &self.frame_positions,
@@ -7563,8 +7641,6 @@ impl DrillApp {
         self.paint_previous_ghosts(&painter, &to_screen);
         egui_backend::paint_dots_and_above(&painter, rect.min, &self.display_list);
         self.paint_simple_paths(&painter, &to_screen);
-        self.paint_simple_audience(&painter, rect, &to_screen);
-        self.paint_simple_sides(&painter, rect, &to_screen);
         self.paint_simple_center_line(&painter, &to_screen);
         self.paint_simple_floor(&painter, rect, &to_screen);
         self.paint_simple_focus_wash(&painter, &to_screen);
@@ -7890,39 +7966,6 @@ impl DrillApp {
         }
     }
 
-    fn paint_simple_audience(
-        &self,
-        painter: &egui::Painter,
-        rect: egui::Rect,
-        to_screen: &impl Fn(Point) -> Pos2,
-    ) {
-        let label = i18n::registered(self.locale, "simple-mode.146");
-        let anchor = to_screen(simple_audience_point(&self.document.grid));
-        paint_simple_chip(painter, rect, anchor, label);
-    }
-
-    /// Audience's left and right, on the same front edge as 客席.
-    fn paint_simple_sides(
-        &self,
-        painter: &egui::Painter,
-        rect: egui::Rect,
-        to_screen: &impl Fn(Point) -> Pos2,
-    ) {
-        let (left, right) = simple_side_anchors(&self.document.grid);
-        paint_simple_chip(
-            painter,
-            rect,
-            to_screen(left),
-            i18n::registered(self.locale, "simple-mode.206"),
-        );
-        paint_simple_chip(
-            painter,
-            rect,
-            to_screen(right),
-            i18n::registered(self.locale, "simple-mode.207"),
-        );
-    }
-
     fn paint_simple_center_line(
         &self,
         painter: &egui::Painter,
@@ -8027,23 +8070,162 @@ impl DrillApp {
 }
 
 fn paint_simple_chip(painter: &egui::Painter, rect: egui::Rect, anchor: Pos2, label: &str) {
-    let pos = anchor + egui::Vec2::new(0.0, -16.0);
-    if !rect.contains(pos) {
-        return;
-    }
     let galley = painter.layout_no_wrap(
         label.to_owned(),
-        egui::FontId::proportional(13.0),
+        egui::FontId::proportional(14.0),
         SIMPLE_BLUE,
     );
-    let pad = egui::Vec2::new(10.0, 4.0);
-    let text_pos = pos - egui::Vec2::new(galley.size().x * 0.5, galley.size().y);
-    let background = egui::Rect::from_min_size(text_pos - pad, galley.size() + pad * 2.0);
+    let pad = egui::Vec2::new(10.0, 5.0);
+    let size = galley.size() + pad * 2.0;
+    let min = simple_chip_origin(rect, anchor, size);
+    let background = egui::Rect::from_min_size(min, size);
     if !rect.contains_rect(background) {
         return;
     }
     painter.rect_filled(background, 10.0, Color32::from_white_alpha(235));
-    painter.galley(text_pos, galley, SIMPLE_BLUE);
+    painter.galley(min + pad, galley, SIMPLE_BLUE);
+}
+
+/// Eighty people, seven instruments, six sets. Screenshot and round-trip
+/// fixture only — not a file the app creates for a new show.
+fn qa_cast_document() -> drill_core::Document {
+    use drill_core::{PerformerKind, Point, Section, SectionId, Set, SetId, Symbol};
+    let mut doc = drill_core::Document::blank(80);
+    doc.title = "文化祭".into();
+    let specs: [(&str, &str, [u8; 3], usize); 7] = [
+        ("トランペット", "Tp", [196, 48, 40], 16),
+        ("ホルン", "Hr", [196, 132, 24], 12),
+        ("トロンボーン", "Tb", [32, 92, 196], 12),
+        ("ユーフォニアム", "Eu", [24, 122, 72], 8),
+        ("チューバ", "Tu", [96, 48, 168], 8),
+        ("ドラム", "Dr", [48, 52, 60], 12),
+        ("カラーガード", "CG", [196, 56, 132], 12),
+    ];
+    let mut sections = Vec::new();
+    let mut assignment = Vec::with_capacity(80);
+    for (index, (name, short, color, count)) in specs.iter().enumerate() {
+        let id = SectionId::new((index + 1) as u32).expect("section id");
+        sections.push(Section {
+            id,
+            name: (*name).into(),
+            short: (*short).into(),
+            color: *color,
+            order: index as u16,
+        });
+        assignment.extend(std::iter::repeat_n(id, *count));
+    }
+    let names = [
+        (0usize, "山田"),
+        (15, "佐藤"),
+        (27, "鈴木"),
+        (40, "高橋"),
+        (60, "伊藤"),
+    ];
+    for (index, performer) in doc.performers.iter_mut().enumerate() {
+        performer.section = assignment[index];
+        performer.symbol = Symbol::Cross;
+        performer.color = None.into();
+        performer.kind = if index >= 68 {
+            PerformerKind::Guard
+        } else if index >= 56 {
+            PerformerKind::Percussion
+        } else {
+            PerformerKind::Wind
+        };
+        let number = index + 1;
+        performer.label = names
+            .iter()
+            .find(|(at, _)| *at == index)
+            .map(|(_, name)| format!("{number} {name}"))
+            .unwrap_or_else(|| number.to_string());
+    }
+    doc.sections = sections;
+    let grid = doc.grid.clone();
+    let step = grid.horizontal_units / f32::from(grid.horizontal_steps.max(1));
+    let gap = step * 4.0;
+    let counts = [16u16, 12, 24, 8, 32, 16];
+    doc.sets = counts
+        .iter()
+        .enumerate()
+        .map(|(set_index, counts)| {
+            let positions = (0..80)
+                .map(|index| {
+                    let col = index % 10;
+                    let row = index / 10;
+                    let shift = set_index as f32 * step * 2.0;
+                    let fan = (set_index as f32 - 2.0) * step * (row as f32 - 3.5) * 0.35;
+                    grid.snap(Point {
+                        x: 8.0 + col as f32 * gap + shift,
+                        y: 6.0 + row as f32 * gap + fan,
+                    })
+                })
+                .collect();
+            Set {
+                id: SetId::new((set_index + 1) as u32).expect("set id"),
+                name: format!("セット {}", set_index + 1),
+                annotation: Default::default(),
+                counts: *counts,
+                hold: 0,
+                routes: Default::default(),
+                shape: None,
+                generated_by: None,
+                positions,
+            }
+        })
+        .collect();
+    doc
+}
+
+/// Front-sideline chip drawn above the dock. `ceiling` is the top of the
+/// set strip and toolbar; the chip's bottom stays on or above it.
+fn paint_front_chip(
+    painter: &egui::Painter,
+    field: egui::Rect,
+    anchor: Pos2,
+    ceiling: f32,
+    label: &str,
+) -> egui::Rect {
+    let galley = painter.layout_no_wrap(
+        label.to_owned(),
+        egui::FontId::proportional(16.0),
+        SIMPLE_BLUE,
+    );
+    let pad = egui::Vec2::new(12.0, 6.0);
+    let size = galley.size() + pad * 2.0;
+    let min = front_chip_origin(field, anchor, size, ceiling);
+    let background = egui::Rect::from_min_size(min, size);
+    painter.rect_filled(background, 12.0, Color32::from_white_alpha(245));
+    painter.rect_stroke(
+        background,
+        12.0,
+        Stroke::new(1.0, super::app_theme::HAIRLINE),
+        egui::StrokeKind::Inside,
+    );
+    painter.galley(min + pad, galley, SIMPLE_BLUE);
+    background
+}
+
+fn front_chip_origin(field: egui::Rect, anchor: Pos2, size: egui::Vec2, ceiling: f32) -> Pos2 {
+    let mut min = egui::pos2(anchor.x - size.x * 0.5, anchor.y - 22.0 - size.y);
+    if min.y + size.y > ceiling {
+        min.y = ceiling - size.y;
+    }
+    let max_x = (field.right() - size.x - 8.0).max(field.left() + 8.0);
+    let max_y = (field.bottom() - size.y - 8.0).max(field.top() + 8.0);
+    min.x = min.x.clamp(field.left() + 8.0, max_x);
+    min.y = min.y.clamp(field.top() + 8.0, max_y);
+    min
+}
+
+/// Puts the chip just above the anchor, then slides it into `rect` so the
+/// dock and the window edge cannot cover 左 / 右.
+fn simple_chip_origin(rect: egui::Rect, anchor: Pos2, size: egui::Vec2) -> Pos2 {
+    let mut min = egui::pos2(anchor.x - size.x * 0.5, anchor.y - 18.0 - size.y);
+    let max_x = (rect.right() - size.x).max(rect.left());
+    let max_y = (rect.bottom() - size.y).max(rect.top());
+    min.x = min.x.clamp(rect.left(), max_x);
+    min.y = min.y.clamp(rect.top(), max_y);
+    min
 }
 
 /// Front sideline, centered. Field `y = 0` is the audience side, and the
@@ -9088,10 +9270,6 @@ fn simple_transition_seconds(document: &drill_core::Document, set_index: usize) 
 }
 
 /// Plain text of where everyone stands, to paste into a message. Nothing is written.
-fn simple_shows_person_numeral(count: usize) -> bool {
-    count > 12
-}
-
 fn simple_chip_caption(name: &str, index: usize) -> String {
     let number = (index + 1).to_string();
     let custom = simple_scene_name_draft(name);
@@ -12724,8 +12902,48 @@ mod tests {
 
     #[test]
     fn member_tally_uses_a_numeral_past_twelve() {
-        assert!(!simple_shows_person_numeral(12));
-        assert!(simple_shows_person_numeral(13));
+        assert_eq!(super::i18n::roster_count(drill_core::Locale::Ja, 2), "2人");
+        assert_eq!(
+            super::i18n::roster_count(drill_core::Locale::Ja, 80),
+            "80人"
+        );
+    }
+
+    #[test]
+    fn cast_show_roundtrips_eighty_people_and_six_sets() {
+        let doc = qa_cast_document();
+        assert_eq!(doc.performers.len(), 80);
+        assert!(doc.sections.len() >= 5);
+        assert_eq!(doc.sets.len(), 6);
+        let counts: Vec<u16> = doc.sets.iter().map(|set| set.counts).collect();
+        assert!(counts.windows(2).any(|pair| pair[0] != pair[1]));
+        assert!(
+            doc.performers
+                .iter()
+                .any(|person| person.label.contains('山'))
+        );
+        let json = doc.to_json().expect("json");
+        let loaded = drill_core::Document::from_json(&json).expect("reload");
+        assert_eq!(loaded.performers.len(), 80);
+        assert_eq!(loaded.sets.len(), 6);
+        assert_eq!(loaded.sets[3].counts, doc.sets[3].counts);
+        assert_eq!(loaded.sections.len(), doc.sections.len());
+    }
+
+    #[test]
+    fn side_chips_slide_above_the_dock() {
+        let field = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1280.0, 800.0));
+        let size = egui::vec2(40.0, 28.0);
+        let ceiling = 680.0;
+        let origin = front_chip_origin(field, egui::pos2(250.0, 790.0), size, ceiling);
+        let chip = egui::Rect::from_min_size(origin, size);
+        assert!(
+            chip.bottom() <= ceiling + 0.5,
+            "chip overlaps the dock: {chip:?}"
+        );
+        assert!(field.contains_rect(chip), "{chip:?} not inside {field:?}");
+        let right = front_chip_origin(field, egui::pos2(1260.0, 790.0), size, ceiling);
+        assert!(right.x + size.x <= field.right() - 7.0, "{right:?}");
     }
 
     #[test]

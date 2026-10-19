@@ -282,6 +282,12 @@ pub struct RenderOptions {
     /// size and aspect. Off for exports and tests, which must keep drawing
     /// only the field rectangle.
     pub extend_grid: bool,
+    /// Draw this shape for every person instead of the mark stored on the
+    /// performer. `None` keeps the document mark, which is what exports use.
+    pub symbol_override: Option<Symbol>,
+    /// Put the person's number in the middle of the dot. Off keeps the
+    /// number above the mark, which is the printed-chart layout.
+    pub label_inside: bool,
 }
 
 impl Default for RenderOptions {
@@ -299,6 +305,8 @@ impl Default for RenderOptions {
             show_trails_for: TrailSelection::None,
             skip_offscreen: false,
             extend_grid: false,
+            symbol_override: None,
+            label_inside: false,
         }
     }
 }
@@ -1062,7 +1070,7 @@ pub fn build_field_2d(scene: &Scene<'_>, _scratch: &mut BuildScratch, out: &mut 
                     Rgba(color[0], color[1], color[2], 255)
                 },
                 stroke: scene.theme.dot_stroke,
-                symbol: performer.symbol,
+                symbol: scene.options.symbol_override.unwrap_or(performer.symbol),
             });
             out.stats.dots_emitted += 1;
         } else {
@@ -1078,16 +1086,38 @@ pub fn build_field_2d(scene: &Scene<'_>, _scratch: &mut BuildScratch, out: &mut 
     if scene.options.show_labels {
         for (performer, point) in scene.document.performers.iter().zip(scene.positions) {
             if point.x.is_finite() && point.y.is_finite() && shown(*point) {
-                let text = out.push_text(&performer.label);
                 let at = map(*point);
+                let scale = scene.viewport.ui_scale.max(0.1);
+                let (text, placed, size, ink) = if scene.options.label_inside {
+                    let number = marker_digits(&performer.label);
+                    let size = (scene.options.label_size * scale).clamp(9.0, 14.0);
+                    let fill = performer.resolved_color(&scene.document.sections);
+                    (
+                        out.push_text(&number),
+                        Vec2 {
+                            x: at.x,
+                            // The painter anchors text on its bottom edge.
+                            y: at.y + size * 0.42,
+                        },
+                        size,
+                        ink_on(fill),
+                    )
+                } else {
+                    (
+                        out.push_text(&performer.label),
+                        Vec2 {
+                            x: at.x,
+                            y: at.y - scene.options.dot_radius - 2.0,
+                        },
+                        scene.options.label_size * scale,
+                        scene.theme.text,
+                    )
+                };
                 out.commands.push(DrawCmd::Text {
-                    at: Vec2 {
-                        x: at.x,
-                        y: at.y - scene.options.dot_radius - 2.0,
-                    },
+                    at: placed,
                     text,
-                    size: scene.options.label_size * scene.viewport.ui_scale.max(0.1),
-                    color: scene.theme.text,
+                    size,
+                    color: ink,
                 });
                 out.stats.labels_emitted += 1;
             }
@@ -1097,6 +1127,40 @@ pub fn build_field_2d(scene: &Scene<'_>, _scratch: &mut BuildScratch, out: &mut 
     out.close_layer(Layer::Marker, out.commands.len());
     out.close_layer(Layer::Overlay, out.commands.len());
     let _ = grid.style == GridStyle::Dots;
+}
+
+/// The roster number painted inside a dot. Leading words are skipped so
+/// `12 山田` and `P12` both read as `12`. A name with no digits keeps two
+/// characters so the dot is never blank.
+fn marker_digits(label: &str) -> String {
+    let label = label.trim();
+    let mut digits = String::new();
+    let mut started = false;
+    for ch in label.chars() {
+        if ch.is_ascii_digit() {
+            started = true;
+            digits.push(ch);
+            if digits.len() == 3 {
+                break;
+            }
+        } else if started {
+            break;
+        }
+    }
+    if !digits.is_empty() {
+        return digits;
+    }
+    label.chars().take(2).collect()
+}
+
+fn ink_on(fill: [u8; 3]) -> Rgba {
+    let luminance =
+        0.2126 * f32::from(fill[0]) + 0.7152 * f32::from(fill[1]) + 0.0722 * f32::from(fill[2]);
+    if luminance > 160.0 {
+        Rgba(20, 24, 32, 255)
+    } else {
+        Rgba(255, 255, 255, 255)
+    }
 }
 
 /// Builds the same drill through a saved camera pose. This CPU path is used by
@@ -1599,6 +1663,91 @@ mod tests {
             theme: &Theme::SCREEN_DARK,
         };
         build_field_2d(&scene, &mut BuildScratch, out);
+    }
+
+    #[test]
+    fn filled_circles_carry_the_number_inside() {
+        let mut doc = Document::blank(2);
+        doc.performers[0].label = "12 山田".into();
+        doc.performers[0].symbol = Symbol::Cross;
+        let positions = doc.sets[0].positions.clone();
+        let options = RenderOptions {
+            symbol_override: Some(Symbol::Circle),
+            label_inside: true,
+            show_labels: true,
+            ..RenderOptions::default()
+        };
+        let mut out = DisplayList::new();
+        build_field_2d(
+            &Scene {
+                positions: &positions,
+                document: &doc,
+                viewport: Viewport {
+                    size: Vec2 { x: 800.0, y: 600.0 },
+                    ui_scale: 1.0,
+                },
+                options: &options,
+                theme: &Theme::PRINT_LIGHT,
+            },
+            &mut BuildScratch,
+            &mut out,
+        );
+        let (symbol, center) = out
+            .layer(Layer::Dot)
+            .iter()
+            .find_map(|cmd| match cmd {
+                DrawCmd::Dot { symbol, center, .. } => Some((*symbol, *center)),
+                _ => None,
+            })
+            .expect("dot");
+        assert_eq!(symbol, Symbol::Circle);
+        match &out.layer(Layer::DotLabel)[0] {
+            DrawCmd::Text { at, text, .. } => {
+                assert_eq!(out.text(*text), "12");
+                assert!((at.x - center.x).abs() < 0.01);
+                assert!(at.y > center.y);
+            }
+            other => panic!("expected a label, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn two_hundred_filled_markers_build_inside_a_frame() {
+        let doc = Document::demo(20, 10);
+        assert_eq!(doc.performers.len(), 200);
+        let positions = doc.sets[0].positions.clone();
+        let options = RenderOptions {
+            symbol_override: Some(Symbol::Circle),
+            label_inside: true,
+            show_labels: true,
+            ..RenderOptions::default()
+        };
+        let scene = Scene {
+            positions: &positions,
+            document: &doc,
+            viewport: Viewport {
+                size: Vec2 {
+                    x: 1280.0,
+                    y: 800.0,
+                },
+                ui_scale: 1.0,
+            },
+            options: &options,
+            theme: &Theme::PRINT_LIGHT,
+        };
+        let mut out = DisplayList::new();
+        let frames = 30u32;
+        let started = std::time::Instant::now();
+        for _ in 0..frames {
+            build_field_2d(&scene, &mut BuildScratch, &mut out);
+        }
+        assert_eq!(out.stats().dots_emitted, 200);
+        assert_eq!(out.stats().labels_emitted, 200);
+        let per_frame = started.elapsed() / frames;
+        assert!(
+            per_frame <= std::time::Duration::from_millis(16),
+            "200-marker build took {per_frame:?}"
+        );
     }
 
     #[test]

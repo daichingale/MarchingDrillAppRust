@@ -104,6 +104,10 @@ pub enum Text {
     NoName,
     PlaybackOptions,
     Collapse,
+    Menu,
+    CrossMarks,
+    Export,
+    Compare,
 }
 
 impl Text {
@@ -111,7 +115,7 @@ impl Text {
     /// the catalog completeness test fail during review rather than leaking a
     /// fallback string into a release build.
     #[cfg(test)]
-    pub const ALL: [Self; 55] = [
+    pub const ALL: [Self; 59] = [
         Self::File,
         Self::Edit,
         Self::Playback,
@@ -167,6 +171,10 @@ impl Text {
         Self::NoName,
         Self::PlaybackOptions,
         Self::Collapse,
+        Self::Menu,
+        Self::CrossMarks,
+        Self::Export,
+        Self::Compare,
     ];
 }
 
@@ -288,6 +296,13 @@ pub fn text(locale: Locale, key: Text) -> &'static str {
         (Locale::En, Text::PlaybackOptions) => "Playback options",
         (Locale::Ja, Text::Collapse) => "閉じる",
         (Locale::En, Text::Collapse) => "Collapse",
+        (_, Text::Menu) => "☰",
+        (Locale::Ja, Text::CrossMarks) => "×印",
+        (Locale::En, Text::CrossMarks) => "Cross marks",
+        (Locale::Ja, Text::Export) => "書き出す",
+        (Locale::En, Text::Export) => "Export",
+        (Locale::Ja, Text::Compare) => "A/B比較",
+        (Locale::En, Text::Compare) => "A/B compare",
     }
 }
 
