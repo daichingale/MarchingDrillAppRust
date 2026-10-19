@@ -1286,7 +1286,7 @@ impl Default for DrillApp {
             playback_paths: false,
             show_field_marks: true,
             show_dot_labels: true,
-            labels_while_playing: false,
+            labels_while_playing: true,
             cross_markers: false,
             show_next_places: false,
             full_toolbar_collapsed: false,
@@ -2177,10 +2177,16 @@ impl DrillApp {
     pub(crate) fn field_render_options(&self, show_labels: bool) -> drill_render::RenderOptions {
         let circles = !self.cross_markers;
         let labels = show_labels && self.show_dot_labels;
+        let (content_min, content_size) = match self.field_viewport.content_for_render() {
+            Some((min, size)) => (Some(min), Some(size)),
+            None => (None, None),
+        };
         drill_render::RenderOptions {
             margin: 0.0,
             field_center: Some(self.field_viewport.center),
             field_zoom: self.field_viewport.zoom,
+            content_min,
+            content_size,
             show_labels: labels,
             skip_offscreen: cull_offscreen_dots(self.document.performers.len()),
             extend_grid: true,
@@ -3266,7 +3272,10 @@ impl DrillApp {
                 ui.painter()
                     .rect_filled(rect, 0.0, Color32::from_black_alpha(88));
             });
-        egui::Window::new(i18n::registered(self.locale, "app-state.007"))
+        if context.input(|input| input.key_pressed(egui::Key::Escape)) {
+            dismiss = true;
+        }
+        egui::Window::new(text(self.locale, Text::ExportTitle))
             .open(&mut open)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .order(egui::Order::Tooltip)
@@ -3280,21 +3289,6 @@ impl DrillApp {
             ))
             .scroll(true)
             .show(context, |ui| {
-                ui.horizontal(|ui| {
-                    if ui
-                        .button(
-                            egui::RichText::new(text(self.locale, Text::BackToEdit))
-                                .size(16.0)
-                                .color(Color32::from_rgb(32, 36, 44)),
-                        )
-                        .clicked()
-                    {
-                        dismiss = true;
-                    }
-                });
-                ui.heading(i18n::registered(self.locale, "app-state.008"));
-                ui.label(i18n::registered(self.locale, "app-state.009"));
-                ui.add_space(8.0);
                 ui.horizontal_top(|ui| {
                     ui.vertical(|ui| {
                         ui.set_min_width(248.0);
@@ -4492,6 +4486,32 @@ impl DrillApp {
             let Some(point) = self.frame_positions.get(index).copied() else {
                 continue;
             };
+            if !point.x.is_finite() || !point.y.is_finite() {
+                continue;
+            }
+            any = true;
+            min.x = min.x.min(point.x);
+            min.y = min.y.min(point.y);
+            max.x = max.x.max(point.x);
+            max.y = max.y.max(point.y);
+        }
+        if any {
+            self.field_viewport
+                .frame_bounds(&self.document.grid, size, min, max);
+        }
+    }
+
+    fn zoom_to_performers(&mut self, size: Vec2) {
+        let mut min = Point {
+            x: f32::MAX,
+            y: f32::MAX,
+        };
+        let mut max = Point {
+            x: f32::MIN,
+            y: f32::MIN,
+        };
+        let mut any = false;
+        for point in &self.frame_positions {
             if !point.x.is_finite() || !point.y.is_finite() {
                 continue;
             }

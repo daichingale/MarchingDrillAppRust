@@ -452,13 +452,22 @@ impl DrillApp {
     }
 
     /// Field area that is not covered by the floating toolbar, inspector, or timeline.
-    fn full_visible_field(&self, screen: egui::Rect) -> egui::Rect {
-        let top = 104.0;
-        let bottom = if self.full_timeline_expanded {
+    /// While the return-to-edit chip is up, the band it occupies is left out too.
+    pub(super) fn full_visible_field(&self, screen: egui::Rect) -> egui::Rect {
+        let hint = !self.is_editable_set_start();
+        let top = if hint && self.selected.is_empty() {
+            160.0
+        } else {
+            104.0
+        };
+        let mut bottom = if self.full_timeline_expanded {
             340.0
         } else {
             118.0
         };
+        if hint && !self.selected.is_empty() {
+            bottom += 64.0;
+        }
         let right = if self.full_inspector_collapsed || !self.show_inspector {
             16.0
         } else {
@@ -500,17 +509,9 @@ impl DrillApp {
             return None;
         }
         let grid = &self.document.grid;
-        let map = drill_render::FieldMap::with_view(
-            grid.width,
-            grid.height,
-            drill_render::Vec2 {
-                x: screen.width(),
-                y: screen.height(),
-            },
-            0.0,
-            Some(self.field_viewport.center),
-            self.field_viewport.zoom,
-        );
+        let map = self
+            .field_viewport
+            .field_map(grid, egui::vec2(screen.width(), screen.height()));
         let mut bounds = None;
         for &index in &self.selected {
             let Some(point) = self.frame_positions.get(index).copied() else {
@@ -526,17 +527,9 @@ impl DrillApp {
 
     fn performer_screen_points(&self, screen: egui::Rect) -> Vec<egui::Pos2> {
         let grid = &self.document.grid;
-        let map = drill_render::FieldMap::with_view(
-            grid.width,
-            grid.height,
-            drill_render::Vec2 {
-                x: screen.width(),
-                y: screen.height(),
-            },
-            0.0,
-            Some(self.field_viewport.center),
-            self.field_viewport.zoom,
-        );
+        let map = self
+            .field_viewport
+            .field_map(grid, egui::vec2(screen.width(), screen.height()));
         self.frame_positions
             .iter()
             .map(|point| {

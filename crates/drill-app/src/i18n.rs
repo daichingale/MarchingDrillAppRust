@@ -114,7 +114,8 @@ pub enum Text {
     ThisSet,
     AllSets,
     ShowSheet,
-    BackToEdit,
+    ExportTitle,
+    FitPeople,
 }
 
 impl Text {
@@ -122,7 +123,7 @@ impl Text {
     /// the catalog completeness test fail during review rather than leaking a
     /// fallback string into a release build.
     #[cfg(test)]
-    pub const ALL: [Self; 66] = [
+    pub const ALL: [Self; 67] = [
         Self::File,
         Self::Edit,
         Self::Playback,
@@ -188,7 +189,8 @@ impl Text {
         Self::ThisSet,
         Self::AllSets,
         Self::ShowSheet,
-        Self::BackToEdit,
+        Self::ExportTitle,
+        Self::FitPeople,
     ];
 }
 
@@ -329,8 +331,10 @@ pub fn text(locale: Locale, key: Text) -> &'static str {
         (Locale::En, Text::AllSets) => "All sets",
         (Locale::Ja, Text::ShowSheet) => "進行表",
         (Locale::En, Text::ShowSheet) => "Run sheet",
-        (Locale::Ja, Text::BackToEdit) => "編集に戻る",
-        (Locale::En, Text::BackToEdit) => "Back to editing",
+        (Locale::Ja, Text::ExportTitle) => "書き出し",
+        (Locale::En, Text::ExportTitle) => "Export",
+        (Locale::Ja, Text::FitPeople) => "人に合わせる",
+        (Locale::En, Text::FitPeople) => "Fit performers",
     }
 }
 

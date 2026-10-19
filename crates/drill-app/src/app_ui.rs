@@ -1583,27 +1583,62 @@ impl eframe::App for DrillApp {
                     .get(self.current_set)
                     .map(|set| set.name.clone())
                     .unwrap_or_else(|| "—".to_owned());
+                let screen = ui.ctx().viewport_rect();
+                let visible = self.full_visible_field(screen);
+                let (pivot, pos) = if self.full_legacy_chrome || self.focus_field {
+                    (
+                        egui::Align2::LEFT_TOP,
+                        response.rect.left_top() + Vec2::new(22.0, 22.0),
+                    )
+                } else if self.selected.is_empty() {
+                    (
+                        egui::Align2::CENTER_TOP,
+                        Pos2::new(screen.center().x, 108.0),
+                    )
+                } else {
+                    (
+                        egui::Align2::CENTER_TOP,
+                        Pos2::new(visible.center().x, visible.bottom() + 8.0),
+                    )
+                };
                 egui::Area::new("return-to-set-start".into())
-                    .order(egui::Order::Foreground)
-                    .fixed_pos(response.rect.left_top() + Vec2::new(22.0, 22.0))
+                    .order(egui::Order::Tooltip)
+                    .pivot(pivot)
+                    .fixed_pos(pos)
                     .show(ui.ctx(), |ui| {
-                        egui::Frame::popup(ui.style()).show(ui, |ui| {
-                            ui.label(
-                                egui::RichText::new(super::i18n::registered(
-                                    self.locale,
-                                    "app-ui.121",
-                                ))
-                                .strong(),
-                            );
-                            ui.small(format!("{} · {:.2}", current_set_name, self.count_position));
-                            if ui
-                                .button(super::i18n::registered(self.locale, "app-ui.122"))
-                                .on_hover_text(super::i18n::registered(self.locale, "app-ui.123"))
-                                .clicked()
-                            {
-                                self.return_to_editable_set_start();
-                            }
-                        });
+                        egui::Frame::popup(ui.style())
+                            .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 235))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 10.0;
+                                    ui.label(
+                                        egui::RichText::new(super::i18n::registered(
+                                            self.locale,
+                                            "app-ui.121",
+                                        ))
+                                        .size(14.0)
+                                        .color(Color32::from_rgb(32, 36, 44)),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{} · {:.2}",
+                                            current_set_name, self.count_position
+                                        ))
+                                        .size(14.0)
+                                        .color(Color32::from_rgb(48, 54, 66)),
+                                    );
+                                    if ui
+                                        .button(super::i18n::registered(self.locale, "app-ui.122"))
+                                        .on_hover_text(super::i18n::registered(
+                                            self.locale,
+                                            "app-ui.123",
+                                        ))
+                                        .clicked()
+                                    {
+                                        self.return_to_editable_set_start();
+                                    }
+                                });
+                            });
                     });
             }
             // The field is a first-class desktop editing surface: clicking it
@@ -1688,6 +1723,15 @@ impl eframe::App for DrillApp {
                 // than a selection gesture, while leaving document/history
                 // untouched.
                 let viewport_size = rect.size();
+                if self.full_legacy_chrome || self.focus_field {
+                    self.field_viewport.clear_content();
+                } else {
+                    let visible = self
+                        .full_visible_field(ui.ctx().viewport_rect())
+                        .shrink(6.0);
+                    self.field_viewport
+                        .set_content(visible.translate(-rect.min.to_vec2()));
+                }
                 // Only the rubber-band allowance is enforced here, not the
                 // hard edge: an interactive pan is allowed to pull slightly
                 // past the sideline, and `FieldViewport::tick` springs it
@@ -1878,17 +1922,9 @@ impl eframe::App for DrillApp {
                 // hit-testing all drift away from where the performer is
                 // actually drawn whenever the viewport's aspect ratio doesn't
                 // match the field's. See FieldMap's docs.
-                let field_map = drill_render::FieldMap::with_view(
-                    self.document.grid.width,
-                    self.document.grid.height,
-                    drill_render::Vec2 {
-                        x: rect.width(),
-                        y: rect.height(),
-                    },
-                    render_options.margin,
-                    render_options.field_center,
-                    render_options.field_zoom,
-                );
+                let field_map = self
+                    .field_viewport
+                    .field_map(&self.document.grid, rect.size());
                 // Show DNA heatmap overlay is revision-gated and built on the
                 // analytics worker, only while its toggle is on.
                 if self.heatmap_enabled {
@@ -2592,7 +2628,11 @@ impl eframe::App for DrillApp {
                         && response.double_clicked()
                         && nearest_index.is_none()
                     {
-                        self.field_viewport.reset(&self.document.grid);
+                        if ui.input(|input| input.modifiers.shift) {
+                            self.zoom_to_performers(viewport_size);
+                        } else {
+                            self.field_viewport.reset(&self.document.grid);
+                        }
                     } else if !pointer_gesture_taken
                         && !self.free_draw_active
                         && !interaction_locked
@@ -2956,6 +2996,17 @@ impl DrillApp {
                 .clicked()
             {
                 self.set_navigator.open();
+                ui.close();
+            }
+            if ui
+                .add_enabled(
+                    !self.document.performers.is_empty(),
+                    egui::Button::new(text(self.locale, Text::FitPeople)),
+                )
+                .clicked()
+            {
+                let screen = ui.ctx().viewport_rect();
+                self.zoom_to_performers(screen.size());
                 ui.close();
             }
             ui.separator();

@@ -288,6 +288,11 @@ pub struct RenderOptions {
     /// Put the person's number in the middle of the dot. Off keeps the
     /// number above the mark, which is the printed-chart layout.
     pub label_inside: bool,
+    /// Canvas-local box the fitted field sits in. `None` is the whole
+    /// viewport, which exports and tests keep using.
+    pub content_min: Option<Vec2>,
+    /// Size of [`Self::content_min`]. Both must be set for the box to apply.
+    pub content_size: Option<Vec2>,
 }
 
 impl Default for RenderOptions {
@@ -307,6 +312,8 @@ impl Default for RenderOptions {
             extend_grid: false,
             symbol_override: None,
             label_inside: false,
+            content_min: None,
+            content_size: None,
         }
     }
 }
@@ -383,7 +390,30 @@ impl FieldMap {
         center: Option<Point>,
         zoom: f32,
     ) -> Self {
-        let mut map = Self::new(grid_width, grid_height, viewport_size, margin);
+        Self::with_content(
+            grid_width,
+            grid_height,
+            Vec2 { x: 0.0, y: 0.0 },
+            viewport_size,
+            margin,
+            center,
+            zoom,
+        )
+    }
+
+    /// Same as [`Self::with_view`], but the fitted field is letterboxed into
+    /// `content` (canvas-local pixels) instead of the whole viewport. Zoom 1
+    /// then means "the whole floor fits in the area the dock does not cover".
+    pub fn with_content(
+        grid_width: f32,
+        grid_height: f32,
+        content_min: Vec2,
+        content_size: Vec2,
+        margin: f32,
+        center: Option<Point>,
+        zoom: f32,
+    ) -> Self {
+        let mut map = Self::new(grid_width, grid_height, content_size, margin);
         let zoom = if zoom.is_finite() {
             zoom.clamp(0.25, 8.0)
         } else {
@@ -394,9 +424,11 @@ impl FieldMap {
             y: grid_height * 0.5,
         });
         map.scale *= zoom;
+        let anchor_x = content_min.x + content_size.x * 0.5;
+        let anchor_y = content_min.y + content_size.y * 0.5;
         map.origin = Vec2 {
-            x: viewport_size.x * 0.5 - center.x * map.scale,
-            y: viewport_size.y * 0.5 - (grid_height - center.y) * map.scale,
+            x: anchor_x - center.x * map.scale,
+            y: anchor_y - (grid_height - center.y) * map.scale,
         };
         map
     }
@@ -729,14 +761,25 @@ pub fn build_field_2d(scene: &Scene<'_>, _scratch: &mut BuildScratch, out: &mut 
         out.stats.dropped_nonfinite = 1;
         return;
     }
-    let field_map = FieldMap::with_view(
-        grid.width,
-        grid.height,
-        scene.viewport.size,
-        scene.options.margin,
-        scene.options.field_center,
-        scene.options.field_zoom,
-    );
+    let field_map = match (scene.options.content_min, scene.options.content_size) {
+        (Some(min), Some(size)) if size.x > 1.0 && size.y > 1.0 => FieldMap::with_content(
+            grid.width,
+            grid.height,
+            min,
+            size,
+            scene.options.margin,
+            scene.options.field_center,
+            scene.options.field_zoom,
+        ),
+        _ => FieldMap::with_view(
+            grid.width,
+            grid.height,
+            scene.viewport.size,
+            scene.options.margin,
+            scene.options.field_center,
+            scene.options.field_zoom,
+        ),
+    };
     let map = |p: Point| field_map.map(p);
     let field = Rect {
         min: field_map.origin,
@@ -1886,6 +1929,43 @@ mod tests {
         assert!(
             reaches_edge,
             "grid lines continue through the side letterbox"
+        );
+    }
+
+    #[test]
+    fn content_box_keeps_the_floor_out_of_a_bottom_dock() {
+        let grid = drill_core::GridConfig::japan_floor();
+        let content_min = Vec2 { x: 12.0, y: 16.0 };
+        let content_size = Vec2 {
+            x: 1256.0,
+            y: 520.0,
+        };
+        let map = FieldMap::with_content(
+            grid.width,
+            grid.height,
+            content_min,
+            content_size,
+            0.0,
+            None,
+            1.0,
+        );
+        let top = map.origin.y;
+        let bottom = map.origin.y + grid.height * map.scale;
+        let left = map.origin.x;
+        let right = map.origin.x + grid.width * map.scale;
+        assert!(top >= content_min.y - 0.5, "top {top}");
+        assert!(
+            bottom <= content_min.y + content_size.y + 0.5,
+            "bottom {bottom}"
+        );
+        assert!(left >= content_min.x - 0.5, "left {left}");
+        assert!(
+            right <= content_min.x + content_size.x + 0.5,
+            "right {right}"
+        );
+        assert!(
+            (bottom - top) <= content_size.y + 0.5,
+            "floor taller than the open area"
         );
     }
 

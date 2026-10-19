@@ -2241,38 +2241,35 @@ impl DrillApp {
             self.set_show_previous(on);
         }
         let hovered = enabled && response.hovered();
-        let fill = if on && enabled {
-            SIMPLE_BLUE
-        } else if on {
-            SIMPLE_BLUE.gamma_multiply(0.35)
-        } else if hovered {
+        let fill = if !enabled {
+            Color32::from_white_alpha(180)
+        } else if on || hovered {
             super::app_theme::ACCENT_SOFT
         } else {
             Color32::WHITE
         };
         let ink = if on && enabled {
-            Color32::WHITE
-        } else if enabled {
             SIMPLE_BLUE
+        } else if enabled {
+            SIMPLE_BLUE.gamma_multiply(0.72)
         } else {
             SIMPLE_BLUE.gamma_multiply(0.35)
         };
         let label_ink = if on && enabled {
-            Color32::WHITE
+            SIMPLE_BLUE
         } else if enabled {
             SIMPLE_INK
         } else {
             super::app_theme::SECONDARY_TEXT.gamma_multiply(0.55)
         };
         ui.painter().rect_filled(rect, 16.0, fill);
-        if !on || !enabled {
-            ui.painter().rect_stroke(
-                rect,
-                16.0,
-                Stroke::new(1.0, super::app_theme::HAIRLINE),
-                StrokeKind::Inside,
-            );
-        }
+        let stroke = if on && enabled {
+            Stroke::new(2.0, SIMPLE_BLUE)
+        } else {
+            Stroke::new(1.0, super::app_theme::HAIRLINE)
+        };
+        ui.painter()
+            .rect_stroke(rect, 16.0, stroke, StrokeKind::Inside);
         paint_eye_icon(
             ui.painter(),
             Pos2::new(rect.left() + 24.0, rect.center().y),
@@ -2448,15 +2445,14 @@ impl DrillApp {
         }
     }
 
-    fn simple_member_count(&self, ui: &mut egui::Ui) {
+    fn simple_member_count(&self, ui: &mut egui::Ui) -> egui::Response {
         let n = self.document.performers.len();
         let caption = super::i18n::roster_count(self.locale, n);
-        ui.label(
-            egui::RichText::new(caption.clone())
-                .size(20.0)
-                .color(SIMPLE_INK),
+        ui.add(
+            egui::Label::new(egui::RichText::new(caption).size(20.0).color(SIMPLE_INK))
+                .sense(Sense::click()),
         )
-        .on_hover_text(caption);
+        .on_hover_text(text(self.locale, Text::FitPeople))
     }
 
     #[allow(dead_code)]
@@ -5764,18 +5760,9 @@ impl DrillApp {
         sets: Option<egui::Rect>,
         block: &mut Option<egui::Rect>,
     ) {
-        let options = self.field_render_options(false);
-        let map = drill_render::FieldMap::with_view(
-            self.document.grid.width,
-            self.document.grid.height,
-            drill_render::Vec2 {
-                x: field.width(),
-                y: field.height(),
-            },
-            options.margin,
-            options.field_center,
-            options.field_zoom,
-        );
+        let map = self
+            .field_viewport
+            .field_map(&self.document.grid, field.size());
         let to_screen = |point: drill_core::Point| {
             let mapped = map.map(point);
             Pos2::new(field.left() + mapped.x, field.top() + mapped.y)
@@ -5833,7 +5820,10 @@ impl DrillApp {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 6.0;
                             if !self.document.performers.is_empty() {
-                                self.simple_member_count(ui);
+                                let fit = self.simple_member_count(ui);
+                                if fit.clicked() {
+                                    self.zoom_to_performers(field.size());
+                                }
                             }
                             if self.playing {
                                 let total = self
@@ -7627,6 +7617,11 @@ impl DrillApp {
         };
         let (response, painter) = ui.allocate_painter(available, sense);
         let rect = response.rect;
+        self.field_viewport.set_content(simple_visible_local(
+            rect,
+            self.simple_toolbar_open(),
+            !self.document.sets.is_empty(),
+        ));
         let mut block_pointer = false;
         if interactive {
             let over_overlay = self.drag_before.is_none()
@@ -7709,17 +7704,9 @@ impl DrillApp {
             theme: &drill_render::Theme::PRINT_LIGHT,
         };
         drill_render::build_field_2d(&scene, &mut self.render_scratch, &mut self.display_list);
-        let field_map = drill_render::FieldMap::with_view(
-            self.document.grid.width,
-            self.document.grid.height,
-            drill_render::Vec2 {
-                x: rect.width(),
-                y: rect.height(),
-            },
-            render_options.margin,
-            render_options.field_center,
-            render_options.field_zoom,
-        );
+        let field_map = self
+            .field_viewport
+            .field_map(&self.document.grid, rect.size());
         let to_screen = |point: Point| {
             let v = field_map.map(point);
             Pos2::new(rect.left() + v.x, rect.top() + v.y)
@@ -7902,7 +7889,11 @@ impl DrillApp {
         let snap_now = self.document.grid.snap_enabled && !shift_held;
         if let Some(pointer) = response.interact_pointer_pos() {
             if response.double_clicked() && nearest.is_none() {
-                self.field_viewport.reset(&self.document.grid);
+                if ui.input(|input| input.modifiers.shift) {
+                    self.zoom_to_performers(rect.size());
+                } else {
+                    self.field_viewport.reset(&self.document.grid);
+                }
             } else if response.clicked() {
                 let additive = ui.input(|input| {
                     input.modifiers.command || input.modifiers.ctrl || input.modifiers.shift
@@ -8333,15 +8324,51 @@ fn paint_front_chip(
 }
 
 fn front_chip_origin(field: egui::Rect, anchor: Pos2, size: egui::Vec2, ceiling: f32) -> Pos2 {
-    let mut min = egui::pos2(anchor.x - size.x * 0.5, anchor.y - 22.0 - size.y);
-    if min.y + size.y > ceiling {
-        min.y = ceiling - size.y;
-    }
+    // Prefer the margin under the front line, so the chip does not sit on
+    // the front rank. If the dock is already there, stay above the dock.
+    let below = anchor.y + 14.0;
+    let mut min = egui::pos2(
+        anchor.x - size.x * 0.5,
+        if below + size.y <= ceiling - 4.0 {
+            below
+        } else {
+            ceiling - size.y - 4.0
+        },
+    );
     let max_x = (field.right() - size.x - 8.0).max(field.left() + 8.0);
     let max_y = (field.bottom() - size.y - 8.0).max(field.top() + 8.0);
     min.x = min.x.clamp(field.left() + 8.0, max_x);
     min.y = min.y.clamp(field.top() + 8.0, max_y);
     min
+}
+
+/// Canvas-local box the simple-mode floor is fitted into. The dock, the set
+/// dots, and the audience chip sit outside it.
+fn simple_visible_local(canvas: egui::Rect, toolbar_open: bool, has_sets: bool) -> egui::Rect {
+    let top = 52.0;
+    let side = 12.0;
+    let tile = if toolbar_open {
+        SIMPLE_TILE + SIMPLE_LABEL + 8.0
+    } else {
+        SIMPLE_TILE.max(SIMPLE_HIT)
+    };
+    let dock = 14.0 + 16.0 + tile;
+    let sets = if has_sets {
+        8.0 + 8.0 + PREVIOUS_TOGGLE_HEIGHT
+    } else {
+        0.0
+    };
+    let front = 14.0 + 36.0 + 8.0;
+    let bottom = dock + sets + front;
+    let min = egui::pos2(side, top);
+    let max = egui::pos2(
+        (canvas.width() - side).max(side + 48.0),
+        (canvas.height() - bottom).max(top + 48.0),
+    );
+    if max.x <= min.x + 40.0 || max.y <= min.y + 40.0 {
+        return egui::Rect::from_min_size(egui::Pos2::ZERO, canvas.size()).shrink(12.0);
+    }
+    egui::Rect::from_min_max(min, max)
 }
 
 /// Puts the chip just above the anchor, then slides it into `rect` so the
@@ -13197,6 +13224,17 @@ mod tests {
         assert!(field.contains_rect(chip), "{chip:?} not inside {field:?}");
         let right = front_chip_origin(field, egui::pos2(1260.0, 790.0), size, ceiling);
         assert!(right.x + size.x <= field.right() - 7.0, "{right:?}");
+        let clear = front_chip_origin(field, egui::pos2(640.0, 500.0), size, ceiling);
+        assert!(
+            clear.y >= 500.0,
+            "chip should sit under the sideline when the dock is clear: {clear:?}"
+        );
+        let open = simple_visible_local(field, true, true);
+        assert!(
+            open.bottom() < 620.0,
+            "fit still reaches the dock: {open:?}"
+        );
+        assert!(open.top() >= 40.0, "{open:?}");
     }
 
     #[test]

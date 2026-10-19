@@ -234,6 +234,9 @@ pub(crate) struct FieldViewport {
     dot_lift: f32,
     /// Seconds remaining in the landing settle after a drag commits.
     dot_settle: f32,
+    /// Canvas-local box the fitted floor must sit inside. Empty means the
+    /// whole canvas, which is what tests and the legacy layout use.
+    content: Rect,
 }
 
 impl FieldViewport {
@@ -252,25 +255,67 @@ impl FieldViewport {
             dot_drag: false,
             dot_lift: 0.0,
             dot_settle: 0.0,
+            content: Rect::from_min_size(Pos2::ZERO, Vec2::ZERO),
         }
     }
 
     pub(crate) fn reset(&mut self, grid: &GridConfig) {
+        let content = self.content;
         *self = Self::fit(grid);
+        self.content = content;
+    }
+
+    /// Remember the open area (canvas-local pixels) that fit, pan, and paint
+    /// all share. An empty rect means the whole canvas.
+    pub(crate) fn set_content(&mut self, content: Rect) {
+        self.content = content;
+    }
+
+    pub(crate) fn clear_content(&mut self) {
+        self.content = Rect::from_min_size(Pos2::ZERO, Vec2::ZERO);
+    }
+
+    fn content_frame(&self, canvas: Vec2) -> Rect {
+        if self.content.width() > 8.0 && self.content.height() > 8.0 {
+            self.content
+        } else {
+            Rect::from_min_size(Pos2::ZERO, canvas)
+        }
+    }
+
+    /// The open box, when one is set, so the renderer letterboxes the same
+    /// way hit-testing does.
+    pub(crate) fn content_for_render(&self) -> Option<(drill_render::Vec2, drill_render::Vec2)> {
+        if self.content.width() > 8.0 && self.content.height() > 8.0 {
+            Some((
+                drill_render::Vec2 {
+                    x: self.content.left(),
+                    y: self.content.top(),
+                },
+                drill_render::Vec2 {
+                    x: self.content.width(),
+                    y: self.content.height(),
+                },
+            ))
+        } else {
+            None
+        }
     }
 
     /// Screen pixels per field unit at the current zoom.
     fn unit_scale(&self, grid: &GridConfig, size: Vec2) -> f32 {
-        let fit = (size.x / grid.width.max(f32::EPSILON))
-            .min(size.y / grid.height.max(f32::EPSILON))
+        let frame = self.content_frame(size);
+        let fit = (frame.width() / grid.width.max(f32::EPSILON))
+            .min(frame.height() / grid.height.max(f32::EPSILON))
             .max(f32::EPSILON);
         (fit * self.zoom).max(f32::EPSILON)
     }
 
     /// Half of the visible field extent on each axis, in field units.
     fn half_extents(&self, grid: &GridConfig, size: Vec2) -> (f32, f32) {
+        let frame = self.content_frame(size);
         let unit = self.unit_scale(grid, size);
-        (size.x / (2.0 * unit), size.y / (2.0 * unit))
+        (frame.width() / (2.0 * unit), frame.height() / (2.0 * unit))
     }
 
     /// `(min_x, max_x, min_y, max_y, limit_x, limit_y)` for the current zoom.
@@ -388,11 +433,12 @@ impl FieldViewport {
         let min_span = (step * 8.0).max(1.0);
         let width = (max.x - min.x).abs().max(min_span);
         let height = (max.y - min.y).abs().max(min_span);
-        let fit = (size.x / grid.width.max(f32::EPSILON))
-            .min(size.y / grid.height.max(f32::EPSILON))
+        let frame = self.content_frame(size);
+        let fit = (frame.width() / grid.width.max(f32::EPSILON))
+            .min(frame.height() / grid.height.max(f32::EPSILON))
             .max(f32::EPSILON);
         let pad = 1.35;
-        let zoom = (size.x / (fit * width * pad)).min(size.y / (fit * height * pad));
+        let zoom = (frame.width() / (fit * width * pad)).min(frame.height() / (fit * height * pad));
         if !zoom.is_finite() {
             return;
         }
@@ -430,18 +476,27 @@ impl FieldViewport {
         self.zoom_target = (self.zoom_target * factor).clamp(MIN_ZOOM, MAX_ZOOM);
     }
 
-    fn map(&self, grid: &GridConfig, size: Vec2) -> drill_render::FieldMap {
-        drill_render::FieldMap::with_view(
+    pub(crate) fn field_map(&self, grid: &GridConfig, canvas: Vec2) -> drill_render::FieldMap {
+        let frame = self.content_frame(canvas);
+        drill_render::FieldMap::with_content(
             grid.width,
             grid.height,
             drill_render::Vec2 {
-                x: size.x,
-                y: size.y,
+                x: frame.left(),
+                y: frame.top(),
+            },
+            drill_render::Vec2 {
+                x: frame.width(),
+                y: frame.height(),
             },
             0.0,
             Some(self.center),
             self.zoom,
         )
+    }
+
+    fn map(&self, grid: &GridConfig, size: Vec2) -> drill_render::FieldMap {
+        self.field_map(grid, size)
     }
 
     /// Apply a new zoom value while holding `zoom_anchor` fixed under the
@@ -1439,5 +1494,24 @@ mod viewport_tests {
         assert!(view.zoom > 2.0, "zoom stayed wide: {}", view.zoom);
         assert!((view.center.x - 50.0).abs() < 1.0, "{}", view.center.x);
         assert!((view.center.y - 25.0).abs() < 2.0, "{}", view.center.y);
+    }
+
+    #[test]
+    fn fit_keeps_the_floor_above_a_bottom_inset() {
+        let grid = GridConfig::japan_floor();
+        let mut view = FieldViewport::fit(&grid);
+        let canvas = Vec2::new(1280.0, 800.0);
+        view.set_content(Rect::from_min_max(
+            Pos2::new(12.0, 52.0),
+            Pos2::new(1268.0, 540.0),
+        ));
+        let map = view.field_map(&grid, canvas);
+        let top = map.origin.y;
+        let bottom = map.origin.y + grid.height * map.scale;
+        assert!(top >= 51.0, "back sideline under the top chrome: {top}");
+        assert!(bottom <= 541.0, "front sideline under the dock: {bottom}");
+        view.reset(&grid);
+        let again = view.field_map(&grid, canvas);
+        assert!((again.origin.y + grid.height * again.scale) <= 541.0);
     }
 }
