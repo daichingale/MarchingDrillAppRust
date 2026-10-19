@@ -879,581 +879,655 @@ impl eframe::App for DrillApp {
                     });
                 });
         } else if !self.full_toolbar_collapsed {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(
-                    egui::RichText::new("DRILLFORGE")
-                        .size(24.0)
-                        .strong()
-                        .color(Color32::from_rgb(245, 197, 66)),
-                );
-                ui.label(
-                    egui::RichText::new("Marching Design Studio")
-                        .italics()
-                        .color(Color32::from_gray(160)),
-                );
-                // Keep the identity of the open document in the same place as
-                // the app identity.  This follows the macOS convention of a
-                // quiet, persistent title rather than making the writer hunt
-                // for a transient save notification.
-                ui.separator();
-                let document_name = self
-                    .current_path
-                    .as_deref()
-                    .and_then(|path| path.file_name())
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| {
-                        super::i18n::registered(self.locale, "document-feedback.001").into()
-                    });
-                let identity = ui.label(
-                    egui::RichText::new(document_name)
-                        .strong()
-                        .color(Color32::from_rgb(232, 237, 245)),
-                );
-                if let Some(path) = self.current_path.as_deref() {
-                    identity.on_hover_text(format!(
-                        "{}: {}",
-                        super::i18n::registered(self.locale, "document-feedback.005"),
-                        path.display()
-                    ));
-                }
-                let (document_state, document_color) = if self.project_state.is_saving() {
-                    ("document-feedback.002", Color32::from_rgb(110, 183, 255))
-                } else if self.dirty {
-                    ("document-feedback.004", Color32::from_rgb(255, 190, 82))
-                } else {
-                    ("document-feedback.003", Color32::from_rgb(112, 210, 150))
-                };
-                ui.colored_label(
-                    document_color,
-                    super::i18n::registered(self.locale, document_state),
-                );
-                if ui
-                    .button(UiCommand::NewDocument.label(self.locale))
-                    .clicked()
-                {
-                    self.execute_command(UiCommand::NewDocument, ui.ctx());
-                }
-                if ui
-                    .button(text(self.locale, Text::Open))
-                    .on_hover_text(super::i18n::registered(self.locale, "app-ui.025"))
-                    .clicked()
-                {
-                    self.request_open_document(DocumentOpenKind::LegacyJson);
-                }
-                if ui
-                    .button(text(self.locale, Text::Save))
-                    .on_hover_text(self.key_tip(
-                        ui.ctx(),
-                        super::i18n::registered(self.locale, "app-ui.026"),
-                        super::keybindings::Action::Command(UiCommand::Save),
-                    ))
-                    .clicked()
-                {
-                    self.save_dialog();
-                }
-                ui.label(if self.dirty {
-                    format!("● {}", text(self.locale, Text::Unsaved))
-                } else {
-                    format!("✓ {}", text(self.locale, Text::Saved))
-                });
-                ui.separator();
-                if ui
-                    .button(super::i18n::registered(self.locale, "app-ui.075"))
-                    .on_hover_text(super::i18n::registered(self.locale, "app-ui.076"))
-                    .clicked()
-                {
-                    self.show_inspector = !self.show_inspector;
-                }
-                if ui
-                    .button(if self.playing {
-                        text(self.locale, Text::Pause)
-                    } else {
-                        text(self.locale, Text::Play)
-                    })
-                    .on_hover_text(self.key_tip(
-                        ui.ctx(),
-                        UiCommand::PlayPause.label(self.locale),
-                        super::keybindings::Action::Command(UiCommand::PlayPause),
-                    ))
-                    .clicked()
-                {
-                    self.toggle_playback(ui.ctx());
-                }
-                self.core_edit_toolbar(ui);
-                if ui
-                    .button(super::i18n::registered(self.locale, "app-ui.027"))
-                    .on_hover_text(super::i18n::registered(self.locale, "app-ui.028"))
-                    .clicked()
-                {
-                    self.navigate_to_global_count(self.playback_start);
-                }
-                if ui
-                    .add_enabled(
-                        self.history.can_undo(),
-                        egui::Button::new(self.undo_button_label()),
-                    )
-                    .on_hover_text(self.key_tip(
-                        ui.ctx(),
-                        super::i18n::registered(self.locale, "app-ui.160"),
-                        super::keybindings::Action::Command(UiCommand::Undo),
-                    ))
-                    .clicked()
-                {
-                    self.execute_command(UiCommand::Undo, ui.ctx());
-                }
-                if ui
-                    .add_enabled(
-                        self.history.can_redo(),
-                        egui::Button::new(self.redo_button_label()),
-                    )
-                    .on_hover_text(self.key_tip(
-                        ui.ctx(),
-                        super::i18n::registered(self.locale, "app-ui.161"),
-                        super::keybindings::Action::Command(UiCommand::Redo),
-                    ))
-                    .clicked()
-                {
-                    self.execute_command(UiCommand::Redo, ui.ctx());
-                }
-                self.show_playback_speed_presets(ui);
-                if ui
-                    .add(
-                        egui::DragValue::new(&mut self.tempo_bpm)
-                            .range(20.0..=300.0)
-                            .suffix(" BPM"),
-                    )
-                    .on_hover_text(super::i18n::registered(self.locale, "app-ui.029"))
-                    .changed()
-                {
-                    let mut tempo = self.document.tempo.clone();
-                    tempo.set(0.0, self.tempo_bpm);
-                    if self
-                        .history
-                        .execute(&mut self.document, Edit::SetTempoMap { tempo })
-                        .is_ok()
-                    {
-                        self.dirty = true;
-                    }
-                }
-                let live_bpm =
-                    super::playhead_bpm(&self.document, self.current_set, self.count_position)
-                        .round() as i32;
-                ui.label(
-                    super::i18n::registered(self.locale, "full-mode.005")
-                        .replace("{0}", &live_bpm.to_string()),
-                )
-                .on_hover_text(super::i18n::registered(self.locale, "full-mode.035"));
-                ui.separator();
-                ui.label(format!(
-                    "{} {}",
-                    text(self.locale, Text::Performers),
-                    self.document.performers.len()
-                ));
-                ui.separator();
-                ui.selectable_value(&mut self.view_mode, ViewMode::Field2D, "2D");
-                ui.selectable_value(&mut self.view_mode, ViewMode::Stadium3D, "3D");
-                if let Some(gpu) = &mut self.gpu {
-                    let mut enabled = gpu.enabled();
-                    if ui
-                        .checkbox(&mut enabled, "GPU")
-                        .on_hover_text(super::i18n::registered(self.locale, "app-ui.030"))
-                        .changed()
-                    {
-                        gpu.set_enabled(enabled);
-                    }
-                    ui.small(if gpu.active() {
-                        "GPU instancing"
-                    } else if gpu.available() {
-                        "CPU fallback (manual)"
-                    } else {
-                        "CPU fallback (device error)"
-                    });
-                } else {
-                    ui.small("CPU fallback");
-                }
-                if self.view_mode == ViewMode::Stadium3D {
-                    ui.toggle_value(
-                        &mut self.camera_program_preview,
-                        super::i18n::registered(self.locale, "app-ui.031"),
-                    )
-                    .on_hover_text(super::i18n::registered(self.locale, "app-ui.032"));
-                    if ui
-                        .small_button(super::i18n::registered(self.locale, "app-ui.033"))
-                        .clicked()
-                    {
-                        self.camera = Camera::audience_view(&self.document.grid);
-                        self.camera_program_preview = false;
-                    }
-                    if ui
-                        .small_button(super::i18n::registered(self.locale, "app-ui.034"))
-                        .clicked()
-                    {
-                        self.camera = Camera::press_box(&self.document.grid);
-                        self.camera_program_preview = false;
-                    }
-                    if ui
-                        .small_button(super::i18n::registered(self.locale, "app-ui.035"))
-                        .clicked()
-                    {
-                        self.camera = Camera::overhead(&self.document.grid);
-                        self.camera_program_preview = false;
-                    }
-                    if ui
-                        .small_button(super::i18n::registered(self.locale, "app-ui.036"))
-                        .clicked()
-                    {
-                        self.camera = Camera::end_zone(&self.document.grid, true);
-                        self.camera_program_preview = false;
-                    }
-                    if ui
-                        .small_button(super::i18n::registered(self.locale, "app-ui.037"))
-                        .on_hover_text(super::i18n::registered(self.locale, "app-ui.038"))
-                        .clicked()
-                        && let Some(camera_id) = self
-                            .document
-                            .camera_program
-                            .tracks
-                            .first()
-                            .map(|track| track.id)
-                    {
-                        let frame = drill_core::camera::CameraKeyframe::from_camera(
-                            self.count_position,
-                            self.camera,
+            // Two rows, then scroll. Wrapping without a cap pushed the field
+            // below an 800px window; a single clipped row hid the labels.
+            egui::ScrollArea::vertical()
+                .id_salt("full-toolbar")
+                .max_height(72.0)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            egui::RichText::new("DRILLFORGE")
+                                .size(24.0)
+                                .strong()
+                                .color(Color32::from_rgb(245, 197, 66)),
                         );
-                        if self
-                            .history
-                            .execute(
-                                &mut self.document,
-                                Edit::InsertCameraKeyframe {
-                                    camera_id,
-                                    keyframe: frame,
-                                },
-                            )
-                            .is_ok()
-                        {
-                            self.camera_program_preview = true;
-                            self.dirty = true;
-                            self.status = format!(
-                                "カメラキーフレームを Count {:.2} に保存しました",
-                                self.count_position
-                            );
+                        ui.label(
+                            egui::RichText::new("Marching Design Studio")
+                                .italics()
+                                .color(Color32::from_gray(160)),
+                        );
+                        // Keep the identity of the open document in the same place as
+                        // the app identity.  This follows the macOS convention of a
+                        // quiet, persistent title rather than making the writer hunt
+                        // for a transient save notification.
+                        ui.separator();
+                        let document_name = self
+                            .current_path
+                            .as_deref()
+                            .and_then(|path| path.file_name())
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| {
+                                super::i18n::registered(self.locale, "document-feedback.001").into()
+                            });
+                        let identity = ui.label(
+                            egui::RichText::new(document_name)
+                                .strong()
+                                .color(Color32::from_rgb(232, 237, 245)),
+                        );
+                        if let Some(path) = self.current_path.as_deref() {
+                            identity.on_hover_text(format!(
+                                "{}: {}",
+                                super::i18n::registered(self.locale, "document-feedback.005"),
+                                path.display()
+                            ));
                         }
-                    }
-                    let active_camera = self
-                        .document
-                        .camera_program
-                        .active_track(self.count_position)
-                        .map(|track| track.id);
-                    let exact_keyframe = active_camera.and_then(|camera_id| {
-                        self.document
-                            .camera_program
-                            .tracks
-                            .iter()
-                            .find(|track| track.id == camera_id)
-                            .and_then(|track| {
-                                track
-                                    .keyframes()
-                                    .iter()
-                                    .find(|key| (key.count - self.count_position).abs() < 0.01)
+                        let (document_state, document_color) = if self.project_state.is_saving() {
+                            ("document-feedback.002", Color32::from_rgb(110, 183, 255))
+                        } else if self.dirty {
+                            ("document-feedback.004", Color32::from_rgb(255, 190, 82))
+                        } else {
+                            ("document-feedback.003", Color32::from_rgb(112, 210, 150))
+                        };
+                        ui.colored_label(
+                            document_color,
+                            super::i18n::registered(self.locale, document_state),
+                        );
+                        if ui
+                            .button(UiCommand::NewDocument.label(self.locale))
+                            .clicked()
+                        {
+                            self.execute_command(UiCommand::NewDocument, ui.ctx());
+                        }
+                        if ui
+                            .button(text(self.locale, Text::Open))
+                            .on_hover_text(super::i18n::registered(self.locale, "app-ui.025"))
+                            .clicked()
+                        {
+                            self.request_open_document(DocumentOpenKind::LegacyJson);
+                        }
+                        if ui
+                            .button(text(self.locale, Text::Save))
+                            .on_hover_text(self.key_tip(
+                                ui.ctx(),
+                                super::i18n::registered(self.locale, "app-ui.026"),
+                                super::keybindings::Action::Command(UiCommand::Save),
+                            ))
+                            .clicked()
+                        {
+                            self.save_dialog();
+                        }
+                        ui.label(if self.dirty {
+                            format!("● {}", text(self.locale, Text::Unsaved))
+                        } else {
+                            format!("✓ {}", text(self.locale, Text::Saved))
+                        });
+                        ui.separator();
+                        if ui
+                            .button(super::i18n::registered(self.locale, "app-ui.075"))
+                            .on_hover_text(super::i18n::registered(self.locale, "app-ui.076"))
+                            .clicked()
+                        {
+                            self.show_inspector = !self.show_inspector;
+                        }
+                        if ui
+                            .button(if self.playing {
+                                text(self.locale, Text::Pause)
+                            } else {
+                                text(self.locale, Text::Play)
                             })
-                            .copied()
-                            .map(|key| (camera_id, key))
-                    });
-                    if ui
-                        .add_enabled(
-                            exact_keyframe.is_some(),
-                            egui::Button::new(super::i18n::registered(self.locale, "app-ui.039")),
-                        )
-                        .clicked()
-                        && let Some((camera_id, key)) = exact_keyframe
-                        && self
-                            .history
-                            .execute(
-                                &mut self.document,
-                                Edit::RemoveCameraKeyframe {
-                                    camera_id,
-                                    count: key.count,
-                                },
+                            .on_hover_text(self.key_tip(
+                                ui.ctx(),
+                                UiCommand::PlayPause.label(self.locale),
+                                super::keybindings::Action::Command(UiCommand::PlayPause),
+                            ))
+                            .clicked()
+                        {
+                            self.toggle_playback(ui.ctx());
+                        }
+                        self.core_edit_toolbar(ui);
+                        if ui
+                            .button(super::i18n::registered(self.locale, "app-ui.027"))
+                            .on_hover_text(super::i18n::registered(self.locale, "app-ui.028"))
+                            .clicked()
+                        {
+                            self.navigate_to_global_count(self.playback_start);
+                        }
+                        if ui
+                            .add_enabled(
+                                self.history.can_undo(),
+                                egui::Button::new(self.undo_button_label()),
                             )
-                            .is_ok()
-                    {
-                        self.dirty = true;
-                    }
-                    if let Some((camera_id, mut key)) = exact_keyframe {
-                        ui.label(super::i18n::registered(self.locale, "app-ui.040"));
-                        for (label, mode) in [
-                            ("Smooth", drill_core::camera::CameraInterpolation::Smooth),
-                            ("Linear", drill_core::camera::CameraInterpolation::Linear),
-                            ("Hold", drill_core::camera::CameraInterpolation::Hold),
-                        ] {
+                            .on_hover_text(self.key_tip(
+                                ui.ctx(),
+                                super::i18n::registered(self.locale, "app-ui.160"),
+                                super::keybindings::Action::Command(UiCommand::Undo),
+                            ))
+                            .clicked()
+                        {
+                            self.execute_command(UiCommand::Undo, ui.ctx());
+                        }
+                        if ui
+                            .add_enabled(
+                                self.history.can_redo(),
+                                egui::Button::new(self.redo_button_label()),
+                            )
+                            .on_hover_text(self.key_tip(
+                                ui.ctx(),
+                                super::i18n::registered(self.locale, "app-ui.161"),
+                                super::keybindings::Action::Command(UiCommand::Redo),
+                            ))
+                            .clicked()
+                        {
+                            self.execute_command(UiCommand::Redo, ui.ctx());
+                        }
+                        self.show_playback_speed_presets(ui);
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut self.tempo_bpm)
+                                    .range(20.0..=300.0)
+                                    .suffix(" BPM"),
+                            )
+                            .on_hover_text(super::i18n::registered(self.locale, "app-ui.029"))
+                            .changed()
+                        {
+                            let mut tempo = self.document.tempo.clone();
+                            tempo.set(0.0, self.tempo_bpm);
+                            if self
+                                .history
+                                .execute(&mut self.document, Edit::SetTempoMap { tempo })
+                                .is_ok()
+                            {
+                                self.dirty = true;
+                            }
+                        }
+                        let live_bpm = super::playhead_bpm(
+                            &self.document,
+                            self.current_set,
+                            self.count_position,
+                        )
+                        .round() as i32;
+                        ui.label(
+                            super::i18n::registered(self.locale, "full-mode.005")
+                                .replace("{0}", &live_bpm.to_string()),
+                        )
+                        .on_hover_text(super::i18n::registered(self.locale, "full-mode.035"));
+                        ui.separator();
+                        ui.label(format!(
+                            "{} {}",
+                            text(self.locale, Text::Performers),
+                            self.document.performers.len()
+                        ));
+                        ui.separator();
+                        ui.selectable_value(&mut self.view_mode, ViewMode::Field2D, "2D");
+                        ui.selectable_value(&mut self.view_mode, ViewMode::Stadium3D, "3D");
+                        if let Some(gpu) = &mut self.gpu {
+                            let mut enabled = gpu.enabled();
                             if ui
-                                .selectable_label(key.interpolation == mode, label)
+                                .checkbox(&mut enabled, "GPU")
+                                .on_hover_text(super::i18n::registered(self.locale, "app-ui.030"))
+                                .changed()
+                            {
+                                gpu.set_enabled(enabled);
+                            }
+                            ui.small(if gpu.active() {
+                                "GPU instancing"
+                            } else if gpu.available() {
+                                "CPU fallback (manual)"
+                            } else {
+                                "CPU fallback (device error)"
+                            });
+                        } else {
+                            ui.small("CPU fallback");
+                        }
+                        if self.view_mode == ViewMode::Stadium3D {
+                            ui.toggle_value(
+                                &mut self.camera_program_preview,
+                                super::i18n::registered(self.locale, "app-ui.031"),
+                            )
+                            .on_hover_text(super::i18n::registered(self.locale, "app-ui.032"));
+                            if ui
+                                .small_button(super::i18n::registered(self.locale, "app-ui.033"))
                                 .clicked()
                             {
-                                key.interpolation = mode;
+                                self.camera = Camera::audience_view(&self.document.grid);
+                                self.camera_program_preview = false;
+                            }
+                            if ui
+                                .small_button(super::i18n::registered(self.locale, "app-ui.034"))
+                                .clicked()
+                            {
+                                self.camera = Camera::press_box(&self.document.grid);
+                                self.camera_program_preview = false;
+                            }
+                            if ui
+                                .small_button(super::i18n::registered(self.locale, "app-ui.035"))
+                                .clicked()
+                            {
+                                self.camera = Camera::overhead(&self.document.grid);
+                                self.camera_program_preview = false;
+                            }
+                            if ui
+                                .small_button(super::i18n::registered(self.locale, "app-ui.036"))
+                                .clicked()
+                            {
+                                self.camera = Camera::end_zone(&self.document.grid, true);
+                                self.camera_program_preview = false;
+                            }
+                            if ui
+                                .small_button(super::i18n::registered(self.locale, "app-ui.037"))
+                                .on_hover_text(super::i18n::registered(self.locale, "app-ui.038"))
+                                .clicked()
+                                && let Some(camera_id) = self
+                                    .document
+                                    .camera_program
+                                    .tracks
+                                    .first()
+                                    .map(|track| track.id)
+                            {
+                                let frame = drill_core::camera::CameraKeyframe::from_camera(
+                                    self.count_position,
+                                    self.camera,
+                                );
                                 if self
                                     .history
                                     .execute(
                                         &mut self.document,
                                         Edit::InsertCameraKeyframe {
                                             camera_id,
-                                            keyframe: key,
+                                            keyframe: frame,
                                         },
                                     )
                                     .is_ok()
                                 {
+                                    self.camera_program_preview = true;
                                     self.dirty = true;
+                                    self.status = format!(
+                                        "カメラキーフレームを Count {:.2} に保存しました",
+                                        self.count_position
+                                    );
                                 }
                             }
-                        }
-                    }
-                    let exact_cut = self
-                        .document
-                        .camera_program
-                        .cuts
-                        .iter()
-                        .find(|cut| (cut.count - self.count_position).abs() < 0.01)
-                        .copied();
-                    if let Some(cut) = exact_cut {
-                        if ui
-                            .small_button(super::i18n::registered(self.locale, "app-ui.041"))
-                            .clicked()
-                            && self
-                                .history
-                                .execute(
-                                    &mut self.document,
-                                    Edit::RemoveCameraCut { count: cut.count },
+                            let active_camera = self
+                                .document
+                                .camera_program
+                                .active_track(self.count_position)
+                                .map(|track| track.id);
+                            let exact_keyframe = active_camera.and_then(|camera_id| {
+                                self.document
+                                    .camera_program
+                                    .tracks
+                                    .iter()
+                                    .find(|track| track.id == camera_id)
+                                    .and_then(|track| {
+                                        track.keyframes().iter().find(|key| {
+                                            (key.count - self.count_position).abs() < 0.01
+                                        })
+                                    })
+                                    .copied()
+                                    .map(|key| (camera_id, key))
+                            });
+                            if ui
+                                .add_enabled(
+                                    exact_keyframe.is_some(),
+                                    egui::Button::new(super::i18n::registered(
+                                        self.locale,
+                                        "app-ui.039",
+                                    )),
                                 )
-                                .is_ok()
-                        {
-                            self.dirty = true;
+                                .clicked()
+                                && let Some((camera_id, key)) = exact_keyframe
+                                && self
+                                    .history
+                                    .execute(
+                                        &mut self.document,
+                                        Edit::RemoveCameraKeyframe {
+                                            camera_id,
+                                            count: key.count,
+                                        },
+                                    )
+                                    .is_ok()
+                            {
+                                self.dirty = true;
+                            }
+                            if let Some((camera_id, mut key)) = exact_keyframe {
+                                ui.label(super::i18n::registered(self.locale, "app-ui.040"));
+                                for (label, mode) in [
+                                    ("Smooth", drill_core::camera::CameraInterpolation::Smooth),
+                                    ("Linear", drill_core::camera::CameraInterpolation::Linear),
+                                    ("Hold", drill_core::camera::CameraInterpolation::Hold),
+                                ] {
+                                    if ui
+                                        .selectable_label(key.interpolation == mode, label)
+                                        .clicked()
+                                    {
+                                        key.interpolation = mode;
+                                        if self
+                                            .history
+                                            .execute(
+                                                &mut self.document,
+                                                Edit::InsertCameraKeyframe {
+                                                    camera_id,
+                                                    keyframe: key,
+                                                },
+                                            )
+                                            .is_ok()
+                                        {
+                                            self.dirty = true;
+                                        }
+                                    }
+                                }
+                            }
+                            let exact_cut = self
+                                .document
+                                .camera_program
+                                .cuts
+                                .iter()
+                                .find(|cut| (cut.count - self.count_position).abs() < 0.01)
+                                .copied();
+                            if let Some(cut) = exact_cut {
+                                if ui
+                                    .small_button(super::i18n::registered(
+                                        self.locale,
+                                        "app-ui.041",
+                                    ))
+                                    .clicked()
+                                    && self
+                                        .history
+                                        .execute(
+                                            &mut self.document,
+                                            Edit::RemoveCameraCut { count: cut.count },
+                                        )
+                                        .is_ok()
+                                {
+                                    self.dirty = true;
+                                }
+                            } else if ui
+                                .small_button(super::i18n::registered(self.locale, "app-ui.042"))
+                                .clicked()
+                                && let Some(camera) = active_camera
+                                && self
+                                    .history
+                                    .execute(
+                                        &mut self.document,
+                                        Edit::InsertCameraCut {
+                                            cut: drill_core::camera::CameraCut {
+                                                count: self.count_position,
+                                                camera,
+                                            },
+                                        },
+                                    )
+                                    .is_ok()
+                            {
+                                self.dirty = true;
+                            }
                         }
-                    } else if ui
-                        .small_button(super::i18n::registered(self.locale, "app-ui.042"))
-                        .clicked()
-                        && let Some(camera) = active_camera
-                        && self
-                            .history
-                            .execute(
-                                &mut self.document,
-                                Edit::InsertCameraCut {
-                                    cut: drill_core::camera::CameraCut {
-                                        count: self.count_position,
-                                        camera,
-                                    },
-                                },
-                            )
-                            .is_ok()
-                    {
-                        self.dirty = true;
-                    }
-                }
-            });
+                    });
+                });
         }
         if !self.selected.is_empty() {
             let selected_count = self.selected.len();
-            egui::Frame::new()
-                .fill(ui.visuals().faint_bg_color)
-                .inner_margin(8)
-                .corner_radius(6)
+            egui::ScrollArea::horizontal()
+                .id_salt("full-selection-bar")
+                .auto_shrink([false, true])
                 .show(ui, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{}: {selected_count}",
-                                super::i18n::registered(self.locale, "app-ui.077")
-                            ))
-                            .strong(),
-                        );
-                        if let Some(walk) = self.selection_walk_line() {
-                            ui.label(walk);
-                        }
-                        ui.small(super::i18n::registered(self.locale, "app-ui.119"))
-                            .on_hover_text(super::i18n::registered(self.locale, "app-ui.120"));
-                        if ui
-                            .button(super::i18n::registered(self.locale, "app-ui.078"))
-                            .clicked()
-                        {
-                            let points = self.selected_points();
-                            self.commit_layout(editing::align_horizontal(&points));
-                        }
-                        if ui
-                            .button(super::i18n::registered(self.locale, "full-mode.001"))
-                            .on_hover_text(super::i18n::registered(self.locale, "full-mode.002"))
-                            .clicked()
-                        {
-                            self.snap_selected_to_grid();
-                        }
-                        if ui
-                            .button(super::i18n::registered(self.locale, "full-mode.003"))
-                            .on_hover_text(super::i18n::registered(self.locale, "full-mode.004"))
-                            .clicked()
-                        {
-                            self.mirror_selection_across_field();
-                        }
-                        if selected_count >= 2 {
-                            if ui
-                                .button(super::i18n::registered(self.locale, "full-mode.043"))
-                                .on_hover_text(super::i18n::registered(
-                                    self.locale,
-                                    "full-mode.044",
-                                ))
-                                .clicked()
-                            {
-                                self.arrange_selection_arc();
-                            }
-                            if ui
-                                .button(super::i18n::registered(self.locale, "full-mode.045"))
-                                .on_hover_text(super::i18n::registered(
-                                    self.locale,
-                                    "full-mode.046",
-                                ))
-                                .clicked()
-                            {
-                                self.arrange_selection_circle();
-                            }
-                            if ui
-                                .button(super::i18n::registered(self.locale, "full-mode.047"))
-                                .on_hover_text(super::i18n::registered(
-                                    self.locale,
-                                    "full-mode.048",
-                                ))
-                                .clicked()
-                            {
-                                self.arrange_selection_block();
-                            }
-                        }
-                        if ui
-                            .button(super::i18n::registered(self.locale, "app-ui.079"))
-                            .clicked()
-                        {
-                            let points = self.selected_points();
-                            self.commit_layout(editing::distribute_horizontal(&points));
-                        }
-                        ui.menu_button(super::i18n::registered(self.locale, "app-ui.085"), |ui| {
-                            if ui
-                                .button(super::i18n::registered(self.locale, "app-ui.086"))
-                                .clicked()
-                            {
-                                let points = self.selected_points();
-                                self.commit_layout(editing::align_vertical(&points));
-                                ui.close();
-                            }
-                            if ui
-                                .button(super::i18n::registered(self.locale, "app-ui.087"))
-                                .clicked()
-                            {
-                                let points = self.selected_points();
-                                self.commit_layout(editing::distribute_vertical(&points));
-                                ui.close();
-                            }
-                            ui.separator();
-                            if ui
-                                .button(super::i18n::registered(self.locale, "app-ui.088"))
-                                .clicked()
-                            {
-                                let points = self.selected_points();
-                                self.commit_layout(editing::flip_horizontal(&points));
-                                ui.close();
-                            }
-                            if ui
-                                .button(super::i18n::registered(self.locale, "app-ui.089"))
-                                .clicked()
-                            {
-                                let points = self.selected_points();
-                                self.commit_layout(editing::flip_vertical(&points));
-                                ui.close();
-                            }
-                        });
-                        ui.menu_button(super::i18n::registered(self.locale, "app-ui.163"), |ui| {
-                            ui.small(super::i18n::registered(self.locale, "app-ui.164"));
-                            ui.horizontal_wrapped(|ui| {
-                                for degrees in
-                                    [-90.0_f32, -45.0, -30.0, -15.0, 15.0, 30.0, 45.0, 90.0]
+                    egui::Frame::new()
+                        .fill(ui.visuals().faint_bg_color)
+                        .inner_margin(8)
+                        .corner_radius(6)
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "{}: {selected_count}",
+                                        super::i18n::registered(self.locale, "app-ui.077")
+                                    ))
+                                    .strong(),
+                                );
+                                if let Some(walk) = self.selection_walk_line() {
+                                    ui.label(walk);
+                                }
+                                ui.small(super::i18n::registered(self.locale, "app-ui.119"))
+                                    .on_hover_text(super::i18n::registered(
+                                        self.locale,
+                                        "app-ui.120",
+                                    ));
+                                if ui
+                                    .button(super::i18n::registered(self.locale, "app-ui.078"))
+                                    .clicked()
                                 {
-                                    let label = if degrees > 0.0 {
-                                        format!("+{degrees:.0}°")
-                                    } else {
-                                        format!("{degrees:.0}°")
-                                    };
-                                    if ui.button(label).clicked() {
-                                        let points = self.selected_points();
-                                        self.commit_layout(editing::rotate_about_centroid(
-                                            &points,
-                                            degrees.to_radians(),
-                                        ));
-                                        ui.close();
+                                    let points = self.selected_points();
+                                    self.commit_layout(editing::align_horizontal(&points));
+                                }
+                                if ui
+                                    .button(super::i18n::registered(self.locale, "full-mode.001"))
+                                    .on_hover_text(super::i18n::registered(
+                                        self.locale,
+                                        "full-mode.002",
+                                    ))
+                                    .clicked()
+                                {
+                                    self.snap_selected_to_grid();
+                                }
+                                if ui
+                                    .button(super::i18n::registered(self.locale, "full-mode.003"))
+                                    .on_hover_text(super::i18n::registered(
+                                        self.locale,
+                                        "full-mode.004",
+                                    ))
+                                    .clicked()
+                                {
+                                    self.mirror_selection_across_field();
+                                }
+                                if selected_count >= 2 {
+                                    if ui
+                                        .button(super::i18n::registered(
+                                            self.locale,
+                                            "full-mode.043",
+                                        ))
+                                        .on_hover_text(super::i18n::registered(
+                                            self.locale,
+                                            "full-mode.044",
+                                        ))
+                                        .clicked()
+                                    {
+                                        self.arrange_selection_arc();
                                     }
+                                    if ui
+                                        .button(super::i18n::registered(
+                                            self.locale,
+                                            "full-mode.045",
+                                        ))
+                                        .on_hover_text(super::i18n::registered(
+                                            self.locale,
+                                            "full-mode.046",
+                                        ))
+                                        .clicked()
+                                    {
+                                        self.arrange_selection_circle();
+                                    }
+                                    if ui
+                                        .button(super::i18n::registered(
+                                            self.locale,
+                                            "full-mode.047",
+                                        ))
+                                        .on_hover_text(super::i18n::registered(
+                                            self.locale,
+                                            "full-mode.048",
+                                        ))
+                                        .clicked()
+                                    {
+                                        self.arrange_selection_block();
+                                    }
+                                }
+                                if ui
+                                    .button(super::i18n::registered(self.locale, "app-ui.079"))
+                                    .clicked()
+                                {
+                                    let points = self.selected_points();
+                                    self.commit_layout(editing::distribute_horizontal(&points));
+                                }
+                                ui.menu_button(
+                                    super::i18n::registered(self.locale, "app-ui.085"),
+                                    |ui| {
+                                        if ui
+                                            .button(super::i18n::registered(
+                                                self.locale,
+                                                "app-ui.086",
+                                            ))
+                                            .clicked()
+                                        {
+                                            let points = self.selected_points();
+                                            self.commit_layout(editing::align_vertical(&points));
+                                            ui.close();
+                                        }
+                                        if ui
+                                            .button(super::i18n::registered(
+                                                self.locale,
+                                                "app-ui.087",
+                                            ))
+                                            .clicked()
+                                        {
+                                            let points = self.selected_points();
+                                            self.commit_layout(editing::distribute_vertical(
+                                                &points,
+                                            ));
+                                            ui.close();
+                                        }
+                                        ui.separator();
+                                        if ui
+                                            .button(super::i18n::registered(
+                                                self.locale,
+                                                "app-ui.088",
+                                            ))
+                                            .clicked()
+                                        {
+                                            let points = self.selected_points();
+                                            self.commit_layout(editing::flip_horizontal(&points));
+                                            ui.close();
+                                        }
+                                        if ui
+                                            .button(super::i18n::registered(
+                                                self.locale,
+                                                "app-ui.089",
+                                            ))
+                                            .clicked()
+                                        {
+                                            let points = self.selected_points();
+                                            self.commit_layout(editing::flip_vertical(&points));
+                                            ui.close();
+                                        }
+                                    },
+                                );
+                                ui.menu_button(
+                                    super::i18n::registered(self.locale, "app-ui.163"),
+                                    |ui| {
+                                        ui.small(super::i18n::registered(
+                                            self.locale,
+                                            "app-ui.164",
+                                        ));
+                                        ui.horizontal_wrapped(|ui| {
+                                            for degrees in [
+                                                -90.0_f32, -45.0, -30.0, -15.0, 15.0, 30.0, 45.0,
+                                                90.0,
+                                            ] {
+                                                let label = if degrees > 0.0 {
+                                                    format!("+{degrees:.0}°")
+                                                } else {
+                                                    format!("{degrees:.0}°")
+                                                };
+                                                if ui.button(label).clicked() {
+                                                    let points = self.selected_points();
+                                                    self.commit_layout(
+                                                        editing::rotate_about_centroid(
+                                                            &points,
+                                                            degrees.to_radians(),
+                                                        ),
+                                                    );
+                                                    ui.close();
+                                                }
+                                            }
+                                        });
+                                    },
+                                );
+                                ui.separator();
+                                if ui
+                                    .button(super::i18n::registered(self.locale, "clipboard.018"))
+                                    .clicked()
+                                {
+                                    self.copy_selected_formation();
+                                }
+                                if ui
+                                    .button(super::i18n::registered(self.locale, "clipboard.019"))
+                                    .clicked()
+                                {
+                                    self.begin_clipboard_paste_preview();
+                                }
+                                ui.separator();
+                                if ui
+                                    .button(super::i18n::registered(self.locale, "app-ui.156"))
+                                    .on_hover_text(super::i18n::registered(
+                                        self.locale,
+                                        "app-ui.157",
+                                    ))
+                                    .clicked()
+                                {
+                                    self.lock_selected_performers();
+                                    self.show_inspector = true;
+                                    self.workspace_focus = Some(WorkspaceFocus::Performer);
+                                }
+                                if ui
+                                    .button(super::i18n::registered(self.locale, "app-ui.158"))
+                                    .on_hover_text(super::i18n::registered(
+                                        self.locale,
+                                        "app-ui.159",
+                                    ))
+                                    .clicked()
+                                {
+                                    self.hide_selected_performers();
+                                    self.show_inspector = true;
+                                    self.workspace_focus = Some(WorkspaceFocus::Performer);
+                                }
+                                if ui
+                                    .button(super::i18n::registered(self.locale, "app-ui.080"))
+                                    .clicked()
+                                    && let Some((min, max)) = self.selection_bounds()
+                                {
+                                    let y = (min.y + max.y) * 0.5;
+                                    self.preview_shape(shapes::ShapeSpec::Line {
+                                        start: Point { x: min.x, y },
+                                        end: Point { x: max.x, y },
+                                    });
+                                }
+                                if self.formation_preview_spec.is_some() {
+                                    ui.separator();
+                                    if ui
+                                        .button(super::i18n::registered(self.locale, "app-ui.082"))
+                                        .clicked()
+                                    {
+                                        self.apply_shape_preview();
+                                    }
+                                    if ui
+                                        .button(super::i18n::registered(self.locale, "app-ui.083"))
+                                        .on_hover_text(super::i18n::registered(
+                                            self.locale,
+                                            "app-ui.084",
+                                        ))
+                                        .clicked()
+                                    {
+                                        self.cancel_shape_preview();
+                                    }
+                                }
+                                if ui
+                                    .button(super::i18n::registered(self.locale, "app-ui.081"))
+                                    .clicked()
+                                {
+                                    self.show_inspector = true;
+                                    self.workspace_focus = Some(WorkspaceFocus::Performer);
                                 }
                             });
                         });
-                        ui.separator();
-                        if ui
-                            .button(super::i18n::registered(self.locale, "clipboard.018"))
-                            .clicked()
-                        {
-                            self.copy_selected_formation();
-                        }
-                        if ui
-                            .button(super::i18n::registered(self.locale, "clipboard.019"))
-                            .clicked()
-                        {
-                            self.begin_clipboard_paste_preview();
-                        }
-                        ui.separator();
-                        if ui
-                            .button(super::i18n::registered(self.locale, "app-ui.156"))
-                            .on_hover_text(super::i18n::registered(self.locale, "app-ui.157"))
-                            .clicked()
-                        {
-                            self.lock_selected_performers();
-                            self.show_inspector = true;
-                            self.workspace_focus = Some(WorkspaceFocus::Performer);
-                        }
-                        if ui
-                            .button(super::i18n::registered(self.locale, "app-ui.158"))
-                            .on_hover_text(super::i18n::registered(self.locale, "app-ui.159"))
-                            .clicked()
-                        {
-                            self.hide_selected_performers();
-                            self.show_inspector = true;
-                            self.workspace_focus = Some(WorkspaceFocus::Performer);
-                        }
-                        if ui
-                            .button(super::i18n::registered(self.locale, "app-ui.080"))
-                            .clicked()
-                            && let Some((min, max)) = self.selection_bounds()
-                        {
-                            let y = (min.y + max.y) * 0.5;
-                            self.preview_shape(shapes::ShapeSpec::Line {
-                                start: Point { x: min.x, y },
-                                end: Point { x: max.x, y },
-                            });
-                        }
-                        if self.formation_preview_spec.is_some() {
-                            ui.separator();
-                            if ui
-                                .button(super::i18n::registered(self.locale, "app-ui.082"))
-                                .clicked()
-                            {
-                                self.apply_shape_preview();
-                            }
-                            if ui
-                                .button(super::i18n::registered(self.locale, "app-ui.083"))
-                                .on_hover_text(super::i18n::registered(self.locale, "app-ui.084"))
-                                .clicked()
-                            {
-                                self.cancel_shape_preview();
-                            }
-                        }
-                        if ui
-                            .button(super::i18n::registered(self.locale, "app-ui.081"))
-                            .clicked()
-                        {
-                            self.show_inspector = true;
-                            self.workspace_focus = Some(WorkspaceFocus::Performer);
-                        }
-                    });
                 });
         }
         if self.show_guidance {
@@ -1589,284 +1663,312 @@ impl eframe::App for DrillApp {
             );
         }
         let total_counts = self.document.timeline_counts();
-        egui::Frame::new()
-            .fill(ui.visuals().faint_bg_color)
-            .inner_margin(8)
+        // The timeline stays reachable, but it must not push the field past
+        // the bottom of the window. The field row below takes whatever is left.
+        let lower_remaining = ui.available_height();
+        let lower_chrome = (lower_remaining * 0.28)
+            .clamp(88.0, 156.0)
+            .min(lower_remaining * 0.34);
+        egui::ScrollArea::vertical()
+            .id_salt("full-lower-chrome")
+            .max_height(lower_chrome)
+            .auto_shrink([false, true])
             .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(
-                        egui::RichText::new(super::i18n::registered(self.locale, "app-ui.049"))
-                            .strong(),
+                egui::Frame::new()
+                    .fill(ui.visuals().faint_bg_color)
+                    .inner_margin(8)
+                    .show(ui, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(
+                                egui::RichText::new(super::i18n::registered(
+                                    self.locale,
+                                    "app-ui.049",
+                                ))
+                                .strong(),
+                            );
+                            if ui
+                                .button(super::i18n::registered(self.locale, "app-ui.050"))
+                                .clicked()
+                            {
+                                self.playback_start =
+                                    self.document.global_count(self.current_set, 0.0) as u32;
+                                self.playback_end = (self.playback_start
+                                    + u32::from(self.document.sets[self.current_set].counts))
+                                .min(total_counts);
+                            }
+                            if ui
+                                .button(super::i18n::registered(self.locale, "app-ui.051"))
+                                .clicked()
+                            {
+                                self.playback_start = 0;
+                                self.playback_end = total_counts;
+                            }
+                            let current_global = self
+                                .document
+                                .global_count(self.current_set, self.count_position)
+                                .round() as u32;
+                            if ui
+                                .button(super::i18n::registered(self.locale, "app-ui.052"))
+                                .on_hover_text(super::i18n::registered(self.locale, "app-ui.111"))
+                                .clicked()
+                            {
+                                self.playback_start =
+                                    current_global.min(self.playback_end.saturating_sub(1));
+                            }
+                            if ui
+                                .button(super::i18n::registered(self.locale, "app-ui.053"))
+                                .on_hover_text(super::i18n::registered(self.locale, "app-ui.112"))
+                                .clicked()
+                            {
+                                self.playback_end = current_global
+                                    .max(self.playback_start + 1)
+                                    .min(total_counts);
+                            }
+                            ui.checkbox(
+                                &mut self.loop_playback,
+                                super::i18n::registered(self.locale, "app-ui.054"),
+                            );
+                        });
+                        let range = super::playback_range_summary(
+                            &self.document,
+                            self.playback_start,
+                            self.playback_end,
+                        );
+                        let count_label = super::i18n::registered(self.locale, "app-ui.114");
+                        ui.horizontal_wrapped(|ui| {
+                            ui.small(format!(
+                                "{}: {} · {} {}",
+                                super::i18n::registered(self.locale, "app-ui.113"),
+                                range.start_set,
+                                count_label,
+                                range.start_count,
+                            ));
+                            ui.separator();
+                            ui.small(format!(
+                                "{}: {} · {} {}",
+                                super::i18n::registered(self.locale, "app-ui.115"),
+                                range.end_set,
+                                count_label,
+                                range.end_count,
+                            ));
+                            ui.separator();
+                            ui.small(format!(
+                                "{}: {} {}",
+                                super::i18n::registered(self.locale, "app-ui.116"),
+                                range.length,
+                                super::i18n::registered(self.locale, "app-ui.117"),
+                            ));
+                        });
+                        ui.small(super::i18n::registered(self.locale, "app-ui.118"));
+                    });
+                self.show_timeline_playback_bar(ui);
+                self.show_set_card_strip(ui);
+                let current_global = self
+                    .document
+                    .global_count(self.current_set, self.count_position);
+                // Follow used to `center_on` the frame the playhead crossed the
+                // margin, which snaps the whole track sideways at the exact moment
+                // the user is watching it move. Now it only sets a target and
+                // `advance_view_motion` eases toward it. Re-evaluating the margin
+                // every frame (rather than latching the first target) means the
+                // recentre tracks the live playhead while it is still outside the
+                // margin, then coasts to a stop once it is back inside.
+                if self.timeline_follow
+                    && self.playing
+                    && !self
+                        .timeline_view
+                        .contains_with_margin(current_global, 0.08)
+                {
+                    self.timeline_follow_glide = Some(
+                        self.timeline_view
+                            .settled_center_start(current_global, total_counts),
                     );
-                    if ui
-                        .button(super::i18n::registered(self.locale, "app-ui.050"))
+                }
+                ui.horizontal(|ui| {
+                    ui.strong(super::i18n::registered(self.locale, "app-ui.055"));
+                    let zoom_out = ui.button("−");
+                    zoom_out.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::WidgetType::Button,
+                            true,
+                            super::i18n::registered(self.locale, "app-ui.056"),
+                        )
+                    });
+                    if zoom_out
+                        .on_hover_text(super::i18n::registered(self.locale, "app-ui.057"))
                         .clicked()
                     {
-                        self.playback_start =
-                            self.document.global_count(self.current_set, 0.0) as u32;
-                        self.playback_end = (self.playback_start
-                            + u32::from(self.document.sets[self.current_set].counts))
-                        .min(total_counts);
+                        self.timeline_view
+                            .zoom_at(1.5, current_global, total_counts);
+                    }
+                    let zoom_in = ui.button("＋");
+                    zoom_in.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::WidgetType::Button,
+                            true,
+                            super::i18n::registered(self.locale, "app-ui.058"),
+                        )
+                    });
+                    if zoom_in
+                        .on_hover_text(super::i18n::registered(self.locale, "app-ui.059"))
+                        .clicked()
+                    {
+                        self.timeline_view
+                            .zoom_at(2.0 / 3.0, current_global, total_counts);
                     }
                     if ui
-                        .button(super::i18n::registered(self.locale, "app-ui.051"))
+                        .button(super::i18n::registered(self.locale, "app-ui.060"))
                         .clicked()
                     {
-                        self.playback_start = 0;
-                        self.playback_end = total_counts;
-                    }
-                    let current_global = self
-                        .document
-                        .global_count(self.current_set, self.count_position)
-                        .round() as u32;
-                    if ui
-                        .button(super::i18n::registered(self.locale, "app-ui.052"))
-                        .on_hover_text(super::i18n::registered(self.locale, "app-ui.111"))
-                        .clicked()
-                    {
-                        self.playback_start =
-                            current_global.min(self.playback_end.saturating_sub(1));
+                        self.timeline_view = TimelineViewport::fit(total_counts);
                     }
                     if ui
-                        .button(super::i18n::registered(self.locale, "app-ui.053"))
-                        .on_hover_text(super::i18n::registered(self.locale, "app-ui.112"))
+                        .button(super::i18n::registered(self.locale, "app-ui.061"))
                         .clicked()
                     {
-                        self.playback_end = current_global
-                            .max(self.playback_start + 1)
-                            .min(total_counts);
+                        self.timeline_view = TimelineViewport {
+                            start: self.playback_start as f32,
+                            span: self.playback_end.saturating_sub(self.playback_start).max(1)
+                                as f32,
+                        };
+                        self.timeline_view.normalize(total_counts);
                     }
                     ui.checkbox(
-                        &mut self.loop_playback,
-                        super::i18n::registered(self.locale, "app-ui.054"),
+                        &mut self.timeline_follow,
+                        super::i18n::registered(self.locale, "app-ui.062"),
                     );
-                });
-                let range = super::playback_range_summary(
-                    &self.document,
-                    self.playback_start,
-                    self.playback_end,
-                );
-                let count_label = super::i18n::registered(self.locale, "app-ui.114");
-                ui.horizontal_wrapped(|ui| {
                     ui.small(format!(
-                        "{}: {} · {} {}",
-                        super::i18n::registered(self.locale, "app-ui.113"),
-                        range.start_set,
-                        count_label,
-                        range.start_count,
-                    ));
-                    ui.separator();
-                    ui.small(format!(
-                        "{}: {} · {} {}",
-                        super::i18n::registered(self.locale, "app-ui.115"),
-                        range.end_set,
-                        count_label,
-                        range.end_count,
-                    ));
-                    ui.separator();
-                    ui.small(format!(
-                        "{}: {} {}",
-                        super::i18n::registered(self.locale, "app-ui.116"),
-                        range.length,
-                        super::i18n::registered(self.locale, "app-ui.117"),
-                    ));
-                });
-                ui.small(super::i18n::registered(self.locale, "app-ui.118"));
-            });
-        self.show_timeline_playback_bar(ui);
-        self.show_set_card_strip(ui);
-        let current_global = self
-            .document
-            .global_count(self.current_set, self.count_position);
-        // Follow used to `center_on` the frame the playhead crossed the
-        // margin, which snaps the whole track sideways at the exact moment
-        // the user is watching it move. Now it only sets a target and
-        // `advance_view_motion` eases toward it. Re-evaluating the margin
-        // every frame (rather than latching the first target) means the
-        // recentre tracks the live playhead while it is still outside the
-        // margin, then coasts to a stop once it is back inside.
-        if self.timeline_follow
-            && self.playing
-            && !self
-                .timeline_view
-                .contains_with_margin(current_global, 0.08)
-        {
-            self.timeline_follow_glide = Some(
-                self.timeline_view
-                    .settled_center_start(current_global, total_counts),
-            );
-        }
-        ui.horizontal(|ui| {
-            ui.strong(super::i18n::registered(self.locale, "app-ui.055"));
-            let zoom_out = ui.button("−");
-            zoom_out.widget_info(|| {
-                egui::WidgetInfo::labeled(
-                    egui::WidgetType::Button,
-                    true,
-                    super::i18n::registered(self.locale, "app-ui.056"),
-                )
-            });
-            if zoom_out
-                .on_hover_text(super::i18n::registered(self.locale, "app-ui.057"))
-                .clicked()
-            {
-                self.timeline_view
-                    .zoom_at(1.5, current_global, total_counts);
-            }
-            let zoom_in = ui.button("＋");
-            zoom_in.widget_info(|| {
-                egui::WidgetInfo::labeled(
-                    egui::WidgetType::Button,
-                    true,
-                    super::i18n::registered(self.locale, "app-ui.058"),
-                )
-            });
-            if zoom_in
-                .on_hover_text(super::i18n::registered(self.locale, "app-ui.059"))
-                .clicked()
-            {
-                self.timeline_view
-                    .zoom_at(2.0 / 3.0, current_global, total_counts);
-            }
-            if ui
-                .button(super::i18n::registered(self.locale, "app-ui.060"))
-                .clicked()
-            {
-                self.timeline_view = TimelineViewport::fit(total_counts);
-            }
-            if ui
-                .button(super::i18n::registered(self.locale, "app-ui.061"))
-                .clicked()
-            {
-                self.timeline_view = TimelineViewport {
-                    start: self.playback_start as f32,
-                    span: self.playback_end.saturating_sub(self.playback_start).max(1) as f32,
-                };
-                self.timeline_view.normalize(total_counts);
-            }
-            ui.checkbox(
-                &mut self.timeline_follow,
-                super::i18n::registered(self.locale, "app-ui.062"),
-            );
-            ui.small(format!(
                 "表示 {:.0}–{:.0} / {} · Ctrl+ホイール: 拡大縮小 · ホイール/中ドラッグ: 移動",
                 self.timeline_view.start,
                 self.timeline_view.start + self.timeline_view.span,
                 total_counts
             ));
-        });
-        // The NOW line glides with the field, so a set jump moves one playhead
-        // across two views rather than teleporting each of them separately.
-        let (playhead_set, playhead_count) = self.render_playhead();
-        let timeline_change = draw_count_track(
-            ui,
-            &self.document,
-            playhead_set,
-            playhead_count,
-            self.playback_start,
-            self.playback_end,
-            &mut self.timeline_view,
-            self.locale,
-            self.presence.set_marks(),
-        );
-        if let Some((start, end)) = timeline_change.range {
-            self.playback_start = start;
-            self.playback_end = end;
-        }
-        if timeline_change.viewport_interacted {
-            self.timeline_follow = false;
-        }
-        if let Some(edit) = timeline_change.marker_edit {
-            self.execute_edit(edit, super::i18n::registered(self.locale, "app-ui.109"));
-        }
-        if let Some((set_index, local_count)) = timeline_change.seek {
-            self.scrub_to(set_index, local_count);
-            // Performer identity is stable across sets, so seeking the count
-            // track keeps the current working group intact.
-        }
-        // A quiet, persistent desktop status strip. It is rendered before the
-        // canvas claims the remaining space, so it is available even when the
-        // inspector is hidden or the field fills the window.
-        ui.separator();
-        ui.horizontal_wrapped(|ui| {
-            let saved = if self.project_state.is_saving() {
-                "document-feedback.002"
-            } else if self.dirty {
-                "document-feedback.004"
-            } else {
-                "document-feedback.003"
-            };
-            let color = if self.project_state.is_saving() {
-                Color32::from_rgb(110, 183, 255)
-            } else if self.dirty {
-                Color32::from_rgb(255, 190, 82)
-            } else {
-                Color32::from_rgb(112, 210, 150)
-            };
-            ui.colored_label(color, super::i18n::registered(self.locale, saved));
-            ui.separator();
-            let set_name = self
-                .document
-                .sets
-                .get(self.current_set)
-                .map(|set| set.name.as_str())
-                .unwrap_or("—");
-            ui.label(format!(
-                "{}: {}",
-                super::i18n::registered(self.locale, "app-ui.105"),
-                set_name
-            ));
-            ui.label(format!(
-                "{} {:.2}",
-                super::i18n::registered(self.locale, "app-ui.106"),
-                self.count_position
-            ));
-            ui.label(format!(
-                "{} {}",
-                self.selected.len(),
-                super::i18n::registered(self.locale, "app-ui.107")
-            ));
-            if !self.locked_performers.is_empty() || !self.hidden_performers.is_empty() {
-                let filter_label = format!(
-                    "{}: {} {} · {} {}",
-                    super::i18n::registered(self.locale, "app-ui.147"),
-                    self.locked_performers.len(),
-                    super::i18n::registered(self.locale, "app-ui.148"),
-                    self.hidden_performers.len(),
-                    super::i18n::registered(self.locale, "app-ui.149"),
+                });
+                // The NOW line glides with the field, so a set jump moves one playhead
+                // across two views rather than teleporting each of them separately.
+                let (playhead_set, playhead_count) = self.render_playhead();
+                let timeline_change = draw_count_track(
+                    ui,
+                    &self.document,
+                    playhead_set,
+                    playhead_count,
+                    self.playback_start,
+                    self.playback_end,
+                    &mut self.timeline_view,
+                    self.locale,
+                    self.presence.set_marks(),
                 );
-                if ui
-                    .small_button(filter_label)
-                    .on_hover_text(super::i18n::registered(self.locale, "app-ui.150"))
-                    .clicked()
-                {
-                    self.show_inspector = true;
-                    self.workspace_focus = Some(WorkspaceFocus::Performer);
+                if let Some((start, end)) = timeline_change.range {
+                    self.playback_start = start;
+                    self.playback_end = end;
                 }
-                if !self.last_filtered_performers.is_empty()
-                    && ui
-                        .small_button(super::i18n::registered(self.locale, "app-ui.153"))
-                        .on_hover_text(super::i18n::registered(self.locale, "app-ui.154"))
-                        .clicked()
-                {
-                    let restored = self.restore_last_filtered_performers();
-                    self.status = format!(
+                if timeline_change.viewport_interacted {
+                    self.timeline_follow = false;
+                }
+                if let Some(edit) = timeline_change.marker_edit {
+                    self.execute_edit(edit, super::i18n::registered(self.locale, "app-ui.109"));
+                }
+                if let Some((set_index, local_count)) = timeline_change.seek {
+                    self.scrub_to(set_index, local_count);
+                    // Performer identity is stable across sets, so seeking the count
+                    // track keeps the current working group intact.
+                }
+                // A quiet, persistent desktop status strip. It is rendered before the
+                // canvas claims the remaining space, so it is available even when the
+                // inspector is hidden or the field fills the window.
+                ui.separator();
+                ui.horizontal_wrapped(|ui| {
+                    let saved = if self.project_state.is_saving() {
+                        "document-feedback.002"
+                    } else if self.dirty {
+                        "document-feedback.004"
+                    } else {
+                        "document-feedback.003"
+                    };
+                    let color = if self.project_state.is_saving() {
+                        Color32::from_rgb(110, 183, 255)
+                    } else if self.dirty {
+                        Color32::from_rgb(255, 190, 82)
+                    } else {
+                        Color32::from_rgb(112, 210, 150)
+                    };
+                    ui.colored_label(color, super::i18n::registered(self.locale, saved));
+                    ui.separator();
+                    let set_name = self
+                        .document
+                        .sets
+                        .get(self.current_set)
+                        .map(|set| set.name.as_str())
+                        .unwrap_or("—");
+                    ui.label(format!(
+                        "{}: {}",
+                        super::i18n::registered(self.locale, "app-ui.105"),
+                        set_name
+                    ));
+                    ui.label(format!(
+                        "{} {:.2}",
+                        super::i18n::registered(self.locale, "app-ui.106"),
+                        self.count_position
+                    ));
+                    ui.label(format!(
                         "{} {}",
-                        restored,
-                        super::i18n::registered(self.locale, "app-ui.155")
-                    );
-                }
-            }
-            ui.separator();
-            ui.small(format!(
-                "{}: {}",
-                super::i18n::registered(self.locale, "app-ui.108"),
-                self.status
-            ));
-        });
+                        self.selected.len(),
+                        super::i18n::registered(self.locale, "app-ui.107")
+                    ));
+                    if !self.locked_performers.is_empty() || !self.hidden_performers.is_empty() {
+                        let filter_label = format!(
+                            "{}: {} {} · {} {}",
+                            super::i18n::registered(self.locale, "app-ui.147"),
+                            self.locked_performers.len(),
+                            super::i18n::registered(self.locale, "app-ui.148"),
+                            self.hidden_performers.len(),
+                            super::i18n::registered(self.locale, "app-ui.149"),
+                        );
+                        if ui
+                            .small_button(filter_label)
+                            .on_hover_text(super::i18n::registered(self.locale, "app-ui.150"))
+                            .clicked()
+                        {
+                            self.show_inspector = true;
+                            self.workspace_focus = Some(WorkspaceFocus::Performer);
+                        }
+                        if !self.last_filtered_performers.is_empty()
+                            && ui
+                                .small_button(super::i18n::registered(self.locale, "app-ui.153"))
+                                .on_hover_text(super::i18n::registered(self.locale, "app-ui.154"))
+                                .clicked()
+                        {
+                            let restored = self.restore_last_filtered_performers();
+                            self.status = format!(
+                                "{} {}",
+                                restored,
+                                super::i18n::registered(self.locale, "app-ui.155")
+                            );
+                        }
+                    }
+                    ui.separator();
+                    ui.small(format!(
+                        "{}: {}",
+                        super::i18n::registered(self.locale, "app-ui.108"),
+                        self.status
+                    ));
+                });
+            });
         ui.horizontal_top(|ui| {
             if self.show_inspector && !self.focus_field {
-                self.show_workspace_inspector(ui, set_counts);
+                // The inspector used to sit in this horizontal row and grow
+                // with its widest control, which left the field a narrow
+                // strip. Keep it a fixed column so the canvas gets the rest.
+                let column_height = ui.available_height();
+                let (column_rect, _) =
+                    ui.allocate_exact_size(egui::vec2(320.0, column_height), egui::Sense::hover());
+                let mut column = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(column_rect)
+                        .layout(egui::Layout::top_down(egui::Align::Min)),
+                );
+                column.set_clip_rect(column_rect);
+                self.show_workspace_inspector(&mut column, set_counts);
             }
             let available = ui.available_size();
             let (response, painter) = ui.allocate_painter(available, Sense::click_and_drag());
@@ -1943,7 +2045,7 @@ impl eframe::App for DrillApp {
                         // overshoot it.
                         self.field_viewport.stop_glide();
                         self.field_viewport
-                            .clamp_center(&self.document.grid, response.rect.shrink(18.0).size());
+                            .clamp_center(&self.document.grid, response.rect.size());
                     }
                 }
                 let nudge = ui.input_mut(|input| {
@@ -1973,7 +2075,7 @@ impl eframe::App for DrillApp {
                     self.nudge_selected(x, y);
                 }
             }
-            let rect = response.rect.shrink(18.0);
+            let rect = response.rect;
             if self.view_mode == ViewMode::Stadium3D {
                 self.draw_stadium(ui, &response, &painter, rect);
             } else {
@@ -2151,6 +2253,7 @@ impl eframe::App for DrillApp {
                     field_zoom: self.field_viewport.zoom,
                     show_labels: self.show_dot_labels && !hide_labels,
                     skip_offscreen: super::cull_offscreen_dots(self.document.performers.len()),
+                    extend_grid: true,
                     ..drill_render::RenderOptions::default()
                 };
                 let scene = drill_render::Scene {
@@ -2236,6 +2339,7 @@ impl eframe::App for DrillApp {
                         &mut self.display_list,
                     );
                 }
+                egui_backend::paint_field_ground(&painter, rect);
                 if let Some(gpu) = self.gpu.as_ref().filter(|gpu| gpu.active()) {
                     gpu.update(&self.display_list);
                     egui_backend::paint_gpu_background(&painter, rect.min, &self.display_list);
@@ -3948,7 +4052,7 @@ impl DrillApp {
         } else {
             super::i18n::registered(self.locale, "recent-projects.010")
         };
-        egui::Window::new(title)
+        super::app_theme::modal_window(title, ctx)
             .id(egui::Id::new("recent-projects"))
             .open(&mut open)
             .collapsible(false)

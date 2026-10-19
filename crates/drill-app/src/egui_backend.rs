@@ -28,6 +28,17 @@ fn rectangle(origin: Pos2, value: drill_render::Rect) -> Rect {
 /// Field, grid, and highlights. Simple mode paints previous-scene ghosts
 /// after this and before [`paint_dots_and_above`], so the faint dots sit
 /// under the live performers.
+/// Letterboxed margins use the same ground as the field, so a wide window
+/// does not show the gray app canvas on either side of the floor.
+pub(crate) fn paint_field_ground(painter: &egui::Painter, rect: egui::Rect) {
+    let turf = drill_render::Theme::PRINT_LIGHT.turf;
+    painter.rect_filled(
+        rect,
+        0.0,
+        Color32::from_rgba_unmultiplied(turf.0, turf.1, turf.2, turf.3),
+    );
+}
+
 pub(crate) fn paint_below_dots(painter: &egui::Painter, origin: Pos2, list: &DisplayList) {
     paint_layers(painter, origin, list, &LAYERS_BELOW_DOTS);
 }

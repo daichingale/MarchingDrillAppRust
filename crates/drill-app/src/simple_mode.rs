@@ -522,20 +522,7 @@ fn paint_phone_icon_at(
     let p = |x: f32, y: f32| center + egui::Vec2::new(x * s, y * s);
     match icon {
         PhoneIcon::Undo => {
-            painter.add(egui::Shape::line(
-                vec![
-                    p(6.0, -5.0),
-                    p(-1.0, -5.0),
-                    p(-6.0, 0.0),
-                    p(-1.0, 5.0),
-                    p(6.0, 5.0),
-                ],
-                stroke,
-            ));
-            painter.line_segment([p(6.0, -5.0), p(1.0, -9.0)], stroke);
-            painter.line_segment([p(6.0, -5.0), p(2.0, -1.0)], stroke);
-        }
-        PhoneIcon::Redo => {
+            // Head on the left, pointing left. Redo is the mirror.
             painter.add(egui::Shape::line(
                 vec![
                     p(-6.0, -5.0),
@@ -548,6 +535,20 @@ fn paint_phone_icon_at(
             ));
             painter.line_segment([p(-6.0, -5.0), p(-1.0, -9.0)], stroke);
             painter.line_segment([p(-6.0, -5.0), p(-2.0, -1.0)], stroke);
+        }
+        PhoneIcon::Redo => {
+            painter.add(egui::Shape::line(
+                vec![
+                    p(6.0, -5.0),
+                    p(-1.0, -5.0),
+                    p(-6.0, 0.0),
+                    p(-1.0, 5.0),
+                    p(6.0, 5.0),
+                ],
+                stroke,
+            ));
+            painter.line_segment([p(6.0, -5.0), p(1.0, -9.0)], stroke);
+            painter.line_segment([p(6.0, -5.0), p(2.0, -1.0)], stroke);
         }
         PhoneIcon::Open => {
             painter.add(egui::Shape::line(
@@ -1119,6 +1120,11 @@ impl DrillApp {
         }
         if stage == "full" {
             self.set_simple_mode(false);
+            // The return chip, coach, and guidance banner are real chrome,
+            // but they cover the field this fixture exists to show.
+            self.simple_mode.return_hint = false;
+            self.show_guidance = false;
+            self.onboarding.coach_dismissed = true;
         }
         if stage == "move" || stage == "play" || stage == "done" {
             self.duplicate_current_set();
@@ -2053,9 +2059,9 @@ impl DrillApp {
         let label_ink = if on && enabled {
             Color32::WHITE
         } else if enabled {
-            super::app_theme::SECONDARY_TEXT
+            SIMPLE_INK
         } else {
-            super::app_theme::SECONDARY_TEXT.gamma_multiply(0.45)
+            super::app_theme::SECONDARY_TEXT.gamma_multiply(0.55)
         };
         ui.painter().rect_filled(rect, 16.0, fill);
         if !on || !enabled {
@@ -2368,7 +2374,7 @@ impl DrillApp {
                     active: spotlight == SimpleGuide::Place && !playing,
                     pulse: hint == Some(SimpleGuide::Place) && !playing,
                     filled: false,
-                    compact: true,
+                    compact: false,
                     time,
                 },
             );
@@ -2391,7 +2397,7 @@ impl DrillApp {
                     active: spotlight == SimpleGuide::Move && !playing,
                     pulse: false,
                     filled: false,
-                    compact: true,
+                    compact: false,
                     time,
                 },
             );
@@ -2449,7 +2455,7 @@ impl DrillApp {
                     active: spotlight == SimpleGuide::NextSet && !playing,
                     pulse: next_pulse,
                     filled: false,
-                    compact: true,
+                    compact: false,
                     time,
                 },
             );
@@ -2492,7 +2498,7 @@ impl DrillApp {
                     active: true,
                     pulse: play_pulse,
                     filled: true,
-                    compact: true,
+                    compact: false,
                     time,
                 },
             );
@@ -2520,7 +2526,7 @@ impl DrillApp {
                     active: self.document.audio.is_some() && !self.simple_mode.song_missing,
                     pulse: false,
                     filled: false,
-                    compact: true,
+                    compact: false,
                     time,
                 },
             );
@@ -2544,7 +2550,7 @@ impl DrillApp {
                     active: false,
                     pulse: false,
                     filled: false,
-                    compact: true,
+                    compact: false,
                     time,
                 },
             );
@@ -2569,7 +2575,7 @@ impl DrillApp {
                     active: false,
                     pulse: false,
                     filled: false,
-                    compact: true,
+                    compact: false,
                     time,
                 },
             );
@@ -2617,7 +2623,7 @@ impl DrillApp {
                     active: false,
                     pulse: false,
                     filled: false,
-                    compact: true,
+                    compact: false,
                     time,
                 },
             );
@@ -2641,7 +2647,7 @@ impl DrillApp {
                     active: false,
                     pulse: false,
                     filled: false,
-                    compact: true,
+                    compact: false,
                     time,
                 },
             );
@@ -2682,15 +2688,30 @@ impl DrillApp {
         ui: &mut egui::Ui,
         tile: PictogramTile<'_>,
     ) -> (egui::Rect, bool) {
-        let height = if tile.compact {
+        let height = if tile.compact || tile.label.is_empty() {
             SIMPLE_TILE.max(SIMPLE_HIT)
         } else {
             SIMPLE_TILE + SIMPLE_LABEL + 8.0
         };
-        let (rect, response) = ui.allocate_exact_size(
-            egui::Vec2::new(tile.width.max(SIMPLE_HIT), height),
-            Sense::click(),
-        );
+        let text_w = if tile.compact || tile.label.is_empty() {
+            0.0
+        } else {
+            ui.painter()
+                .layout_no_wrap(
+                    tile.label.to_owned(),
+                    egui::FontId::proportional(SIMPLE_LABEL),
+                    SIMPLE_INK,
+                )
+                .size()
+                .x
+        };
+        let width = if text_w == 0.0 {
+            tile.width.max(SIMPLE_HIT)
+        } else {
+            tile.width.max(text_w + 18.0).clamp(SIMPLE_HIT, 120.0)
+        };
+        let (rect, response) =
+            ui.allocate_exact_size(egui::Vec2::new(width, height), Sense::click());
         let glow = if tile.pulse {
             0.55 + 0.45 * (tile.time * 3.0).sin().abs()
         } else {
@@ -2770,7 +2791,7 @@ impl DrillApp {
             rect.center() + egui::Vec2::new(0.0, -10.0)
         };
         paint_phone_icon_at(ui.painter(), icon_pos, tile.icon, icon_color, icon_scale);
-        if !tile.compact {
+        if !tile.compact && !tile.label.is_empty() {
             ui.painter().text(
                 rect.center() + egui::Vec2::new(0.0, 24.0),
                 egui::Align2::CENTER_CENTER,
@@ -2797,7 +2818,18 @@ impl DrillApp {
         width: f32,
         enabled: bool,
     ) -> (egui::Rect, bool) {
-        let size = egui::Vec2::new(width.max(SIMPLE_HIT), SIMPLE_TILE.max(SIMPLE_HIT));
+        let text_w = ui
+            .painter()
+            .layout_no_wrap(
+                label.to_owned(),
+                egui::FontId::proportional(SIMPLE_LABEL),
+                SIMPLE_INK,
+            )
+            .size()
+            .x;
+        let width = width.max(text_w + 18.0).clamp(SIMPLE_HIT, 120.0);
+        let height = SIMPLE_TILE + SIMPLE_LABEL + 8.0;
+        let size = egui::Vec2::new(width, height);
         let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
         let holding = enabled && response.is_pointer_button_down_on();
         let progress = self.simple_delete_hold_progress(holding);
@@ -2823,7 +2855,25 @@ impl DrillApp {
         } else {
             Color32::from_rgba_unmultiplied(20, 96, 200, 80)
         };
-        paint_phone_icon_at(ui.painter(), rect.center(), icon, color, 1.35);
+        paint_phone_icon_at(
+            ui.painter(),
+            rect.center() + egui::Vec2::new(0.0, -10.0),
+            icon,
+            color,
+            1.35,
+        );
+        let label_ink = if enabled {
+            SIMPLE_INK
+        } else {
+            super::app_theme::SECONDARY_TEXT.gamma_multiply(0.55)
+        };
+        ui.painter().text(
+            rect.center() + egui::Vec2::new(0.0, 24.0),
+            egui::Align2::CENTER_CENTER,
+            label,
+            egui::FontId::proportional(SIMPLE_LABEL),
+            label_ink,
+        );
         response.clone().on_hover_text(format!("{label}\n{tip}"));
         if holding {
             ui.ctx().request_repaint_after(Duration::from_millis(16));
@@ -5022,7 +5072,7 @@ impl DrillApp {
         let mut open = true;
         let mut copy = false;
         let copied = self.simple_mode.place_sheet_copied;
-        egui::Window::new(i18n::registered(self.locale, "simple-mode.228"))
+        super::app_theme::modal_window(i18n::registered(self.locale, "simple-mode.228"), ctx)
             .id(egui::Id::new("simple-place-sheet"))
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .collapsible(false)
@@ -5071,7 +5121,7 @@ impl DrillApp {
         let mut open = true;
         let mut copy = false;
         let copied = self.simple_mode.show_sheet_copied;
-        egui::Window::new(i18n::registered(self.locale, "simple-mode.277"))
+        super::app_theme::modal_window(i18n::registered(self.locale, "simple-mode.277"), ctx)
             .id(egui::Id::new("simple-show-sheet"))
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .collapsible(false)
@@ -5130,7 +5180,7 @@ impl DrillApp {
         let mut open = true;
         let mut copy = false;
         let copied = self.simple_mode.path_sheet_copied;
-        egui::Window::new(i18n::registered(self.locale, "simple-mode.282"))
+        super::app_theme::modal_window(i18n::registered(self.locale, "simple-mode.282"), ctx)
             .id(egui::Id::new("simple-path-sheet"))
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .collapsible(false)
@@ -5179,7 +5229,7 @@ impl DrillApp {
         } else {
             "simple-mode.294"
         };
-        egui::Window::new(i18n::registered(self.locale, "simple-mode.293"))
+        super::app_theme::modal_window(i18n::registered(self.locale, "simple-mode.293"), ctx)
             .id(egui::Id::new("simple-walk-sheet"))
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .collapsible(false)
@@ -5271,7 +5321,7 @@ impl DrillApp {
         let mut open = true;
         let mut copy = false;
         let copied = self.simple_mode.memo_copied;
-        egui::Window::new(i18n::registered(self.locale, "simple-mode.192"))
+        super::app_theme::modal_window(i18n::registered(self.locale, "simple-mode.192"), ctx)
             .id(egui::Id::new("simple-scene-memo"))
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .collapsible(false)
@@ -5489,15 +5539,22 @@ impl DrillApp {
             1.0
         };
         self.simple_overlay_members(&ctx, field, &mut block);
-        self.simple_overlay_sets(&ctx, field, &mut block);
         self.simple_overlay_chrome(&ctx, field, &mut block);
-        self.simple_overlay_symmetry(&ctx, field, &mut block);
         self.simple_overlay_recovery(&ctx, field, &mut block);
-        self.simple_overlay_song(&ctx, field, &mut block);
-        if self.simple_toolbar_open() {
-            self.simple_overlay_toolbar(&ctx, field, fade, &mut block);
-        } else {
-            self.simple_overlay_toolbar_toggle(&ctx, field, &mut block);
+        // A modal owns the bottom of the window. Hide the floating strips so
+        // they cannot cover the reset row, the key chart, or a sheet.
+        if !self.simple_modal_open() {
+            self.simple_overlay_sets(&ctx, field, &mut block);
+            self.simple_overlay_symmetry(&ctx, field, &mut block);
+            let mut toolbar_top = field.bottom() - 8.0;
+            if self.simple_toolbar_open() {
+                if let Some(rect) = self.simple_overlay_toolbar(&ctx, field, fade, &mut block) {
+                    toolbar_top = rect.top();
+                }
+            } else if let Some(rect) = self.simple_overlay_toolbar_toggle(&ctx, field, &mut block) {
+                toolbar_top = rect.top();
+            }
+            self.simple_overlay_song(&ctx, field, toolbar_top, &mut block);
         }
         self.simple_mode.overlay_block = block;
     }
@@ -5681,7 +5738,7 @@ impl DrillApp {
                                         active: false,
                                         pulse: false,
                                         filled: false,
-                                        compact: true,
+                                        compact: false,
                                         time: 0.0,
                                     },
                                 );
@@ -5755,7 +5812,7 @@ impl DrillApp {
         field: egui::Rect,
         fade: f32,
         block: &mut Option<egui::Rect>,
-    ) {
+    ) -> Option<egui::Rect> {
         let pos = Pos2::new(field.center().x, field.bottom() - 14.0);
         let response = egui::Area::new(egui::Id::new("simple-overlay-toolbar"))
             .order(egui::Order::Foreground)
@@ -5775,6 +5832,7 @@ impl DrillApp {
                     });
             });
         overlay_union(block, response.response.rect);
+        Some(response.response.rect)
     }
 
     fn simple_overlay_toolbar_toggle(
@@ -5782,7 +5840,7 @@ impl DrillApp {
         ctx: &egui::Context,
         field: egui::Rect,
         block: &mut Option<egui::Rect>,
-    ) {
+    ) -> Option<egui::Rect> {
         let pos = Pos2::new(field.center().x, field.bottom() - 14.0);
         let response = egui::Area::new(egui::Id::new("simple-overlay-toolbar-toggle"))
             .order(egui::Order::Foreground)
@@ -5823,6 +5881,7 @@ impl DrillApp {
                     });
             });
         overlay_union(block, response.response.rect);
+        Some(response.response.rect)
     }
 
     #[allow(dead_code)]
@@ -6142,16 +6201,33 @@ impl DrillApp {
 
     /// Song name and sync controls, floating above the toolbar. The field
     /// stays full-window; this pill only steals its own clicks.
+    fn simple_modal_open(&self) -> bool {
+        self.keybindings.settings_open
+            || self.keybindings.cheat_open
+            || self.glossary.open
+            || self.simple_mode.naming
+            || self.simple_mode.memo_open
+            || self.simple_mode.place_sheet_open
+            || self.simple_mode.show_sheet_open
+            || self.simple_mode.path_sheet_open
+            || self.simple_mode.walk_sheet_open
+            || self.show_recent_projects
+            || self.onboarding.show_help
+            || self.onboarding.show_welcome
+            || self.command_palette.is_open()
+    }
+
     fn simple_overlay_song(
         &mut self,
         ctx: &egui::Context,
         field: egui::Rect,
+        toolbar_top: f32,
         block: &mut Option<egui::Rect>,
     ) {
         if self.document.audio.is_none() {
             return;
         }
-        let pos = Pos2::new(field.center().x, field.bottom() - 96.0);
+        let pos = Pos2::new(field.center().x, toolbar_top - 8.0);
         let response = egui::Area::new(egui::Id::new("simple-overlay-song"))
             .order(egui::Order::Foreground)
             .pivot(egui::Align2::CENTER_BOTTOM)
@@ -6188,8 +6264,8 @@ impl DrillApp {
                     egui::RichText::new(
                         i18n::registered(self.locale, "simple-mode.342").replace("{0}", &name),
                     )
-                    .size(12.0)
-                    .color(super::app_theme::SECONDARY_TEXT),
+                    .size(14.0)
+                    .color(SIMPLE_INK),
                 );
             }
             let downbeat_label = i18n::registered(self.locale, "simple-mode.343");
@@ -6217,23 +6293,24 @@ impl DrillApp {
             if downbeat_click {
                 self.simple_mark_downbeat();
             }
+            let earlier_label = i18n::registered(self.locale, "simple-mode.344");
             let earlier_tip = self.key_tip(
                 ui.ctx(),
-                i18n::registered(self.locale, "simple-mode.344"),
+                earlier_label,
                 super::keybindings::Action::NudgeSongEarlier,
             );
             let (earlier, earlier_click) = self.simple_pictogram_tile(
                 ui,
                 PictogramTile {
                     icon: PhoneIcon::Minus,
-                    label: "",
+                    label: earlier_label,
                     tip: &earlier_tip,
                     width: SIMPLE_HIT,
                     enabled: true,
                     active: false,
                     pulse: false,
                     filled: false,
-                    compact: true,
+                    compact: false,
                     time,
                 },
             );
@@ -6241,23 +6318,24 @@ impl DrillApp {
             if earlier_click {
                 self.simple_nudge_song(-1);
             }
+            let later_label = i18n::registered(self.locale, "simple-mode.345");
             let later_tip = self.key_tip(
                 ui.ctx(),
-                i18n::registered(self.locale, "simple-mode.345"),
+                later_label,
                 super::keybindings::Action::NudgeSongLater,
             );
             let (later, later_click) = self.simple_pictogram_tile(
                 ui,
                 PictogramTile {
                     icon: PhoneIcon::Plus,
-                    label: "",
+                    label: later_label,
                     tip: &later_tip,
                     width: SIMPLE_HIT,
                     enabled: true,
                     active: false,
                     pulse: false,
                     filled: false,
-                    compact: true,
+                    compact: false,
                     time,
                 },
             );
@@ -7024,7 +7102,7 @@ impl DrillApp {
         }
         let mut save = false;
         let mut cancel = false;
-        egui::Window::new(i18n::registered(self.locale, "simple-mode.119"))
+        super::app_theme::modal_window(i18n::registered(self.locale, "simple-mode.119"), ctx)
             .id(egui::Id::new("simple-name-sheet"))
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .collapsible(false)
@@ -7359,6 +7437,7 @@ impl DrillApp {
             field_center: Some(self.field_viewport.center),
             field_zoom: self.field_viewport.zoom,
             skip_offscreen: super::cull_offscreen_dots(self.document.performers.len()),
+            extend_grid: true,
             ..drill_render::RenderOptions::default()
         };
         let scene = drill_render::Scene {
@@ -7390,6 +7469,7 @@ impl DrillApp {
             let v = field_map.map(point);
             Pos2::new(rect.left() + v.x, rect.top() + v.y)
         };
+        egui_backend::paint_field_ground(&painter, rect);
         egui_backend::paint_below_dots(&painter, rect.min, &self.display_list);
         self.paint_previous_ghosts(&painter, &to_screen);
         egui_backend::paint_dots_and_above(&painter, rect.min, &self.display_list);
@@ -7560,7 +7640,9 @@ impl DrillApp {
         let shift_held = ui.input(|input| input.modifiers.shift);
         let snap_now = self.document.grid.snap_enabled && !shift_held;
         if let Some(pointer) = response.interact_pointer_pos() {
-            if response.clicked() {
+            if response.double_clicked() && nearest.is_none() {
+                self.field_viewport.reset(&self.document.grid);
+            } else if response.clicked() {
                 let additive = ui.input(|input| {
                     input.modifiers.command || input.modifiers.ctrl || input.modifiers.shift
                 });
