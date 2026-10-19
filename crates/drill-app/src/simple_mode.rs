@@ -1281,7 +1281,7 @@ impl DrillApp {
                 Edit::MovePerformers {
                     set_id: self.document.sets[0].id,
                     performer_ids: performer_ids.clone(),
-                    positions: vec![Point { x: 36.0, y: 30.0 }, Point { x: 48.0, y: 30.0 }],
+                    positions: vec![Point { x: 14.0, y: 18.0 }, Point { x: 22.0, y: 18.0 }],
                 },
                 "qa",
             );
@@ -1290,7 +1290,7 @@ impl DrillApp {
                 Edit::MovePerformers {
                     set_id: self.document.sets[self.current_set].id,
                     performer_ids,
-                    positions: vec![Point { x: 52.0, y: 38.0 }, Point { x: 64.0, y: 38.0 }],
+                    positions: vec![Point { x: 24.0, y: 26.0 }, Point { x: 32.0, y: 26.0 }],
                 },
                 "qa",
             );
