@@ -401,430 +401,14 @@ impl eframe::App for DrillApp {
             return;
         }
         self.restore_full_chrome(ui.ctx());
-        self.show_simple_return_hint(ui);
+        self.prefer_daylight_over_studio(ui.ctx());
+        if self.full_legacy_chrome {
+            self.show_simple_return_hint(ui);
+        }
 
-        if !self.focus_field {
+        if !self.focus_field && self.full_legacy_chrome {
             egui::MenuBar::new().ui(ui, |ui| {
-                ui.menu_button(text(self.locale, Text::File), |ui| {
-                    self.command_menu(ui, CommandMenu::File);
-                    ui.separator();
-                    self.recent_projects.prune_missing();
-                    ui.menu_button(
-                        super::i18n::registered(self.locale, "recent-projects.007"),
-                        |ui| {
-                            let paths = self.recent_projects.paths().to_vec();
-                            if paths.is_empty()
-                                && ui
-                                    .button(super::i18n::registered(
-                                        self.locale,
-                                        "recent-projects.014",
-                                    ))
-                                    .clicked()
-                            {
-                                self.request_new_show();
-                                ui.close();
-                            }
-                            for path in paths {
-                                let name = path
-                                    .file_name()
-                                    .and_then(|name| name.to_str())
-                                    .map(str::to_owned)
-                                    .unwrap_or_else(|| path.to_string_lossy().into_owned());
-                                if ui
-                                    .button(name)
-                                    .on_hover_text(path.display().to_string())
-                                    .clicked()
-                                {
-                                    self.request_open_recent(path);
-                                    ui.close();
-                                }
-                            }
-                            if !self.recent_projects.paths().is_empty() {
-                                ui.separator();
-                                if ui
-                                    .button(super::i18n::registered(
-                                        self.locale,
-                                        "recent-projects.009",
-                                    ))
-                                    .clicked()
-                                {
-                                    self.recent_projects.clear();
-                                    ui.close();
-                                }
-                            }
-                        },
-                    );
-                    if self.underlay_state.texture.is_some() {
-                        let visibility_changed = ui
-                            .checkbox(
-                                &mut self.underlay_state.visible,
-                                super::i18n::registered(self.locale, "app-ui.009"),
-                            )
-                            .changed();
-                        let opacity_changed = ui
-                            .add(
-                                egui::Slider::new(&mut self.underlay_state.opacity, 0.05..=0.85)
-                                    .text(super::i18n::registered(self.locale, "app-ui.010")),
-                            )
-                            .changed();
-                        if (visibility_changed || opacity_changed)
-                            && let Some(mut underlay) = self.document.underlay.clone()
-                        {
-                            underlay.placement.visible = self.underlay_state.visible;
-                            underlay.placement.opacity = self.underlay_state.opacity;
-                            let _ = self.history.execute(
-                                &mut self.document,
-                                Edit::SetImageUnderlay {
-                                    underlay: Some(underlay),
-                                },
-                            );
-                            self.dirty = true;
-                        }
-                        if let Some(mut underlay) = self.document.underlay.clone() {
-                            let mut placement_changed = false;
-                            ui.collapsing(
-                                super::i18n::registered(self.locale, "app-ui.011"),
-                                |ui| {
-                                    ui.horizontal_wrapped(|ui| {
-                                        placement_changed |= ui
-                                            .add(
-                                                egui::DragValue::new(&mut underlay.placement.x)
-                                                    .speed(0.25)
-                                                    .prefix("X "),
-                                            )
-                                            .changed();
-                                        placement_changed |= ui
-                                            .add(
-                                                egui::DragValue::new(&mut underlay.placement.y)
-                                                    .speed(0.25)
-                                                    .prefix("Y "),
-                                            )
-                                            .changed();
-                                        placement_changed |= ui
-                                            .add(
-                                                egui::Slider::new(
-                                                    &mut underlay.placement.scale_x,
-                                                    0.05..=4.0,
-                                                )
-                                                .text(super::i18n::registered(
-                                                    self.locale,
-                                                    "app-ui.012",
-                                                )),
-                                            )
-                                            .changed();
-                                        placement_changed |= ui
-                                            .add(
-                                                egui::Slider::new(
-                                                    &mut underlay.placement.scale_y,
-                                                    0.05..=4.0,
-                                                )
-                                                .text(super::i18n::registered(
-                                                    self.locale,
-                                                    "app-ui.013",
-                                                )),
-                                            )
-                                            .changed();
-                                        let mut degrees =
-                                            underlay.placement.rotation_radians.to_degrees();
-                                        if ui
-                                            .add(
-                                                egui::Slider::new(&mut degrees, -180.0..=180.0)
-                                                    .text(super::i18n::registered(
-                                                        self.locale,
-                                                        "app-ui.014",
-                                                    )),
-                                            )
-                                            .changed()
-                                        {
-                                            underlay.placement.rotation_radians =
-                                                degrees.to_radians();
-                                            placement_changed = true;
-                                        }
-                                    });
-                                    ui.small(super::i18n::registered(self.locale, "app-ui.015"));
-                                },
-                            );
-                            if placement_changed {
-                                let _ = self.history.execute(
-                                    &mut self.document,
-                                    Edit::SetImageUnderlay {
-                                        underlay: Some(underlay),
-                                    },
-                                );
-                                self.dirty = true;
-                            }
-                        }
-                        if ui
-                            .button(super::i18n::registered(self.locale, "app-ui.016"))
-                            .clicked()
-                        {
-                            self.underlay_state.remove();
-                            let _ = self.history.execute(
-                                &mut self.document,
-                                Edit::SetImageUnderlay { underlay: None },
-                            );
-                            self.dirty = true;
-                            ui.close();
-                        }
-                    }
-                    if ui
-                        .button(super::i18n::registered(self.locale, "app-ui.017"))
-                        .clicked()
-                    {
-                        if self.underlay_state.undo() {
-                            self.status = super::i18n::registered(self.locale, "app-ui.018").into();
-                        }
-                        ui.close();
-                    }
-                    ui.checkbox(
-                        &mut self.embed_audio_in_project,
-                        "音源をプロジェクトへ埋め込む",
-                    );
-                });
-                ui.menu_button(text(self.locale, Text::Edit), |ui| {
-                    self.command_menu(ui, CommandMenu::Edit);
-                });
-                ui.menu_button(super::i18n::registered(self.locale, "commands.135"), |ui| {
-                    self.command_menu(ui, CommandMenu::Arrange)
-                });
-                ui.menu_button(super::i18n::registered(self.locale, "app-ui.019"), |ui| {
-                    self.command_menu(ui, CommandMenu::Set);
-                });
-                ui.menu_button(text(self.locale, Text::Playback), |ui| {
-                    if ui
-                        .button(if self.playing {
-                            text(self.locale, Text::Pause)
-                        } else {
-                            text(self.locale, Text::Play)
-                        })
-                        .clicked()
-                    {
-                        self.toggle_playback(ui.ctx());
-                        ui.close();
-                    }
-                    if ui.button(text(self.locale, Text::RangeStart)).clicked() {
-                        self.navigate_to_global_count(self.playback_start);
-                        ui.close();
-                    }
-                    ui.separator();
-                    if ui
-                        .button(super::i18n::registered(self.locale, "app-ui.064"))
-                        .clicked()
-                    {
-                        let start = self.document.global_count(self.current_set, 0.0) as u32;
-                        self.playback_start = start;
-                        self.playback_end = (start
-                            + u32::from(self.document.sets[self.current_set].counts))
-                        .min(self.document.timeline_counts());
-                        ui.close();
-                    }
-                    if ui.button(text(self.locale, Text::WholeShow)).clicked() {
-                        self.playback_start = 0;
-                        self.playback_end = self.document.timeline_counts();
-                        ui.close();
-                    }
-                    ui.checkbox(&mut self.loop_playback, text(self.locale, Text::Loop));
-                });
-                ui.menu_button(text(self.locale, Text::View), |ui| {
-                    if ui
-                        .button(super::i18n::registered(self.locale, "set-navigator.009"))
-                        .clicked()
-                    {
-                        self.set_navigator.open();
-                        ui.close();
-                    }
-                    ui.separator();
-                    ui.label(super::i18n::registered(self.locale, "workspace-preset.007"));
-                    for command in [
-                        UiCommand::WorkspaceDesign,
-                        UiCommand::WorkspaceReview,
-                        UiCommand::WorkspacePresent,
-                    ] {
-                        if ui.button(command.label(self.locale)).clicked() {
-                            self.execute_command(command, ui.ctx());
-                            ui.close();
-                        }
-                    }
-                    ui.separator();
-                    let simple_mode_label = super::i18n::registered(self.locale, "simple-mode.107");
-                    if ui
-                        .checkbox(&mut self.simple_mode.enabled, simple_mode_label)
-                        .changed()
-                    {
-                        let enabled = self.simple_mode.enabled;
-                        self.set_simple_mode(enabled);
-                        ui.close();
-                    }
-                    ui.checkbox(&mut self.show_guidance, text(self.locale, Text::Guidance));
-                    ui.checkbox(
-                        &mut self.show_inspector,
-                        super::i18n::registered(self.locale, "app-ui.074"),
-                    );
-                    let mut show_grid = self.document.grid.show_step_grid;
-                    if ui
-                        .checkbox(&mut show_grid, text(self.locale, Text::StepGrid))
-                        .changed()
-                    {
-                        let mut grid = self.document.grid.clone();
-                        grid.show_step_grid = show_grid;
-                        if self
-                            .history
-                            .execute(
-                                &mut self.document,
-                                Edit::ReplaceGrid {
-                                    grid,
-                                    scale_positions: false,
-                                },
-                            )
-                            .is_ok()
-                        {
-                            self.dirty = true;
-                        }
-                    }
-                    ui.checkbox(
-                        &mut self.show_field_marks,
-                        super::i18n::registered(self.locale, "full-mode.037"),
-                    )
-                    .on_hover_text(super::i18n::registered(self.locale, "full-mode.038"));
-                    ui.checkbox(
-                        &mut self.show_dot_labels,
-                        super::i18n::registered(self.locale, "full-mode.039"),
-                    )
-                    .on_hover_text(super::i18n::registered(self.locale, "full-mode.040"));
-                    ui.checkbox(
-                        &mut self.labels_while_playing,
-                        super::i18n::registered(self.locale, "full-mode.041"),
-                    )
-                    .on_hover_text(super::i18n::registered(self.locale, "full-mode.042"));
-                    ui.separator();
-                    // App chrome only: the field view keeps its own
-                    // print-styled drill_render::Theme regardless of this
-                    // choice (see app_theme.rs's module doc comment).
-                    ui.menu_button(super::i18n::registered(self.locale, "app-ui.162"), |ui| {
-                        for candidate in app_theme::AppTheme::ALL {
-                            let outgoing = self.app_theme;
-                            if ui
-                                .radio_value(
-                                    &mut self.app_theme,
-                                    candidate,
-                                    candidate.label(self.locale),
-                                )
-                                .changed()
-                            {
-                                // Capture the theme being left *before*
-                                // `apply` overwrites `Visuals`, so the fade
-                                // veil is painted in the color the user is
-                                // looking at right now, not the one they're
-                                // about to see.
-                                self.theme_fade.begin(outgoing);
-                                self.app_theme.apply(ui.ctx());
-                                self.app_theme.persist();
-                                ui.close();
-                            }
-                        }
-                    });
-                });
-                ui.menu_button(super::i18n::registered(self.locale, "app-ui.020"), |ui| {
-                    self.command_menu(ui, CommandMenu::Workspace);
-                    ui.separator();
-                    if ui
-                        .button(super::i18n::registered(self.locale, "app-ui.021"))
-                        .clicked()
-                    {
-                        self.plugin_state.open = true;
-                        ui.close();
-                    }
-                    if ui
-                        .button(super::i18n::registered(self.locale, "app-ui.022"))
-                        .clicked()
-                    {
-                        self.subset_snapshot_state.open = true;
-                        ui.close();
-                    }
-                });
-                ui.menu_button(text(self.locale, Text::Help), |ui| {
-                    ui.menu_button(text(self.locale, Text::Language), |ui| {
-                        ui.selectable_value(
-                            &mut self.locale,
-                            Locale::Ja,
-                            text(Locale::Ja, Text::Japanese),
-                        );
-                        ui.selectable_value(
-                            &mut self.locale,
-                            Locale::En,
-                            text(Locale::En, Text::English),
-                        );
-                    });
-                    ui.separator();
-                    if ui.button(text(self.locale, Text::GettingStarted)).clicked() {
-                        self.onboarding.show_help = true;
-                        ui.close();
-                    }
-                    if ui
-                        .button(super::i18n::registered(self.locale, "rehearsal.009"))
-                        .clicked()
-                    {
-                        self.keybindings.cheat_open = true;
-                        ui.close();
-                    }
-                    if ui
-                        .button(super::i18n::registered(self.locale, "shortcuts.020"))
-                        .clicked()
-                    {
-                        self.keybindings.settings_open = true;
-                        ui.close();
-                    }
-                    if ui
-                        .button(super::i18n::registered(self.locale, "glossary.011"))
-                        .clicked()
-                    {
-                        self.glossary.open();
-                        ui.close();
-                    }
-                    if ui
-                        .button(super::i18n::registered(self.locale, "app-ui.065"))
-                        .clicked()
-                    {
-                        self.onboarding.show_welcome = true;
-                        ui.close();
-                    }
-                    ui.separator();
-                    let mut beta =
-                        self.update_state.preferences.channel == drill_updater::Channel::Beta;
-                    if ui
-                        .checkbox(
-                            &mut beta,
-                            super::i18n::registered(self.locale, "app-ui.023"),
-                        )
-                        .changed()
-                    {
-                        self.update_state.set_beta(beta);
-                    }
-                    if ui
-                        .button(super::i18n::registered(self.locale, "app-ui.024"))
-                        .clicked()
-                    {
-                        // A network transport is intentionally not present yet. The
-                        // background task reports offline without disturbing work.
-                        let (month, day) = utc_month_day();
-                        self.update_state.check(None, month, day);
-                        ui.close();
-                    }
-                    let update_status = self.update_state.status.text(self.locale);
-                    if !update_status.is_empty() {
-                        ui.label(update_status);
-                    }
-                    if ui
-                        .button(UiCommand::LegalNotices.label(self.locale))
-                        .clicked()
-                    {
-                        self.execute_command(UiCommand::LegalNotices, ui.ctx());
-                        ui.close();
-                    }
-                    ui.separator();
-                    ui.label(super::i18n::registered(self.locale, "app-ui.066"));
-                    ui.label(super::i18n::registered(self.locale, "app-ui.067"));
-                });
+                self.fill_editor_menus(ui);
                 let toolbar_label = self.toolbar_toggle_label();
                 if ui
                     .button(toolbar_label)
@@ -878,7 +462,7 @@ impl eframe::App for DrillApp {
                         ));
                     });
                 });
-        } else if !self.full_toolbar_collapsed {
+        } else if self.full_legacy_chrome && !self.full_toolbar_collapsed {
             // Two rows, then scroll. Wrapping without a cap pushed the field
             // below an 800px window; a single clipped row hid the labels.
             egui::ScrollArea::vertical()
@@ -1266,7 +850,7 @@ impl eframe::App for DrillApp {
                     });
                 });
         }
-        if !self.selected.is_empty() {
+        if !self.selected.is_empty() && self.full_legacy_chrome {
             let selected_count = self.selected.len();
             egui::ScrollArea::horizontal()
                 .id_salt("full-selection-bar")
@@ -1530,7 +1114,7 @@ impl eframe::App for DrillApp {
                         });
                 });
         }
-        if self.show_guidance {
+        if self.show_guidance && self.full_legacy_chrome {
             egui::Frame::new()
                 .fill(ui.visuals().faint_bg_color)
                 .inner_margin(8)
@@ -1558,7 +1142,9 @@ impl eframe::App for DrillApp {
         }
         self.onboarding
             .observe(!self.selected.is_empty(), self.dirty, self.ever_played);
-        if let Some((step, message)) = self.onboarding.coach_message(self.locale) {
+        if self.full_legacy_chrome
+            && let Some((step, message)) = self.onboarding.coach_message(self.locale)
+        {
             egui::Frame::new()
                 .fill(ui.visuals().faint_bg_color)
                 .inner_margin(8)
@@ -1662,300 +1248,315 @@ impl eframe::App for DrillApp {
                 },
             );
         }
-        let total_counts = self.document.timeline_counts();
-        // The timeline stays reachable, but it must not push the field past
-        // the bottom of the window. The field row below takes whatever is left.
-        let lower_remaining = ui.available_height();
-        let lower_chrome = (lower_remaining * 0.28)
-            .clamp(88.0, 156.0)
-            .min(lower_remaining * 0.34);
-        egui::ScrollArea::vertical()
-            .id_salt("full-lower-chrome")
-            .max_height(lower_chrome)
-            .auto_shrink([false, true])
-            .show(ui, |ui| {
-                egui::Frame::new()
-                    .fill(ui.visuals().faint_bg_color)
-                    .inner_margin(8)
-                    .show(ui, |ui| {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(
-                                egui::RichText::new(super::i18n::registered(
-                                    self.locale,
-                                    "app-ui.049",
-                                ))
-                                .strong(),
-                            );
-                            if ui
-                                .button(super::i18n::registered(self.locale, "app-ui.050"))
-                                .clicked()
-                            {
-                                self.playback_start =
-                                    self.document.global_count(self.current_set, 0.0) as u32;
-                                self.playback_end = (self.playback_start
-                                    + u32::from(self.document.sets[self.current_set].counts))
-                                .min(total_counts);
-                            }
-                            if ui
-                                .button(super::i18n::registered(self.locale, "app-ui.051"))
-                                .clicked()
-                            {
-                                self.playback_start = 0;
-                                self.playback_end = total_counts;
-                            }
-                            let current_global = self
-                                .document
-                                .global_count(self.current_set, self.count_position)
-                                .round() as u32;
-                            if ui
-                                .button(super::i18n::registered(self.locale, "app-ui.052"))
-                                .on_hover_text(super::i18n::registered(self.locale, "app-ui.111"))
-                                .clicked()
-                            {
-                                self.playback_start =
-                                    current_global.min(self.playback_end.saturating_sub(1));
-                            }
-                            if ui
-                                .button(super::i18n::registered(self.locale, "app-ui.053"))
-                                .on_hover_text(super::i18n::registered(self.locale, "app-ui.112"))
-                                .clicked()
-                            {
-                                self.playback_end = current_global
-                                    .max(self.playback_start + 1)
+        if self.full_legacy_chrome {
+            let total_counts = self.document.timeline_counts();
+            // The timeline stays reachable, but it must not push the field past
+            // the bottom of the window. The field row below takes whatever is left.
+            let lower_remaining = ui.available_height();
+            let lower_chrome = (lower_remaining * 0.28)
+                .clamp(88.0, 156.0)
+                .min(lower_remaining * 0.34);
+            egui::ScrollArea::vertical()
+                .id_salt("full-lower-chrome")
+                .max_height(lower_chrome)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    egui::Frame::new()
+                        .fill(ui.visuals().faint_bg_color)
+                        .inner_margin(8)
+                        .show(ui, |ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(
+                                    egui::RichText::new(super::i18n::registered(
+                                        self.locale,
+                                        "app-ui.049",
+                                    ))
+                                    .strong(),
+                                );
+                                if ui
+                                    .button(super::i18n::registered(self.locale, "app-ui.050"))
+                                    .clicked()
+                                {
+                                    self.playback_start =
+                                        self.document.global_count(self.current_set, 0.0) as u32;
+                                    self.playback_end = (self.playback_start
+                                        + u32::from(self.document.sets[self.current_set].counts))
                                     .min(total_counts);
-                            }
-                            ui.checkbox(
-                                &mut self.loop_playback,
-                                super::i18n::registered(self.locale, "app-ui.054"),
+                                }
+                                if ui
+                                    .button(super::i18n::registered(self.locale, "app-ui.051"))
+                                    .clicked()
+                                {
+                                    self.playback_start = 0;
+                                    self.playback_end = total_counts;
+                                }
+                                let current_global =
+                                    self.document
+                                        .global_count(self.current_set, self.count_position)
+                                        .round() as u32;
+                                if ui
+                                    .button(super::i18n::registered(self.locale, "app-ui.052"))
+                                    .on_hover_text(super::i18n::registered(
+                                        self.locale,
+                                        "app-ui.111",
+                                    ))
+                                    .clicked()
+                                {
+                                    self.playback_start =
+                                        current_global.min(self.playback_end.saturating_sub(1));
+                                }
+                                if ui
+                                    .button(super::i18n::registered(self.locale, "app-ui.053"))
+                                    .on_hover_text(super::i18n::registered(
+                                        self.locale,
+                                        "app-ui.112",
+                                    ))
+                                    .clicked()
+                                {
+                                    self.playback_end = current_global
+                                        .max(self.playback_start + 1)
+                                        .min(total_counts);
+                                }
+                                ui.checkbox(
+                                    &mut self.loop_playback,
+                                    super::i18n::registered(self.locale, "app-ui.054"),
+                                );
+                            });
+                            let range = super::playback_range_summary(
+                                &self.document,
+                                self.playback_start,
+                                self.playback_end,
                             );
+                            let count_label = super::i18n::registered(self.locale, "app-ui.114");
+                            ui.horizontal_wrapped(|ui| {
+                                ui.small(format!(
+                                    "{}: {} · {} {}",
+                                    super::i18n::registered(self.locale, "app-ui.113"),
+                                    range.start_set,
+                                    count_label,
+                                    range.start_count,
+                                ));
+                                ui.separator();
+                                ui.small(format!(
+                                    "{}: {} · {} {}",
+                                    super::i18n::registered(self.locale, "app-ui.115"),
+                                    range.end_set,
+                                    count_label,
+                                    range.end_count,
+                                ));
+                                ui.separator();
+                                ui.small(format!(
+                                    "{}: {} {}",
+                                    super::i18n::registered(self.locale, "app-ui.116"),
+                                    range.length,
+                                    super::i18n::registered(self.locale, "app-ui.117"),
+                                ));
+                            });
+                            ui.small(super::i18n::registered(self.locale, "app-ui.118"));
                         });
-                        let range = super::playback_range_summary(
-                            &self.document,
-                            self.playback_start,
-                            self.playback_end,
+                    self.show_timeline_playback_bar(ui);
+                    self.show_set_card_strip(ui);
+                    let current_global = self
+                        .document
+                        .global_count(self.current_set, self.count_position);
+                    // Follow used to `center_on` the frame the playhead crossed the
+                    // margin, which snaps the whole track sideways at the exact moment
+                    // the user is watching it move. Now it only sets a target and
+                    // `advance_view_motion` eases toward it. Re-evaluating the margin
+                    // every frame (rather than latching the first target) means the
+                    // recentre tracks the live playhead while it is still outside the
+                    // margin, then coasts to a stop once it is back inside.
+                    if self.timeline_follow
+                        && self.playing
+                        && !self
+                            .timeline_view
+                            .contains_with_margin(current_global, 0.08)
+                    {
+                        self.timeline_follow_glide = Some(
+                            self.timeline_view
+                                .settled_center_start(current_global, total_counts),
                         );
-                        let count_label = super::i18n::registered(self.locale, "app-ui.114");
-                        ui.horizontal_wrapped(|ui| {
-                            ui.small(format!(
-                                "{}: {} · {} {}",
-                                super::i18n::registered(self.locale, "app-ui.113"),
-                                range.start_set,
-                                count_label,
-                                range.start_count,
-                            ));
-                            ui.separator();
-                            ui.small(format!(
-                                "{}: {} · {} {}",
-                                super::i18n::registered(self.locale, "app-ui.115"),
-                                range.end_set,
-                                count_label,
-                                range.end_count,
-                            ));
-                            ui.separator();
-                            ui.small(format!(
-                                "{}: {} {}",
-                                super::i18n::registered(self.locale, "app-ui.116"),
-                                range.length,
-                                super::i18n::registered(self.locale, "app-ui.117"),
-                            ));
+                    }
+                    ui.horizontal(|ui| {
+                        ui.strong(super::i18n::registered(self.locale, "app-ui.055"));
+                        let zoom_out = ui.button("−");
+                        zoom_out.widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::WidgetType::Button,
+                                true,
+                                super::i18n::registered(self.locale, "app-ui.056"),
+                            )
                         });
-                        ui.small(super::i18n::registered(self.locale, "app-ui.118"));
-                    });
-                self.show_timeline_playback_bar(ui);
-                self.show_set_card_strip(ui);
-                let current_global = self
-                    .document
-                    .global_count(self.current_set, self.count_position);
-                // Follow used to `center_on` the frame the playhead crossed the
-                // margin, which snaps the whole track sideways at the exact moment
-                // the user is watching it move. Now it only sets a target and
-                // `advance_view_motion` eases toward it. Re-evaluating the margin
-                // every frame (rather than latching the first target) means the
-                // recentre tracks the live playhead while it is still outside the
-                // margin, then coasts to a stop once it is back inside.
-                if self.timeline_follow
-                    && self.playing
-                    && !self
-                        .timeline_view
-                        .contains_with_margin(current_global, 0.08)
-                {
-                    self.timeline_follow_glide = Some(
-                        self.timeline_view
-                            .settled_center_start(current_global, total_counts),
-                    );
-                }
-                ui.horizontal(|ui| {
-                    ui.strong(super::i18n::registered(self.locale, "app-ui.055"));
-                    let zoom_out = ui.button("−");
-                    zoom_out.widget_info(|| {
-                        egui::WidgetInfo::labeled(
-                            egui::WidgetType::Button,
-                            true,
-                            super::i18n::registered(self.locale, "app-ui.056"),
-                        )
-                    });
-                    if zoom_out
-                        .on_hover_text(super::i18n::registered(self.locale, "app-ui.057"))
-                        .clicked()
-                    {
-                        self.timeline_view
-                            .zoom_at(1.5, current_global, total_counts);
-                    }
-                    let zoom_in = ui.button("＋");
-                    zoom_in.widget_info(|| {
-                        egui::WidgetInfo::labeled(
-                            egui::WidgetType::Button,
-                            true,
-                            super::i18n::registered(self.locale, "app-ui.058"),
-                        )
-                    });
-                    if zoom_in
-                        .on_hover_text(super::i18n::registered(self.locale, "app-ui.059"))
-                        .clicked()
-                    {
-                        self.timeline_view
-                            .zoom_at(2.0 / 3.0, current_global, total_counts);
-                    }
-                    if ui
-                        .button(super::i18n::registered(self.locale, "app-ui.060"))
-                        .clicked()
-                    {
-                        self.timeline_view = TimelineViewport::fit(total_counts);
-                    }
-                    if ui
-                        .button(super::i18n::registered(self.locale, "app-ui.061"))
-                        .clicked()
-                    {
-                        self.timeline_view = TimelineViewport {
-                            start: self.playback_start as f32,
-                            span: self.playback_end.saturating_sub(self.playback_start).max(1)
-                                as f32,
-                        };
-                        self.timeline_view.normalize(total_counts);
-                    }
-                    ui.checkbox(
-                        &mut self.timeline_follow,
-                        super::i18n::registered(self.locale, "app-ui.062"),
-                    );
-                    ui.small(format!(
+                        if zoom_out
+                            .on_hover_text(super::i18n::registered(self.locale, "app-ui.057"))
+                            .clicked()
+                        {
+                            self.timeline_view
+                                .zoom_at(1.5, current_global, total_counts);
+                        }
+                        let zoom_in = ui.button("＋");
+                        zoom_in.widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::WidgetType::Button,
+                                true,
+                                super::i18n::registered(self.locale, "app-ui.058"),
+                            )
+                        });
+                        if zoom_in
+                            .on_hover_text(super::i18n::registered(self.locale, "app-ui.059"))
+                            .clicked()
+                        {
+                            self.timeline_view
+                                .zoom_at(2.0 / 3.0, current_global, total_counts);
+                        }
+                        if ui
+                            .button(super::i18n::registered(self.locale, "app-ui.060"))
+                            .clicked()
+                        {
+                            self.timeline_view = TimelineViewport::fit(total_counts);
+                        }
+                        if ui
+                            .button(super::i18n::registered(self.locale, "app-ui.061"))
+                            .clicked()
+                        {
+                            self.timeline_view = TimelineViewport {
+                                start: self.playback_start as f32,
+                                span: self.playback_end.saturating_sub(self.playback_start).max(1)
+                                    as f32,
+                            };
+                            self.timeline_view.normalize(total_counts);
+                        }
+                        ui.checkbox(
+                            &mut self.timeline_follow,
+                            super::i18n::registered(self.locale, "app-ui.062"),
+                        );
+                        ui.small(format!(
                 "表示 {:.0}–{:.0} / {} · Ctrl+ホイール: 拡大縮小 · ホイール/中ドラッグ: 移動",
                 self.timeline_view.start,
                 self.timeline_view.start + self.timeline_view.span,
                 total_counts
             ));
-                });
-                // The NOW line glides with the field, so a set jump moves one playhead
-                // across two views rather than teleporting each of them separately.
-                let (playhead_set, playhead_count) = self.render_playhead();
-                let timeline_change = draw_count_track(
-                    ui,
-                    &self.document,
-                    playhead_set,
-                    playhead_count,
-                    self.playback_start,
-                    self.playback_end,
-                    &mut self.timeline_view,
-                    self.locale,
-                    self.presence.set_marks(),
-                );
-                if let Some((start, end)) = timeline_change.range {
-                    self.playback_start = start;
-                    self.playback_end = end;
-                }
-                if timeline_change.viewport_interacted {
-                    self.timeline_follow = false;
-                }
-                if let Some(edit) = timeline_change.marker_edit {
-                    self.execute_edit(edit, super::i18n::registered(self.locale, "app-ui.109"));
-                }
-                if let Some((set_index, local_count)) = timeline_change.seek {
-                    self.scrub_to(set_index, local_count);
-                    // Performer identity is stable across sets, so seeking the count
-                    // track keeps the current working group intact.
-                }
-                // A quiet, persistent desktop status strip. It is rendered before the
-                // canvas claims the remaining space, so it is available even when the
-                // inspector is hidden or the field fills the window.
-                ui.separator();
-                ui.horizontal_wrapped(|ui| {
-                    let saved = if self.project_state.is_saving() {
-                        "document-feedback.002"
-                    } else if self.dirty {
-                        "document-feedback.004"
-                    } else {
-                        "document-feedback.003"
-                    };
-                    let color = if self.project_state.is_saving() {
-                        Color32::from_rgb(110, 183, 255)
-                    } else if self.dirty {
-                        Color32::from_rgb(255, 190, 82)
-                    } else {
-                        Color32::from_rgb(112, 210, 150)
-                    };
-                    ui.colored_label(color, super::i18n::registered(self.locale, saved));
-                    ui.separator();
-                    let set_name = self
-                        .document
-                        .sets
-                        .get(self.current_set)
-                        .map(|set| set.name.as_str())
-                        .unwrap_or("—");
-                    ui.label(format!(
-                        "{}: {}",
-                        super::i18n::registered(self.locale, "app-ui.105"),
-                        set_name
-                    ));
-                    ui.label(format!(
-                        "{} {:.2}",
-                        super::i18n::registered(self.locale, "app-ui.106"),
-                        self.count_position
-                    ));
-                    ui.label(format!(
-                        "{} {}",
-                        self.selected.len(),
-                        super::i18n::registered(self.locale, "app-ui.107")
-                    ));
-                    if !self.locked_performers.is_empty() || !self.hidden_performers.is_empty() {
-                        let filter_label = format!(
-                            "{}: {} {} · {} {}",
-                            super::i18n::registered(self.locale, "app-ui.147"),
-                            self.locked_performers.len(),
-                            super::i18n::registered(self.locale, "app-ui.148"),
-                            self.hidden_performers.len(),
-                            super::i18n::registered(self.locale, "app-ui.149"),
-                        );
-                        if ui
-                            .small_button(filter_label)
-                            .on_hover_text(super::i18n::registered(self.locale, "app-ui.150"))
-                            .clicked()
-                        {
-                            self.show_inspector = true;
-                            self.workspace_focus = Some(WorkspaceFocus::Performer);
-                        }
-                        if !self.last_filtered_performers.is_empty()
-                            && ui
-                                .small_button(super::i18n::registered(self.locale, "app-ui.153"))
-                                .on_hover_text(super::i18n::registered(self.locale, "app-ui.154"))
-                                .clicked()
-                        {
-                            let restored = self.restore_last_filtered_performers();
-                            self.status = format!(
-                                "{} {}",
-                                restored,
-                                super::i18n::registered(self.locale, "app-ui.155")
-                            );
-                        }
+                    });
+                    // The NOW line glides with the field, so a set jump moves one playhead
+                    // across two views rather than teleporting each of them separately.
+                    let (playhead_set, playhead_count) = self.render_playhead();
+                    let timeline_change = draw_count_track(
+                        ui,
+                        &self.document,
+                        playhead_set,
+                        playhead_count,
+                        self.playback_start,
+                        self.playback_end,
+                        &mut self.timeline_view,
+                        self.locale,
+                        self.presence.set_marks(),
+                    );
+                    if let Some((start, end)) = timeline_change.range {
+                        self.playback_start = start;
+                        self.playback_end = end;
                     }
+                    if timeline_change.viewport_interacted {
+                        self.timeline_follow = false;
+                    }
+                    if let Some(edit) = timeline_change.marker_edit {
+                        self.execute_edit(edit, super::i18n::registered(self.locale, "app-ui.109"));
+                    }
+                    if let Some((set_index, local_count)) = timeline_change.seek {
+                        self.scrub_to(set_index, local_count);
+                        // Performer identity is stable across sets, so seeking the count
+                        // track keeps the current working group intact.
+                    }
+                    // A quiet, persistent desktop status strip. It is rendered before the
+                    // canvas claims the remaining space, so it is available even when the
+                    // inspector is hidden or the field fills the window.
                     ui.separator();
-                    ui.small(format!(
-                        "{}: {}",
-                        super::i18n::registered(self.locale, "app-ui.108"),
-                        self.status
-                    ));
+                    ui.horizontal_wrapped(|ui| {
+                        let saved = if self.project_state.is_saving() {
+                            "document-feedback.002"
+                        } else if self.dirty {
+                            "document-feedback.004"
+                        } else {
+                            "document-feedback.003"
+                        };
+                        let color = if self.project_state.is_saving() {
+                            Color32::from_rgb(110, 183, 255)
+                        } else if self.dirty {
+                            Color32::from_rgb(255, 190, 82)
+                        } else {
+                            Color32::from_rgb(112, 210, 150)
+                        };
+                        ui.colored_label(color, super::i18n::registered(self.locale, saved));
+                        ui.separator();
+                        let set_name = self
+                            .document
+                            .sets
+                            .get(self.current_set)
+                            .map(|set| set.name.as_str())
+                            .unwrap_or("—");
+                        ui.label(format!(
+                            "{}: {}",
+                            super::i18n::registered(self.locale, "app-ui.105"),
+                            set_name
+                        ));
+                        ui.label(format!(
+                            "{} {:.2}",
+                            super::i18n::registered(self.locale, "app-ui.106"),
+                            self.count_position
+                        ));
+                        ui.label(format!(
+                            "{} {}",
+                            self.selected.len(),
+                            super::i18n::registered(self.locale, "app-ui.107")
+                        ));
+                        if !self.locked_performers.is_empty() || !self.hidden_performers.is_empty()
+                        {
+                            let filter_label = format!(
+                                "{}: {} {} · {} {}",
+                                super::i18n::registered(self.locale, "app-ui.147"),
+                                self.locked_performers.len(),
+                                super::i18n::registered(self.locale, "app-ui.148"),
+                                self.hidden_performers.len(),
+                                super::i18n::registered(self.locale, "app-ui.149"),
+                            );
+                            if ui
+                                .small_button(filter_label)
+                                .on_hover_text(super::i18n::registered(self.locale, "app-ui.150"))
+                                .clicked()
+                            {
+                                self.show_inspector = true;
+                                self.workspace_focus = Some(WorkspaceFocus::Performer);
+                            }
+                            if !self.last_filtered_performers.is_empty()
+                                && ui
+                                    .small_button(super::i18n::registered(
+                                        self.locale,
+                                        "app-ui.153",
+                                    ))
+                                    .on_hover_text(super::i18n::registered(
+                                        self.locale,
+                                        "app-ui.154",
+                                    ))
+                                    .clicked()
+                            {
+                                let restored = self.restore_last_filtered_performers();
+                                self.status = format!(
+                                    "{} {}",
+                                    restored,
+                                    super::i18n::registered(self.locale, "app-ui.155")
+                                );
+                            }
+                        }
+                        ui.separator();
+                        ui.small(format!(
+                            "{}: {}",
+                            super::i18n::registered(self.locale, "app-ui.108"),
+                            self.status
+                        ));
+                    });
                 });
-            });
+        }
         ui.horizontal_top(|ui| {
-            if self.show_inspector && !self.focus_field {
+            if self.show_inspector && !self.focus_field && self.full_legacy_chrome {
                 // The inspector used to sit in this horizontal row and grow
                 // with its widest control, which left the field a narrow
                 // strip. Keep it a fixed column so the canvas gets the rest.
@@ -2170,78 +1771,80 @@ impl eframe::App for DrillApp {
                         && self.drag_before.is_none()
                         && self.marquee_origin.is_none());
                 let pointer_gesture_taken = panning || marking_gesture;
-                egui::Area::new("field-navigation-controls".into())
-                    .order(egui::Order::Foreground)
-                    .fixed_pos(rect.left_top() + Vec2::new(12.0, 10.0))
-                    .show(ui.ctx(), |ui| {
-                        egui::Frame::popup(ui.style()).show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                if ui
-                                    .small_button(super::i18n::registered(
-                                        self.locale,
-                                        "app-ui.124",
-                                    ))
-                                    .on_hover_text(super::i18n::registered(
-                                        self.locale,
-                                        "app-ui.125",
-                                    ))
-                                    .clicked()
-                                {
-                                    self.field_viewport.reset(&self.document.grid);
-                                }
-                                if ui
-                                    .add_enabled(
-                                        !self.selected.is_empty(),
-                                        egui::Button::new(super::i18n::registered(
+                if self.full_legacy_chrome {
+                    egui::Area::new("field-navigation-controls".into())
+                        .order(egui::Order::Foreground)
+                        .fixed_pos(rect.left_top() + Vec2::new(12.0, 10.0))
+                        .show(ui.ctx(), |ui| {
+                            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    if ui
+                                        .small_button(super::i18n::registered(
                                             self.locale,
-                                            "app-ui.126",
+                                            "app-ui.124",
                                         ))
-                                        .small(),
-                                    )
-                                    .on_hover_text(super::i18n::registered(
-                                        self.locale,
-                                        "app-ui.127",
-                                    ))
-                                    .clicked()
-                                {
-                                    let (x, y, count) = self.selected.iter().fold(
-                                        (0.0, 0.0, 0_u32),
-                                        |(x, y, n), &index| {
-                                            let point = self.frame_positions[index];
-                                            (x + point.x, y + point.y, n + 1)
-                                        },
-                                    );
-                                    if count > 0 {
-                                        self.field_viewport.center = Point {
-                                            x: x / count as f32,
-                                            y: y / count as f32,
-                                        };
-                                        self.field_viewport.stop_glide();
-                                        self.field_viewport
-                                            .clamp_center(&self.document.grid, viewport_size);
+                                        .on_hover_text(super::i18n::registered(
+                                            self.locale,
+                                            "app-ui.125",
+                                        ))
+                                        .clicked()
+                                    {
+                                        self.field_viewport.reset(&self.document.grid);
                                     }
-                                }
-                                if ui
-                                    .add_enabled(
-                                        !self.selected.is_empty(),
-                                        egui::Button::new(super::i18n::registered(
+                                    if ui
+                                        .add_enabled(
+                                            !self.selected.is_empty(),
+                                            egui::Button::new(super::i18n::registered(
+                                                self.locale,
+                                                "app-ui.126",
+                                            ))
+                                            .small(),
+                                        )
+                                        .on_hover_text(super::i18n::registered(
                                             self.locale,
-                                            "full-mode.082",
+                                            "app-ui.127",
                                         ))
-                                        .small(),
-                                    )
-                                    .on_hover_text(super::i18n::registered(
-                                        self.locale,
-                                        "full-mode.083",
-                                    ))
-                                    .clicked()
-                                {
-                                    self.zoom_to_selection(viewport_size);
-                                }
+                                        .clicked()
+                                    {
+                                        let (x, y, count) = self.selected.iter().fold(
+                                            (0.0, 0.0, 0_u32),
+                                            |(x, y, n), &index| {
+                                                let point = self.frame_positions[index];
+                                                (x + point.x, y + point.y, n + 1)
+                                            },
+                                        );
+                                        if count > 0 {
+                                            self.field_viewport.center = Point {
+                                                x: x / count as f32,
+                                                y: y / count as f32,
+                                            };
+                                            self.field_viewport.stop_glide();
+                                            self.field_viewport
+                                                .clamp_center(&self.document.grid, viewport_size);
+                                        }
+                                    }
+                                    if ui
+                                        .add_enabled(
+                                            !self.selected.is_empty(),
+                                            egui::Button::new(super::i18n::registered(
+                                                self.locale,
+                                                "full-mode.082",
+                                            ))
+                                            .small(),
+                                        )
+                                        .on_hover_text(super::i18n::registered(
+                                            self.locale,
+                                            "full-mode.083",
+                                        ))
+                                        .clicked()
+                                    {
+                                        self.zoom_to_selection(viewport_size);
+                                    }
+                                });
+                                ui.small(super::i18n::registered(self.locale, "core-edit.009"));
                             });
-                            ui.small(super::i18n::registered(self.locale, "core-edit.009"));
                         });
-                    });
+                }
                 let hide_labels = super::hide_labels_for_playback(
                     self.playing,
                     self.document.performers.len(),
@@ -3100,6 +2703,9 @@ impl eframe::App for DrillApp {
                 self.field_marking_menu(ui, &response);
             }
         });
+        if !self.full_legacy_chrome && !self.focus_field {
+            self.show_full_chrome(ui, set_counts);
+        }
         self.show_section_manager(ui.ctx());
         self.show_subset_snapshot_workspace(ui.ctx());
         self.show_print_workspace(ui.ctx());
@@ -3132,7 +2738,399 @@ impl eframe::App for DrillApp {
 }
 
 impl DrillApp {
-    fn show_playback_speed_presets(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn fill_editor_menus(&mut self, ui: &mut egui::Ui) {
+        ui.menu_button(text(self.locale, Text::File), |ui| {
+            self.command_menu(ui, CommandMenu::File);
+            ui.separator();
+            self.recent_projects.prune_missing();
+            ui.menu_button(
+                super::i18n::registered(self.locale, "recent-projects.007"),
+                |ui| {
+                    let paths = self.recent_projects.paths().to_vec();
+                    if paths.is_empty()
+                        && ui
+                            .button(super::i18n::registered(self.locale, "recent-projects.014"))
+                            .clicked()
+                    {
+                        self.request_new_show();
+                        ui.close();
+                    }
+                    for path in paths {
+                        let name = path
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| path.to_string_lossy().into_owned());
+                        if ui
+                            .button(name)
+                            .on_hover_text(path.display().to_string())
+                            .clicked()
+                        {
+                            self.request_open_recent(path);
+                            ui.close();
+                        }
+                    }
+                    if !self.recent_projects.paths().is_empty() {
+                        ui.separator();
+                        if ui
+                            .button(super::i18n::registered(self.locale, "recent-projects.009"))
+                            .clicked()
+                        {
+                            self.recent_projects.clear();
+                            ui.close();
+                        }
+                    }
+                },
+            );
+            if self.underlay_state.texture.is_some() {
+                let visibility_changed = ui
+                    .checkbox(
+                        &mut self.underlay_state.visible,
+                        super::i18n::registered(self.locale, "app-ui.009"),
+                    )
+                    .changed();
+                let opacity_changed = ui
+                    .add(
+                        egui::Slider::new(&mut self.underlay_state.opacity, 0.05..=0.85)
+                            .text(super::i18n::registered(self.locale, "app-ui.010")),
+                    )
+                    .changed();
+                if (visibility_changed || opacity_changed)
+                    && let Some(mut underlay) = self.document.underlay.clone()
+                {
+                    underlay.placement.visible = self.underlay_state.visible;
+                    underlay.placement.opacity = self.underlay_state.opacity;
+                    let _ = self.history.execute(
+                        &mut self.document,
+                        Edit::SetImageUnderlay {
+                            underlay: Some(underlay),
+                        },
+                    );
+                    self.dirty = true;
+                }
+                if let Some(mut underlay) = self.document.underlay.clone() {
+                    let mut placement_changed = false;
+                    ui.collapsing(super::i18n::registered(self.locale, "app-ui.011"), |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            placement_changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut underlay.placement.x)
+                                        .speed(0.25)
+                                        .prefix("X "),
+                                )
+                                .changed();
+                            placement_changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut underlay.placement.y)
+                                        .speed(0.25)
+                                        .prefix("Y "),
+                                )
+                                .changed();
+                            placement_changed |= ui
+                                .add(
+                                    egui::Slider::new(&mut underlay.placement.scale_x, 0.05..=4.0)
+                                        .text(super::i18n::registered(self.locale, "app-ui.012")),
+                                )
+                                .changed();
+                            placement_changed |= ui
+                                .add(
+                                    egui::Slider::new(&mut underlay.placement.scale_y, 0.05..=4.0)
+                                        .text(super::i18n::registered(self.locale, "app-ui.013")),
+                                )
+                                .changed();
+                            let mut degrees = underlay.placement.rotation_radians.to_degrees();
+                            if ui
+                                .add(
+                                    egui::Slider::new(&mut degrees, -180.0..=180.0)
+                                        .text(super::i18n::registered(self.locale, "app-ui.014")),
+                                )
+                                .changed()
+                            {
+                                underlay.placement.rotation_radians = degrees.to_radians();
+                                placement_changed = true;
+                            }
+                        });
+                        ui.small(super::i18n::registered(self.locale, "app-ui.015"));
+                    });
+                    if placement_changed {
+                        let _ = self.history.execute(
+                            &mut self.document,
+                            Edit::SetImageUnderlay {
+                                underlay: Some(underlay),
+                            },
+                        );
+                        self.dirty = true;
+                    }
+                }
+                if ui
+                    .button(super::i18n::registered(self.locale, "app-ui.016"))
+                    .clicked()
+                {
+                    self.underlay_state.remove();
+                    let _ = self.history.execute(
+                        &mut self.document,
+                        Edit::SetImageUnderlay { underlay: None },
+                    );
+                    self.dirty = true;
+                    ui.close();
+                }
+            }
+            if ui
+                .button(super::i18n::registered(self.locale, "app-ui.017"))
+                .clicked()
+            {
+                if self.underlay_state.undo() {
+                    self.status = super::i18n::registered(self.locale, "app-ui.018").into();
+                }
+                ui.close();
+            }
+            ui.checkbox(
+                &mut self.embed_audio_in_project,
+                "音源をプロジェクトへ埋め込む",
+            );
+        });
+        ui.menu_button(text(self.locale, Text::Edit), |ui| {
+            self.command_menu(ui, CommandMenu::Edit);
+        });
+        ui.menu_button(super::i18n::registered(self.locale, "commands.135"), |ui| {
+            self.command_menu(ui, CommandMenu::Arrange)
+        });
+        ui.menu_button(super::i18n::registered(self.locale, "app-ui.019"), |ui| {
+            self.command_menu(ui, CommandMenu::Set);
+        });
+        ui.menu_button(text(self.locale, Text::Playback), |ui| {
+            if ui
+                .button(if self.playing {
+                    text(self.locale, Text::Pause)
+                } else {
+                    text(self.locale, Text::Play)
+                })
+                .clicked()
+            {
+                self.toggle_playback(ui.ctx());
+                ui.close();
+            }
+            if ui.button(text(self.locale, Text::RangeStart)).clicked() {
+                self.navigate_to_global_count(self.playback_start);
+                ui.close();
+            }
+            ui.separator();
+            if ui
+                .button(super::i18n::registered(self.locale, "app-ui.064"))
+                .clicked()
+            {
+                let start = self.document.global_count(self.current_set, 0.0) as u32;
+                self.playback_start = start;
+                self.playback_end = (start
+                    + u32::from(self.document.sets[self.current_set].counts))
+                .min(self.document.timeline_counts());
+                ui.close();
+            }
+            if ui.button(text(self.locale, Text::WholeShow)).clicked() {
+                self.playback_start = 0;
+                self.playback_end = self.document.timeline_counts();
+                ui.close();
+            }
+            ui.checkbox(&mut self.loop_playback, text(self.locale, Text::Loop));
+        });
+        ui.menu_button(text(self.locale, Text::View), |ui| {
+            if ui
+                .button(super::i18n::registered(self.locale, "set-navigator.009"))
+                .clicked()
+            {
+                self.set_navigator.open();
+                ui.close();
+            }
+            ui.separator();
+            ui.label(super::i18n::registered(self.locale, "workspace-preset.007"));
+            for command in [
+                UiCommand::WorkspaceDesign,
+                UiCommand::WorkspaceReview,
+                UiCommand::WorkspacePresent,
+            ] {
+                if ui.button(command.label(self.locale)).clicked() {
+                    self.execute_command(command, ui.ctx());
+                    ui.close();
+                }
+            }
+            ui.separator();
+            let simple_mode_label = super::i18n::registered(self.locale, "simple-mode.107");
+            if ui
+                .checkbox(&mut self.simple_mode.enabled, simple_mode_label)
+                .changed()
+            {
+                let enabled = self.simple_mode.enabled;
+                self.set_simple_mode(enabled);
+                ui.close();
+            }
+            ui.checkbox(&mut self.show_guidance, text(self.locale, Text::Guidance));
+            ui.checkbox(
+                &mut self.show_inspector,
+                super::i18n::registered(self.locale, "app-ui.074"),
+            );
+            let mut show_grid = self.document.grid.show_step_grid;
+            if ui
+                .checkbox(&mut show_grid, text(self.locale, Text::StepGrid))
+                .changed()
+            {
+                let mut grid = self.document.grid.clone();
+                grid.show_step_grid = show_grid;
+                if self
+                    .history
+                    .execute(
+                        &mut self.document,
+                        Edit::ReplaceGrid {
+                            grid,
+                            scale_positions: false,
+                        },
+                    )
+                    .is_ok()
+                {
+                    self.dirty = true;
+                }
+            }
+            ui.checkbox(
+                &mut self.show_field_marks,
+                super::i18n::registered(self.locale, "full-mode.037"),
+            )
+            .on_hover_text(super::i18n::registered(self.locale, "full-mode.038"));
+            ui.checkbox(
+                &mut self.show_dot_labels,
+                super::i18n::registered(self.locale, "full-mode.039"),
+            )
+            .on_hover_text(super::i18n::registered(self.locale, "full-mode.040"));
+            ui.checkbox(
+                &mut self.labels_while_playing,
+                super::i18n::registered(self.locale, "full-mode.041"),
+            )
+            .on_hover_text(super::i18n::registered(self.locale, "full-mode.042"));
+            ui.separator();
+            // App chrome only: the field view keeps its own
+            // print-styled drill_render::Theme regardless of this
+            // choice (see app_theme.rs's module doc comment).
+            ui.menu_button(super::i18n::registered(self.locale, "app-ui.162"), |ui| {
+                for candidate in app_theme::AppTheme::ALL {
+                    let outgoing = self.app_theme;
+                    if ui
+                        .radio_value(&mut self.app_theme, candidate, candidate.label(self.locale))
+                        .changed()
+                    {
+                        // Capture the theme being left *before*
+                        // `apply` overwrites `Visuals`, so the fade
+                        // veil is painted in the color the user is
+                        // looking at right now, not the one they're
+                        // about to see.
+                        self.theme_fade.begin(outgoing);
+                        self.app_theme.apply(ui.ctx());
+                        self.app_theme.persist();
+                        ui.close();
+                    }
+                }
+            });
+        });
+        ui.menu_button(super::i18n::registered(self.locale, "app-ui.020"), |ui| {
+            self.command_menu(ui, CommandMenu::Workspace);
+            ui.separator();
+            if ui
+                .button(super::i18n::registered(self.locale, "app-ui.021"))
+                .clicked()
+            {
+                self.plugin_state.open = true;
+                ui.close();
+            }
+            if ui
+                .button(super::i18n::registered(self.locale, "app-ui.022"))
+                .clicked()
+            {
+                self.subset_snapshot_state.open = true;
+                ui.close();
+            }
+        });
+        ui.menu_button(text(self.locale, Text::Help), |ui| {
+            ui.menu_button(text(self.locale, Text::Language), |ui| {
+                ui.selectable_value(
+                    &mut self.locale,
+                    Locale::Ja,
+                    text(Locale::Ja, Text::Japanese),
+                );
+                ui.selectable_value(
+                    &mut self.locale,
+                    Locale::En,
+                    text(Locale::En, Text::English),
+                );
+            });
+            ui.separator();
+            if ui.button(text(self.locale, Text::GettingStarted)).clicked() {
+                self.onboarding.show_help = true;
+                ui.close();
+            }
+            if ui
+                .button(super::i18n::registered(self.locale, "rehearsal.009"))
+                .clicked()
+            {
+                self.keybindings.cheat_open = true;
+                ui.close();
+            }
+            if ui
+                .button(super::i18n::registered(self.locale, "shortcuts.020"))
+                .clicked()
+            {
+                self.keybindings.settings_open = true;
+                ui.close();
+            }
+            if ui
+                .button(super::i18n::registered(self.locale, "glossary.011"))
+                .clicked()
+            {
+                self.glossary.open();
+                ui.close();
+            }
+            if ui
+                .button(super::i18n::registered(self.locale, "app-ui.065"))
+                .clicked()
+            {
+                self.onboarding.show_welcome = true;
+                ui.close();
+            }
+            ui.separator();
+            let mut beta = self.update_state.preferences.channel == drill_updater::Channel::Beta;
+            if ui
+                .checkbox(
+                    &mut beta,
+                    super::i18n::registered(self.locale, "app-ui.023"),
+                )
+                .changed()
+            {
+                self.update_state.set_beta(beta);
+            }
+            if ui
+                .button(super::i18n::registered(self.locale, "app-ui.024"))
+                .clicked()
+            {
+                // A network transport is intentionally not present yet. The
+                // background task reports offline without disturbing work.
+                let (month, day) = utc_month_day();
+                self.update_state.check(None, month, day);
+                ui.close();
+            }
+            let update_status = self.update_state.status.text(self.locale);
+            if !update_status.is_empty() {
+                ui.label(update_status);
+            }
+            if ui
+                .button(UiCommand::LegalNotices.label(self.locale))
+                .clicked()
+            {
+                self.execute_command(UiCommand::LegalNotices, ui.ctx());
+                ui.close();
+            }
+            ui.separator();
+            ui.label(super::i18n::registered(self.locale, "app-ui.066"));
+            ui.label(super::i18n::registered(self.locale, "app-ui.067"));
+        });
+    }
+
+    pub(crate) fn show_playback_speed_presets(&mut self, ui: &mut egui::Ui) {
         ui.label(text(self.locale, Text::Speed));
         for speed in PLAYBACK_SPEED_PRESETS {
             if ui
@@ -3165,7 +3163,7 @@ impl DrillApp {
         }
     }
 
-    fn show_timeline_playback_bar(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn show_timeline_playback_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             if ui
                 .button(if self.playing {
@@ -3433,7 +3431,7 @@ impl DrillApp {
         }
     }
 
-    fn show_set_card_strip(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn show_set_card_strip(&mut self, ui: &mut egui::Ui) {
         let cards: Vec<(usize, String, u16, drill_core::SetId)> = self
             .document
             .sets

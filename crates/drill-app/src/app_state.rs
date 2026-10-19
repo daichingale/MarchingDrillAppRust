@@ -20,6 +20,8 @@ mod egui_backend;
 mod export_state;
 #[path = "field_view.rs"]
 mod field_view;
+#[path = "full_chrome.rs"]
+mod full_chrome;
 #[path = "glossary.rs"]
 mod glossary;
 #[path = "go_to_count.rs"]
@@ -1015,6 +1017,16 @@ pub(crate) struct DrillApp {
     /// Session-only. Hides the full-editor tool strip without adding a row
     /// over the field. Not stored in the drill file.
     full_toolbar_collapsed: bool,
+    /// The older stacked rows (toolbar, selection bar, guidance, timeline).
+    /// Off so the field owns the window and the chrome floats on top of it.
+    full_legacy_chrome: bool,
+    /// Right inspector folded down to an edge button.
+    full_inspector_collapsed: bool,
+    /// Bottom timeline opened past the set cards to range, markers, and counts.
+    full_timeline_expanded: bool,
+    /// Studio was the old implicit dark theme. Migrated once per session,
+    /// without rewriting a saved choice the person picks afterward.
+    full_daylight_ready: bool,
     /// Shortcut registry, settings, and the key chart. The user's own chords
     /// live in the app settings file, never in the drill.
     keybindings: keybindings::KeyBindings,
@@ -1179,6 +1191,10 @@ impl Default for DrillApp {
             labels_while_playing: false,
             show_next_places: false,
             full_toolbar_collapsed: false,
+            full_legacy_chrome: false,
+            full_inspector_collapsed: true,
+            full_timeline_expanded: false,
+            full_daylight_ready: false,
             keybindings: keybindings::KeyBindings::default(),
             move_check: rehearsal_checks::MoveCheck::default(),
             set_comparison: None,

@@ -7,7 +7,7 @@ use drill_core::clinic;
 use drill_core::rhythm_sync;
 
 impl DrillApp {
-    pub(super) fn show_workspace_inspector(&mut self, ui: &mut egui::Ui, set_counts: f32) {
+    pub(crate) fn show_workspace_inspector(&mut self, ui: &mut egui::Ui, set_counts: f32) {
         let global_count = self
             .document
             .global_count(self.current_set, self.count_position);

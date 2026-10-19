@@ -10,9 +10,9 @@ use std::path::PathBuf;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum AppTheme {
     /// The original DrillForge dark theme: cool blue-grays, no strong accent.
-    #[default]
     Studio,
-    /// Bright, neutral grays with a blue accent.
+    /// Bright, neutral grays with a blue accent. This is the default.
+    #[default]
     Daylight,
     /// Near-black panels with a saturated green accent, in the spirit of a
     /// classic dark-mode DAW.
@@ -25,10 +25,10 @@ impl AppTheme {
     pub(crate) fn label(self, locale: drill_core::Locale) -> &'static str {
         use drill_core::Locale;
         match (locale, self) {
-            (Locale::Ja, Self::Studio) => "スタジオ（既定）",
-            (Locale::En, Self::Studio) => "Studio (default)",
-            (Locale::Ja, Self::Daylight) => "デイライト（明るい）",
-            (Locale::En, Self::Daylight) => "Daylight (bright)",
+            (Locale::Ja, Self::Studio) => "スタジオ（濃色）",
+            (Locale::En, Self::Studio) => "Studio (dark)",
+            (Locale::Ja, Self::Daylight) => "デイライト（既定）",
+            (Locale::En, Self::Daylight) => "Daylight (default)",
             (Locale::Ja, Self::Nightline) => "ナイトライン（濃色・緑）",
             (Locale::En, Self::Nightline) => "Nightline (dark, green accent)",
         }
@@ -357,6 +357,12 @@ mod tests {
             let loaded: AppTheme = serde_json::from_slice(&bytes).unwrap();
             assert_eq!(loaded, theme);
         }
+    }
+
+    #[test]
+    fn daylight_is_the_default() {
+        assert_eq!(AppTheme::default(), AppTheme::Daylight);
+        assert!(!AppTheme::default().visuals().dark_mode);
     }
 
     #[test]

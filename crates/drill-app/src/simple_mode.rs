@@ -446,21 +446,21 @@ enum DockAction {
     More,
 }
 
-struct PictogramTile<'a> {
-    icon: PhoneIcon,
-    label: &'a str,
-    tip: &'a str,
-    width: f32,
-    enabled: bool,
-    active: bool,
-    pulse: bool,
-    filled: bool,
-    compact: bool,
-    time: f32,
+pub(crate) struct PictogramTile<'a> {
+    pub(crate) icon: PhoneIcon,
+    pub(crate) label: &'a str,
+    pub(crate) tip: &'a str,
+    pub(crate) width: f32,
+    pub(crate) enabled: bool,
+    pub(crate) active: bool,
+    pub(crate) pulse: bool,
+    pub(crate) filled: bool,
+    pub(crate) compact: bool,
+    pub(crate) time: f32,
 }
 
 #[derive(Clone, Copy)]
-enum PhoneIcon {
+pub(crate) enum PhoneIcon {
     Undo,
     Redo,
     Open,
@@ -856,8 +856,34 @@ impl DrillApp {
         if !self.simple_mode.chrome_applied {
             return;
         }
+        if self.app_theme == super::app_theme::AppTheme::Studio {
+            self.app_theme = super::app_theme::AppTheme::Daylight;
+        }
         self.app_theme.apply(ctx);
         self.simple_mode.chrome_applied = false;
+        self.full_daylight_ready = true;
+    }
+
+    /// The old Studio theme was the implicit dark default. The first full-mode
+    /// frame of a session moves that onto the light paper. A theme picked from
+    /// the menu afterward, including Studio, stays for the rest of the session.
+    pub(crate) fn prefer_daylight_over_studio(&mut self, ctx: &egui::Context) {
+        if self.full_daylight_ready {
+            return;
+        }
+        self.full_daylight_ready = true;
+        if self.app_theme == super::app_theme::AppTheme::Studio {
+            self.app_theme = super::app_theme::AppTheme::Daylight;
+            self.app_theme.apply(ctx);
+        }
+    }
+
+    pub(crate) fn mirror_moves_on(&self) -> bool {
+        self.simple_mode.mirror_moves
+    }
+
+    pub(crate) fn previous_ghost_shown(&self) -> bool {
+        self.simple_mode.show_previous
     }
 
     fn show_has_motion(&self) -> bool {
@@ -1091,7 +1117,8 @@ impl DrillApp {
     /// `shows`, `hints`, `memo`, `numbers`, `shape`, `block`, `count`,
     /// `places`, `pair`, `order`, `sheet`, `recover`, `ghosts`, `mirror`,
     /// `guide-place`, `guide-move`, `guide-play`, `guide-playing`,
-    /// `guide-collapsed`, or `guide-song`.
+    /// `guide-collapsed`, `guide-song`, `full-selected`, `full-collapsed`,
+    /// or `full-timeline`.
     pub(crate) fn apply_qa_simple_fixture(&mut self) {
         let Ok(stage) = std::env::var("DRILLFORGE_QA_SIMPLE") else {
             return;
@@ -1118,13 +1145,29 @@ impl DrillApp {
             self.recent_projects.preview_empty_for_screenshot();
             self.show_recent_projects = true;
         }
-        if stage == "full" {
+        if stage == "full" || stage.starts_with("full-") {
             self.set_simple_mode(false);
             // The return chip, coach, and guidance banner are real chrome,
             // but they cover the field this fixture exists to show.
             self.simple_mode.return_hint = false;
             self.show_guidance = false;
             self.onboarding.coach_dismissed = true;
+            self.full_legacy_chrome = false;
+            self.full_inspector_collapsed = true;
+            self.full_timeline_expanded = false;
+            self.clear_selection();
+        }
+        if stage == "full-selected" {
+            self.replace_selection(std::iter::once(0).collect());
+            self.full_inspector_collapsed = false;
+        }
+        if stage == "full-collapsed" {
+            self.replace_selection(std::iter::once(0).collect());
+            self.full_inspector_collapsed = true;
+        }
+        if stage == "full-timeline" {
+            self.full_timeline_expanded = true;
+            self.full_inspector_collapsed = true;
         }
         if stage == "move" || stage == "play" || stage == "done" {
             self.duplicate_current_set();
@@ -2683,7 +2726,7 @@ impl DrillApp {
         }
     }
 
-    fn simple_pictogram_tile(
+    pub(crate) fn simple_pictogram_tile(
         &self,
         ui: &mut egui::Ui,
         tile: PictogramTile<'_>,
@@ -4290,7 +4333,7 @@ impl DrillApp {
 
     pub(super) fn sync_simple_mirror_drag(&mut self) {
         self.simple_mode.mirror_preview.clear();
-        if !self.simple_mode.enabled || !self.simple_mode.mirror_moves {
+        if !self.simple_mode.mirror_moves {
             return;
         }
         let (Some(before), Some(preview)) = (self.drag_before.clone(), self.drag_preview.clone())

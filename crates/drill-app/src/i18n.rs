@@ -80,6 +80,17 @@ pub enum Text {
     CrashTitle,
     CrashHint,
     CopyReportPath,
+    SimpleMode,
+    DetailedMode,
+    OnGrid,
+    FlipCenterLine,
+    Arrange,
+    Pinwheel,
+    Inspector,
+    Timeline,
+    Song,
+    Symmetry,
+    PreviousSet,
 }
 
 impl Text {
@@ -87,7 +98,7 @@ impl Text {
     /// the catalog completeness test fail during review rather than leaking a
     /// fallback string into a release build.
     #[cfg(test)]
-    pub const ALL: [Self; 31] = [
+    pub const ALL: [Self; 42] = [
         Self::File,
         Self::Edit,
         Self::Playback,
@@ -119,6 +130,17 @@ impl Text {
         Self::CrashTitle,
         Self::CrashHint,
         Self::CopyReportPath,
+        Self::SimpleMode,
+        Self::DetailedMode,
+        Self::OnGrid,
+        Self::FlipCenterLine,
+        Self::Arrange,
+        Self::Pinwheel,
+        Self::Inspector,
+        Self::Timeline,
+        Self::Song,
+        Self::Symmetry,
+        Self::PreviousSet,
     ];
 }
 
@@ -192,6 +214,36 @@ pub fn text(locale: Locale, key: Text) -> &'static str {
         }
         (Locale::Ja, Text::CopyReportPath) => "レポートの場所をコピー",
         (Locale::En, Text::CopyReportPath) => "Copy Report Location",
+        (Locale::Ja, Text::SimpleMode) => "かんたん",
+        (Locale::En, Text::SimpleMode) => "Simple",
+        (Locale::Ja, Text::DetailedMode) => "くわしく",
+        (Locale::En, Text::DetailedMode) => "Detailed",
+        (Locale::Ja, Text::OnGrid) => "マス目へ",
+        (Locale::En, Text::OnGrid) => "On the grid",
+        (Locale::Ja, Text::FlipCenterLine) => "中央線で反転",
+        (Locale::En, Text::FlipCenterLine) => "Flip on the center line",
+        (Locale::Ja, Text::Arrange) => "整列",
+        (Locale::En, Text::Arrange) => "Arrange",
+        (Locale::Ja, Text::Pinwheel) => "ピンウィール",
+        (Locale::En, Text::Pinwheel) => "Pinwheel",
+        (Locale::Ja, Text::Inspector) => "詳細",
+        (Locale::En, Text::Inspector) => "Details",
+        (Locale::Ja, Text::Timeline) => "タイムライン",
+        (Locale::En, Text::Timeline) => "Timeline",
+        (Locale::Ja, Text::Song) => "曲",
+        (Locale::En, Text::Song) => "Song",
+        (Locale::Ja, Text::Symmetry) => "左右対称",
+        (Locale::En, Text::Symmetry) => "Symmetry",
+        (Locale::Ja, Text::PreviousSet) => "前の場面",
+        (Locale::En, Text::PreviousSet) => "Previous set",
+    }
+}
+
+/// How many people are in the working group, for the floating selection bar.
+pub fn people_selected(locale: Locale, count: usize) -> String {
+    match locale {
+        Locale::Ja => format!("{count}人選択中"),
+        Locale::En => format!("{count} selected"),
     }
 }
 

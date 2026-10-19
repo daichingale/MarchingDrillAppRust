@@ -325,8 +325,19 @@ pub(crate) fn draw_count_track(
         Pos2::new(response.rect.left() + 8.0, response.rect.top() + 29.0),
         response.rect.right_bottom() - Vec2::new(8.0, 5.0),
     );
-    painter.rect_filled(waypoint_lane, 5.0, Color32::from_rgb(22, 29, 40));
-    painter.rect_filled(rect, 5.0, Color32::from_rgb(18, 23, 31));
+    let dark = ui.visuals().dark_mode;
+    let lane_fill = if dark {
+        Color32::from_rgb(22, 29, 40)
+    } else {
+        Color32::from_rgb(232, 236, 242)
+    };
+    let track_fill = if dark {
+        Color32::from_rgb(18, 23, 31)
+    } else {
+        Color32::WHITE
+    };
+    painter.rect_filled(waypoint_lane, 5.0, lane_fill);
+    painter.rect_filled(rect, 5.0, track_fill);
 
     let scroll = ui.input(|input| input.smooth_scroll_delta);
     if response.hovered() && scroll != Vec2::ZERO {
@@ -460,17 +471,22 @@ pub(crate) fn draw_count_track(
         }
         let segment =
             Rect::from_min_max(Pos2::new(left, rect.top()), Pos2::new(right, rect.bottom()));
-        painter.rect_filled(
-            segment,
-            0.0,
+        let segment_fill = if dark {
             if index == current_set {
                 Color32::from_rgb(48, 76, 101)
             } else if index % 2 == 0 {
                 Color32::from_rgb(31, 42, 55)
             } else {
                 Color32::from_rgb(37, 49, 63)
-            },
-        );
+            }
+        } else if index == current_set {
+            super::app_theme::ACCENT_SOFT
+        } else if index % 2 == 0 {
+            Color32::from_rgb(244, 246, 250)
+        } else {
+            Color32::from_rgb(232, 236, 242)
+        };
+        painter.rect_filled(segment, 0.0, segment_fill);
         painter.line_segment(
             [Pos2::new(left, rect.top()), Pos2::new(left, rect.bottom())],
             Stroke::new(2.0, Color32::from_rgb(245, 197, 66)),
@@ -482,7 +498,11 @@ pub(crate) fn draw_count_track(
             egui::Align2::LEFT_TOP,
             format!("{} · {}c", set.name, set.counts),
             egui::FontId::proportional(12.0),
-            Color32::WHITE,
+            if dark {
+                Color32::WHITE
+            } else {
+                Color32::from_rgb(28, 32, 40)
+            },
         );
         // Collaborator pips, so "who is looking at what" stays visible even
         // when a peer is parked on a formation the local user is not viewing.
@@ -678,7 +698,14 @@ pub(crate) fn draw_count_track(
                 Pos2::new(x, rect.bottom() - if major { 16.0 } else { 8.0 }),
                 Pos2::new(x, rect.bottom()),
             ],
-            Stroke::new(1.0, Color32::from_white_alpha(if major { 180 } else { 80 })),
+            Stroke::new(
+                1.0,
+                if dark {
+                    Color32::from_white_alpha(if major { 180 } else { 80 })
+                } else {
+                    Color32::from_black_alpha(if major { 120 } else { 60 })
+                },
+            ),
         );
         if major {
             painter.text(
@@ -686,7 +713,11 @@ pub(crate) fn draw_count_track(
                 egui::Align2::LEFT_BOTTOM,
                 count.to_string(),
                 egui::FontId::monospace(10.0),
-                Color32::from_gray(185),
+                if dark {
+                    Color32::from_gray(185)
+                } else {
+                    super::app_theme::SECONDARY_TEXT
+                },
             );
         }
     }
@@ -695,19 +726,34 @@ pub(crate) fn draw_count_track(
             Pos2::new(playhead_x, rect.top()),
             Pos2::new(playhead_x, rect.bottom()),
         ],
-        Stroke::new(3.0, Color32::from_rgb(255, 92, 92)),
+        Stroke::new(
+            3.0,
+            if dark {
+                Color32::from_rgb(255, 92, 92)
+            } else {
+                super::app_theme::ACCENT
+            },
+        ),
     );
     painter.circle_filled(
         Pos2::new(playhead_x, rect.top() + 2.0),
         5.0,
-        Color32::from_rgb(255, 92, 92),
+        if dark {
+            Color32::from_rgb(255, 92, 92)
+        } else {
+            super::app_theme::ACCENT
+        },
     );
     painter.text(
         labels.now_pos,
         egui::Align2::CENTER_TOP,
         format!("NOW {global:.2}"),
         egui::FontId::monospace(10.0),
-        Color32::WHITE,
+        if dark {
+            Color32::WHITE
+        } else {
+            Color32::from_rgb(28, 32, 40)
+        },
     );
 
     let handles_active = in_response.hovered()
