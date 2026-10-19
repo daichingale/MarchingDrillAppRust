@@ -3524,6 +3524,14 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "full-mode.088") => "Could not change how they walk",
         (Locale::Ja, "full-mode.089") => "動きません",
         (Locale::En, "full-mode.089") => "Stays still",
+        (Locale::Ja, "simple-mode.330") => "前の場面",
+        (Locale::En, "simple-mode.330") => "Previous",
+        (Locale::Ja, "simple-mode.331") => "前の場面の並びを、うすい点で重ねます",
+        (Locale::En, "simple-mode.331") => "Show the previous formation as faint dots",
+        (Locale::Ja, "simple-mode.332") => "前の場面がありません",
+        (Locale::En, "simple-mode.332") => "There is no previous scene",
+        (Locale::Ja, "simple-mode.333") => "再生中は出しません",
+        (Locale::En, "simple-mode.333") => "Hidden while playing",
         _ => "[missing message]",
     }
 }

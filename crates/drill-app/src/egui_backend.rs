@@ -25,9 +25,36 @@ fn rectangle(origin: Pos2, value: drill_render::Rect) -> Rect {
 /// what the GPU path already does via `paint_gpu_background` /
 /// `paint_gpu_foreground`. See `append_trails`'s doc comment for the
 /// insertion-order-vs-layer-order distinction this works around.
-pub(crate) fn paint(painter: &egui::Painter, origin: Pos2, list: &DisplayList) {
-    paint_layers(painter, origin, list, &Layer::ALL);
+/// Field, grid, and highlights. Simple mode paints previous-scene ghosts
+/// after this and before [`paint_dots_and_above`], so the faint dots sit
+/// under the live performers.
+pub(crate) fn paint_below_dots(painter: &egui::Painter, origin: Pos2, list: &DisplayList) {
+    paint_layers(painter, origin, list, &LAYERS_BELOW_DOTS);
 }
+
+/// Performer dots and everything that must stay readable on top of them.
+pub(crate) fn paint_dots_and_above(painter: &egui::Painter, origin: Pos2, list: &DisplayList) {
+    paint_layers(painter, origin, list, &LAYERS_DOTS_AND_ABOVE);
+}
+
+pub(crate) fn paint(painter: &egui::Painter, origin: Pos2, list: &DisplayList) {
+    paint_below_dots(painter, origin, list);
+    paint_dots_and_above(painter, origin, list);
+}
+
+const LAYERS_BELOW_DOTS: [Layer; 8] = [
+    Layer::FieldFill,
+    Layer::GridMinor,
+    Layer::GridMajor,
+    Layer::Hash,
+    Layer::FieldText,
+    Layer::Heatmap,
+    Layer::Trail,
+    Layer::Highlight,
+];
+
+const LAYERS_DOTS_AND_ABOVE: [Layer; 4] =
+    [Layer::Dot, Layer::DotLabel, Layer::Marker, Layer::Overlay];
 
 pub(crate) fn paint_gpu_background(painter: &egui::Painter, origin: Pos2, list: &DisplayList) {
     paint_layers(
@@ -197,5 +224,13 @@ mod tests {
             color(Rgba(1, 2, 3, 4)),
             Color32::from_rgba_unmultiplied(1, 2, 3, 4)
         );
+    }
+
+    #[test]
+    fn ghost_split_covers_every_layer_once_in_paint_order() {
+        let mut combined = Vec::new();
+        combined.extend_from_slice(&LAYERS_BELOW_DOTS);
+        combined.extend_from_slice(&LAYERS_DOTS_AND_ABOVE);
+        assert_eq!(combined.as_slice(), Layer::ALL.as_slice());
     }
 }
