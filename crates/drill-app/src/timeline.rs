@@ -146,6 +146,14 @@ pub(crate) fn timeline_tick_stride(total_counts: u32, width: f32) -> u32 {
         .unwrap_or_else(|| minimum.checked_next_power_of_two().unwrap_or(u32::MAX))
 }
 
+/// Glyph advance used to keep 16px monospace IN/OUT/NOW labels from colliding.
+const TRACK_LABEL_ADVANCE: f32 = 10.0;
+const TRACK_LABEL_SIZE: f32 = 16.0;
+/// Second row, used only when IN, OUT, and NOW cannot share the top of the lane.
+const TRACK_LABEL_ROW: f32 = 18.0;
+/// Keeps the first glyph off the playhead stroke.
+const TRACK_LABEL_INSET: f32 = 14.0;
+
 /// Deterministic label placement used by both painting and UI regression tests.
 ///
 /// Text is deliberately assigned to rows when horizontal bounds overlap. This
@@ -254,41 +262,128 @@ impl TimelineLabelLayout {
         playback_end: u32,
         global: f32,
     ) -> Self {
-        // egui's monospace glyph advance at these font sizes is below 7 pt.
-        // Add padding so this remains conservative across platform fonts.
-        let text_width = |characters: usize| characters as f32 * 7.0 + 4.0;
+        // Monospace advance at 16px, plus padding so labels stay apart
+        // across platform fonts.
+        let text_width = |characters: usize| characters as f32 * TRACK_LABEL_ADVANCE + 4.0;
         let in_width = text_width(format!("▶ IN {playback_start}").chars().count());
         let out_width = text_width(format!("OUT {playback_end} ◀").chars().count());
         let now_width = text_width(format!("NOW {global:.2}").chars().count());
 
-        let in_x = (range_left + 5.0).clamp(rect.left() + 5.0, rect.right() - in_width);
-        let out_x = (range_right - 5.0).clamp(rect.left() + out_width, rect.right() - 5.0);
+        let in_x = (range_left + TRACK_LABEL_INSET).clamp(
+            rect.left() + 4.0,
+            (rect.right() - in_width).max(rect.left() + 4.0),
+        );
+        let mut out_x =
+            (range_right - TRACK_LABEL_INSET).clamp(rect.left() + out_width, rect.right() - 4.0);
         let in_bounds = (in_x, in_x + in_width);
-        let out_bounds = (out_x - out_width, out_x);
-        let ranges_overlap = in_bounds.1 + 4.0 > out_bounds.0;
-        let out_y = rect.top() + if ranges_overlap { 18.0 } else { 3.0 };
+        let mut out_bounds = (out_x - out_width, out_x);
+        let overlaps = |a: (f32, f32), b: (f32, f32)| a.1 + 6.0 > b.0 && a.0 < b.1 + 6.0;
+        // A one-set show has no counts yet, so IN and OUT share one x. Slide
+        // OUT along the row instead of stacking it on the playhead.
+        if overlaps(in_bounds, out_bounds) {
+            let slid = in_bounds.1 + 6.0 + out_width;
+            if slid <= rect.right() - 4.0 {
+                out_x = slid;
+                out_bounds = (out_x - out_width, out_x);
+            }
+        }
+        let y0 = rect.top() + 2.0;
+        let y1 = y0 + TRACK_LABEL_ROW;
+        let out_y = if overlaps(in_bounds, out_bounds) {
+            y1
+        } else {
+            y0
+        };
 
-        let now_x = playhead_x.clamp(
+        let mut now_x = playhead_x.clamp(
             rect.left() + now_width * 0.5,
             rect.right() - now_width * 0.5,
         );
-        let now_bounds = (now_x - now_width * 0.5, now_x + now_width * 0.5);
-        let now_hits_in = now_bounds.1 + 4.0 > in_bounds.0 && now_bounds.0 < in_bounds.1 + 4.0;
-        let now_hits_out = !ranges_overlap
-            && now_bounds.1 + 4.0 > out_bounds.0
-            && now_bounds.0 < out_bounds.1 + 4.0;
-        let now_y = rect.top()
-            + if now_hits_in || now_hits_out {
-                33.0
-            } else {
-                3.0
-            };
+        let mut now_bounds = (now_x - now_width * 0.5, now_x + now_width * 0.5);
+        // At the start of a show the playhead sits on IN. Slide NOW along the
+        // same row instead of dropping it onto the set title and the ticks.
+        if overlaps(now_bounds, in_bounds) {
+            let slid = in_bounds.1 + 6.0 + now_width * 0.5;
+            let slid_bounds = (slid - now_width * 0.5, slid + now_width * 0.5);
+            if !overlaps(slid_bounds, out_bounds) && slid + now_width * 0.5 <= rect.right() {
+                now_x = slid;
+                now_bounds = slid_bounds;
+            }
+        } else if overlaps(now_bounds, out_bounds) {
+            let slid = out_bounds.0 - 6.0 - now_width * 0.5;
+            let slid_bounds = (slid - now_width * 0.5, slid + now_width * 0.5);
+            if !overlaps(slid_bounds, in_bounds) && slid - now_width * 0.5 >= rect.left() {
+                now_x = slid;
+                now_bounds = slid_bounds;
+            }
+        }
+        if overlaps(now_bounds, in_bounds) || overlaps(now_bounds, out_bounds) {
+            let right_edge = in_bounds.1.max(out_bounds.1);
+            let slid = right_edge + 6.0 + now_width * 0.5;
+            let slid_bounds = (slid - now_width * 0.5, slid + now_width * 0.5);
+            if slid + now_width * 0.5 <= rect.right()
+                && !overlaps(slid_bounds, in_bounds)
+                && !overlaps(slid_bounds, out_bounds)
+            {
+                now_x = slid;
+                now_bounds = slid_bounds;
+            }
+        }
+        let now_y = if overlaps(now_bounds, in_bounds) || overlaps(now_bounds, out_bounds) {
+            y1
+        } else {
+            y0
+        };
 
         Self {
-            in_pos: Pos2::new(in_x, rect.top() + 3.0),
+            in_pos: Pos2::new(in_x, y0),
             out_pos: Pos2::new(out_x, out_y),
             now_pos: Pos2::new(now_x, now_y),
         }
+    }
+}
+
+fn paint_track_chip(
+    painter: &egui::Painter,
+    pos: Pos2,
+    align: egui::Align2,
+    text: &str,
+    color: Color32,
+    backdrop: Color32,
+) {
+    let galley = painter.layout_no_wrap(
+        text.to_owned(),
+        egui::FontId::monospace(TRACK_LABEL_SIZE),
+        color,
+    );
+    let rect = align.anchor_size(pos, galley.size());
+    painter.rect_filled(rect.expand(2.0), 3.0, backdrop);
+    painter.galley(rect.min, galley, color);
+}
+
+/// Daylight labels stay dark enough to read on the white count track.
+/// Night mode keeps the brighter set so they still read on the dark lane.
+fn waypoint_label_color(dark: bool) -> Color32 {
+    if dark {
+        Color32::from_rgb(208, 222, 255)
+    } else {
+        Color32::from_rgb(20, 36, 84)
+    }
+}
+
+fn track_label_colors(dark: bool) -> (Color32, Color32, Color32) {
+    if dark {
+        (
+            Color32::from_rgb(130, 240, 176),
+            Color32::from_rgb(255, 196, 96),
+            Color32::WHITE,
+        )
+    } else {
+        (
+            Color32::from_rgb(8, 56, 28),
+            Color32::from_rgb(90, 32, 0),
+            Color32::from_rgb(20, 24, 32),
+        )
     }
 }
 
@@ -390,8 +485,8 @@ pub(crate) fn draw_count_track(
                 Pos2::new(x + 10.0, waypoint_lane.center().y),
                 egui::Align2::LEFT_CENTER,
                 &waypoint.label,
-                egui::FontId::proportional(11.0),
-                Color32::from_rgb(208, 222, 255),
+                egui::FontId::proportional(13.0),
+                waypoint_label_color(dark),
             );
             previous_label_right = x + 10.0 + label_width;
         }
@@ -492,12 +587,12 @@ pub(crate) fn draw_count_track(
             Stroke::new(2.0, Color32::from_rgb(245, 197, 66)),
         );
         painter.text(
-            // The top row is reserved for IN/OUT labels. Keeping the set title
-            // on its own row prevents the common count-zero overlap.
-            Pos2::new(left + 6.0, rect.top() + 18.0),
+            // The top row is the 16px IN/OUT/NOW chips. The set title sits
+            // under them so a count of zero does not cover the name.
+            Pos2::new(left + 6.0, rect.top() + 24.0),
             egui::Align2::LEFT_TOP,
             format!("{} · {}c", set.name, set.counts),
-            egui::FontId::proportional(12.0),
+            egui::FontId::proportional(13.0),
             if dark {
                 Color32::WHITE
             } else {
@@ -597,20 +692,7 @@ pub(crate) fn draw_count_track(
         ],
         Stroke::new(3.0, Color32::from_rgb(255, 173, 66)),
     );
-    painter.text(
-        labels.in_pos,
-        egui::Align2::LEFT_TOP,
-        format!("▶ IN {playback_start}"),
-        egui::FontId::monospace(11.0),
-        Color32::from_rgb(100, 235, 165),
-    );
-    painter.text(
-        labels.out_pos,
-        egui::Align2::RIGHT_TOP,
-        format!("OUT {playback_end} ◀"),
-        egui::FontId::monospace(11.0),
-        Color32::from_rgb(255, 190, 92),
-    );
+    let (in_color, out_color, now_color) = track_label_colors(dark);
 
     // WCAG 2.2 target-size floor in logical points. The visible rule remains
     // narrow, while the hit/accessibility target stays usable at every DPI.
@@ -695,7 +777,7 @@ pub(crate) fn draw_count_track(
         let major = count % tick_stride.saturating_mul(4) == 0;
         painter.line_segment(
             [
-                Pos2::new(x, rect.bottom() - if major { 16.0 } else { 8.0 }),
+                Pos2::new(x, rect.bottom() - if major { 10.0 } else { 6.0 }),
                 Pos2::new(x, rect.bottom()),
             ],
             Stroke::new(
@@ -709,10 +791,10 @@ pub(crate) fn draw_count_track(
         );
         if major {
             painter.text(
-                Pos2::new(x + 2.0, rect.bottom() - 18.0),
+                Pos2::new(x + 2.0, rect.bottom() - 1.0),
                 egui::Align2::LEFT_BOTTOM,
                 count.to_string(),
-                egui::FontId::monospace(10.0),
+                egui::FontId::monospace(12.0),
                 if dark {
                     Color32::from_gray(185)
                 } else {
@@ -744,16 +826,30 @@ pub(crate) fn draw_count_track(
             super::app_theme::ACCENT
         },
     );
-    painter.text(
+    // Chips paint after the playhead so the stroke cannot cut through IN.
+    paint_track_chip(
+        &painter,
+        labels.in_pos,
+        egui::Align2::LEFT_TOP,
+        &format!("▶ IN {playback_start}"),
+        in_color,
+        track_fill,
+    );
+    paint_track_chip(
+        &painter,
+        labels.out_pos,
+        egui::Align2::RIGHT_TOP,
+        &format!("OUT {playback_end} ◀"),
+        out_color,
+        track_fill,
+    );
+    paint_track_chip(
+        &painter,
         labels.now_pos,
         egui::Align2::CENTER_TOP,
-        format!("NOW {global:.2}"),
-        egui::FontId::monospace(10.0),
-        if dark {
-            Color32::WHITE
-        } else {
-            Color32::from_rgb(28, 32, 40)
-        },
+        &format!("NOW {global:.2}"),
+        now_color,
+        track_fill,
     );
 
     let handles_active = in_response.hovered()
@@ -1086,6 +1182,25 @@ mod tests {
     }
 
     #[test]
+    fn daylight_track_labels_clear_the_white_lane() {
+        let lum = |color: Color32| {
+            0.2126 * f32::from(color.r())
+                + 0.7152 * f32::from(color.g())
+                + 0.0722 * f32::from(color.b())
+        };
+        for color in {
+            let (inn, out, now) = track_label_colors(false);
+            [inn, out, now, waypoint_label_color(false)]
+        } {
+            let ratio = (255.0 + 12.75) / (lum(color) + 12.75);
+            assert!(
+                ratio >= 4.5,
+                "label {color:?} contrast {ratio:.2} is below body text"
+            );
+        }
+    }
+
+    #[test]
     fn labels_stay_inside_and_separate_at_supported_dpi_bounds() {
         // A 1280 physical-pixel window yields these logical widths at the
         // supported 100%, 150% and 200% display scales.
@@ -1106,7 +1221,8 @@ mod tests {
                         "scale={scale}, position={position:?}"
                     );
                 }
-                let text_width = |text: &str| text.chars().count() as f32 * 7.0 + 4.0;
+                let text_width =
+                    |text: &str| text.chars().count() as f32 * TRACK_LABEL_ADVANCE + 4.0;
                 let in_width = text_width("▶ IN 123456");
                 let out_width = text_width("OUT 234567 ◀");
                 let now_width = text_width("NOW 123456.75");
@@ -1127,6 +1243,43 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn playhead_at_in_does_not_cover_the_in_label() {
+        let text_span = |text: &str| text.chars().count() as f32 * TRACK_LABEL_ADVANCE + 4.0;
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 54.0));
+        let layout = TimelineLabelLayout::calculate(rect, 8.0, 1180.0, 8.0, 0, 16, 0.0);
+        assert!(
+            layout.in_pos.x >= 8.0 + TRACK_LABEL_INSET - 0.1,
+            "IN sits on the playhead at {}",
+            layout.in_pos.x
+        );
+        assert!(
+            (layout.in_pos.y - layout.now_pos.y).abs() < 1.0,
+            "NOW dropped onto a second row at the show start"
+        );
+        let now_left = layout.now_pos.x - text_span("NOW 0.00") * 0.5;
+        let in_right = layout.in_pos.x + text_span("▶ IN 0");
+        assert!(
+            now_left >= in_right,
+            "NOW {now_left} overlaps IN ending at {in_right}"
+        );
+    }
+
+    #[test]
+    fn zero_length_range_keeps_in_and_out_on_one_row() {
+        let text_span = |text: &str| text.chars().count() as f32 * TRACK_LABEL_ADVANCE + 4.0;
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 54.0));
+        let layout = TimelineLabelLayout::calculate(rect, 8.0, 8.0, 8.0, 0, 0, 0.0);
+        assert!((layout.in_pos.y - layout.out_pos.y).abs() < 1.0);
+        assert!((layout.in_pos.y - layout.now_pos.y).abs() < 1.0);
+        let in_right = layout.in_pos.x + text_span("▶ IN 0");
+        let out_left = layout.out_pos.x - text_span("OUT 0 ◀");
+        assert!(
+            out_left >= in_right,
+            "OUT {out_left} overlaps IN ending at {in_right}"
+        );
     }
 
     #[test]

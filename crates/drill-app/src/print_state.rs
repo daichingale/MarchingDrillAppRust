@@ -1,5 +1,5 @@
 use drill_core::{Document, Locale};
-use drill_export::page::{Orientation, PageSize, PrintSettings, paginate};
+use drill_export::page::{Orientation, PageItem, PageSize, PrintSettings, paginate};
 use drill_export::pdf::{PdfExportRequest, PdfSummary, spawn_pdf_export};
 use drill_export::report::{self, ReportKind};
 use drill_jobs::{Job, JobErrorCode, JobMsg};
@@ -9,6 +9,10 @@ pub(crate) struct PrintState {
     pub open: bool,
     pub kind: ReportKind,
     pub settings: PrintSettings,
+    /// Limit set charts and per-set tables to the set open in the editor.
+    pub current_set_only: bool,
+    /// Editor's open set. The sheet copies this in before counting pages.
+    pub scope_set: usize,
     pub status: String,
     pub completed: Option<(PathBuf, PdfSummary)>,
     job: Option<Job<PdfSummary>>,
@@ -21,6 +25,8 @@ impl Default for PrintState {
             open: false,
             kind: ReportKind::SetChart,
             settings: PrintSettings::default(),
+            current_set_only: false,
+            scope_set: 0,
             status: String::new(),
             completed: None,
             job: None,
@@ -36,12 +42,23 @@ impl PrintState {
         beats_per_measure: u16,
         selected: &[usize],
     ) -> drill_export::page::ReportDocument {
-        match self.kind {
-            ReportKind::SetChart => report::set_charts(document, &[]),
+        let set_index = self.scope_set;
+        let mut report = match self.kind {
+            ReportKind::SetChart => {
+                if self.current_set_only {
+                    report::set_charts(document, &[set_index])
+                } else {
+                    report::set_charts(document, &[])
+                }
+            }
             ReportKind::PerformerDrillBook => report::performer_drill_book(document, selected),
             ReportKind::CountSheet => report::count_sheet(document, beats_per_measure),
             ReportKind::ProductionSheet => report::production_sheet(document, Locale::En),
+        };
+        if self.current_set_only && self.kind != ReportKind::SetChart {
+            keep_set_rows(&mut report, set_index);
         }
+        report
     }
     pub fn page_count(
         &self,
@@ -64,13 +81,16 @@ impl PrintState {
         locale: Locale,
         underlay: Option<Vec<u8>>,
     ) {
-        let report = match self.kind {
+        let mut report = match self.kind {
             ReportKind::ProductionSheet => report::production_sheet(document, locale),
             ReportKind::PerformerDrillBook => {
                 report::performer_drill_book_localized(document, selected, locale)
             }
             _ => self.report(document, beats_per_measure, selected),
         };
+        if self.current_set_only && self.kind != ReportKind::SetChart {
+            keep_set_rows(&mut report, self.scope_set);
+        }
         self.settings.title = report.title.clone();
         self.output = Some(output.clone());
         self.completed = None;
@@ -158,6 +178,17 @@ impl PrintState {
                 Locale::Ja => "横",
                 Locale::En => "Landscape",
             },
+        }
+    }
+}
+
+fn keep_set_rows(report: &mut drill_export::page::ReportDocument, set_index: usize) {
+    for item in &mut report.items {
+        if let PageItem::Table { rows, .. } = item
+            && let Some(row) = rows.get(set_index).cloned()
+        {
+            rows.clear();
+            rows.push(row);
         }
     }
 }

@@ -1583,27 +1583,62 @@ impl eframe::App for DrillApp {
                     .get(self.current_set)
                     .map(|set| set.name.clone())
                     .unwrap_or_else(|| "—".to_owned());
+                let screen = ui.ctx().viewport_rect();
+                let visible = self.full_visible_field(screen);
+                let (pivot, pos) = if self.full_legacy_chrome || self.focus_field {
+                    (
+                        egui::Align2::LEFT_TOP,
+                        response.rect.left_top() + Vec2::new(22.0, 22.0),
+                    )
+                } else if self.selected.is_empty() {
+                    (
+                        egui::Align2::CENTER_TOP,
+                        Pos2::new(screen.center().x, 108.0),
+                    )
+                } else {
+                    (
+                        egui::Align2::CENTER_TOP,
+                        Pos2::new(visible.center().x, visible.bottom() + 8.0),
+                    )
+                };
                 egui::Area::new("return-to-set-start".into())
-                    .order(egui::Order::Foreground)
-                    .fixed_pos(response.rect.left_top() + Vec2::new(22.0, 22.0))
+                    .order(egui::Order::Tooltip)
+                    .pivot(pivot)
+                    .fixed_pos(pos)
                     .show(ui.ctx(), |ui| {
-                        egui::Frame::popup(ui.style()).show(ui, |ui| {
-                            ui.label(
-                                egui::RichText::new(super::i18n::registered(
-                                    self.locale,
-                                    "app-ui.121",
-                                ))
-                                .strong(),
-                            );
-                            ui.small(format!("{} · {:.2}", current_set_name, self.count_position));
-                            if ui
-                                .button(super::i18n::registered(self.locale, "app-ui.122"))
-                                .on_hover_text(super::i18n::registered(self.locale, "app-ui.123"))
-                                .clicked()
-                            {
-                                self.return_to_editable_set_start();
-                            }
-                        });
+                        egui::Frame::popup(ui.style())
+                            .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 235))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 10.0;
+                                    ui.label(
+                                        egui::RichText::new(super::i18n::registered(
+                                            self.locale,
+                                            "app-ui.121",
+                                        ))
+                                        .size(14.0)
+                                        .color(Color32::from_rgb(32, 36, 44)),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{} · {:.2}",
+                                            current_set_name, self.count_position
+                                        ))
+                                        .size(14.0)
+                                        .color(Color32::from_rgb(48, 54, 66)),
+                                    );
+                                    if ui
+                                        .button(super::i18n::registered(self.locale, "app-ui.122"))
+                                        .on_hover_text(super::i18n::registered(
+                                            self.locale,
+                                            "app-ui.123",
+                                        ))
+                                        .clicked()
+                                    {
+                                        self.return_to_editable_set_start();
+                                    }
+                                });
+                            });
                     });
             }
             // The field is a first-class desktop editing surface: clicking it
@@ -1688,6 +1723,15 @@ impl eframe::App for DrillApp {
                 // than a selection gesture, while leaving document/history
                 // untouched.
                 let viewport_size = rect.size();
+                if self.full_legacy_chrome || self.focus_field {
+                    self.field_viewport.clear_content();
+                } else {
+                    let visible = self
+                        .full_visible_field(ui.ctx().viewport_rect())
+                        .shrink(6.0);
+                    self.field_viewport
+                        .set_content(visible.translate(-rect.min.to_vec2()));
+                }
                 // Only the rubber-band allowance is enforced here, not the
                 // hard edge: an interactive pan is allowed to pull slightly
                 // past the sideline, and `FieldViewport::tick` springs it
@@ -1853,15 +1897,7 @@ impl eframe::App for DrillApp {
                     self.document.performers.len(),
                     self.labels_while_playing,
                 );
-                let render_options = drill_render::RenderOptions {
-                    margin: 0.0,
-                    field_center: Some(self.field_viewport.center),
-                    field_zoom: self.field_viewport.zoom,
-                    show_labels: self.show_dot_labels && !hide_labels,
-                    skip_offscreen: super::cull_offscreen_dots(self.document.performers.len()),
-                    extend_grid: true,
-                    ..drill_render::RenderOptions::default()
-                };
+                let render_options = self.field_render_options(!hide_labels);
                 let scene = drill_render::Scene {
                     document: &self.document,
                     positions: &self.frame_positions,
@@ -1886,17 +1922,9 @@ impl eframe::App for DrillApp {
                 // hit-testing all drift away from where the performer is
                 // actually drawn whenever the viewport's aspect ratio doesn't
                 // match the field's. See FieldMap's docs.
-                let field_map = drill_render::FieldMap::with_view(
-                    self.document.grid.width,
-                    self.document.grid.height,
-                    drill_render::Vec2 {
-                        x: rect.width(),
-                        y: rect.height(),
-                    },
-                    render_options.margin,
-                    render_options.field_center,
-                    render_options.field_zoom,
-                );
+                let field_map = self
+                    .field_viewport
+                    .field_map(&self.document.grid, rect.size());
                 // Show DNA heatmap overlay is revision-gated and built on the
                 // analytics worker, only while its toggle is on.
                 if self.heatmap_enabled {
@@ -2042,83 +2070,107 @@ impl eframe::App for DrillApp {
                         }
                     }
                 }
-                egui::Area::new("set-comparison-controls".into())
-                    .order(egui::Order::Foreground)
-                    .fixed_pos(rect.right_top() + Vec2::new(-286.0, 10.0))
-                    .show(ui.ctx(), |ui| {
-                        egui::Frame::popup(ui.style()).show(ui, |ui| {
-                            if let Some(mut comparison) = self.set_comparison {
-                                ui.horizontal(|ui| {
-                                    ui.label(
-                                        egui::RichText::new(super::i18n::registered(
-                                            self.locale,
-                                            "comparison.001",
-                                        ))
-                                        .strong(),
-                                    );
-                                    if ui
-                                        .small_button(super::i18n::registered(
-                                            self.locale,
-                                            "comparison.002",
-                                        ))
-                                        .clicked()
-                                    {
-                                        self.set_comparison = None;
-                                        self.status =
-                                            super::i18n::registered(self.locale, "comparison.003")
-                                                .into();
-                                    }
-                                });
-                                let reference_name = self
-                                    .document
-                                    .sets
-                                    .get(comparison.reference_set)
-                                    .map(|set| {
-                                        format!("{} · {}", comparison.reference_set + 1, set.name)
-                                    })
-                                    .unwrap_or_default();
-                                egui::ComboBox::from_id_salt("comparison-reference-set")
-                                    .selected_text(reference_name)
-                                    .show_ui(ui, |ui| {
-                                        for (index, set) in self.document.sets.iter().enumerate() {
-                                            if index != self.current_set {
-                                                ui.selectable_value(
-                                                    &mut comparison.reference_set,
-                                                    index,
-                                                    format!("{} · {}", index + 1, set.name),
-                                                );
-                                            }
+                let compare_floating = self.set_comparison.is_some()
+                    || (self.full_legacy_chrome && self.document.sets.len() > 1);
+                if compare_floating {
+                    let compare_pos = if self.full_legacy_chrome {
+                        rect.right_top() + Vec2::new(-286.0, 10.0)
+                    } else {
+                        rect.right_top() + Vec2::new(-280.0, 112.0)
+                    };
+                    egui::Area::new("set-comparison-controls".into())
+                        .order(egui::Order::Foreground)
+                        .fixed_pos(compare_pos)
+                        .show(ui.ctx(), |ui| {
+                            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                                if let Some(mut comparison) = self.set_comparison {
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            egui::RichText::new(super::i18n::registered(
+                                                self.locale,
+                                                "comparison.001",
+                                            ))
+                                            .strong(),
+                                        );
+                                        if ui
+                                            .small_button(super::i18n::registered(
+                                                self.locale,
+                                                "comparison.002",
+                                            ))
+                                            .clicked()
+                                        {
+                                            self.set_comparison = None;
+                                            self.status = super::i18n::registered(
+                                                self.locale,
+                                                "comparison.003",
+                                            )
+                                            .into();
                                         }
                                     });
-                                ui.checkbox(
-                                    &mut comparison.show_paths,
-                                    super::i18n::registered(self.locale, "comparison.004"),
-                                );
-                                ui.small(super::i18n::registered(self.locale, "comparison.005"));
-                                self.set_comparison = Some(comparison);
-                            } else if self.document.sets.len() > 1
-                                && ui
-                                    .button(super::i18n::registered(self.locale, "comparison.006"))
-                                    .on_hover_text(super::i18n::registered(
+                                    let reference_name = self
+                                        .document
+                                        .sets
+                                        .get(comparison.reference_set)
+                                        .map(|set| {
+                                            format!(
+                                                "{} · {}",
+                                                comparison.reference_set + 1,
+                                                set.name
+                                            )
+                                        })
+                                        .unwrap_or_default();
+                                    egui::ComboBox::from_id_salt("comparison-reference-set")
+                                        .selected_text(reference_name)
+                                        .show_ui(ui, |ui| {
+                                            for (index, set) in
+                                                self.document.sets.iter().enumerate()
+                                            {
+                                                if index != self.current_set {
+                                                    ui.selectable_value(
+                                                        &mut comparison.reference_set,
+                                                        index,
+                                                        format!("{} · {}", index + 1, set.name),
+                                                    );
+                                                }
+                                            }
+                                        });
+                                    ui.checkbox(
+                                        &mut comparison.show_paths,
+                                        super::i18n::registered(self.locale, "comparison.004"),
+                                    );
+                                    ui.small(super::i18n::registered(
                                         self.locale,
-                                        "comparison.007",
-                                    ))
-                                    .clicked()
-                            {
-                                let reference_set = self.current_set.saturating_sub(1);
-                                self.set_comparison = Some(super::SetComparison {
-                                    reference_set: if reference_set == self.current_set {
-                                        1
-                                    } else {
-                                        reference_set
-                                    },
-                                    show_paths: true,
-                                });
-                                self.status =
-                                    super::i18n::registered(self.locale, "comparison.008").into();
-                            }
+                                        "comparison.005",
+                                    ));
+                                    self.set_comparison = Some(comparison);
+                                } else if self.document.sets.len() > 1
+                                    && ui
+                                        .button(super::i18n::registered(
+                                            self.locale,
+                                            "comparison.006",
+                                        ))
+                                        .on_hover_text(super::i18n::registered(
+                                            self.locale,
+                                            "comparison.007",
+                                        ))
+                                        .clicked()
+                                {
+                                    let reference_set = self.current_set.saturating_sub(1);
+                                    self.set_comparison = Some(super::SetComparison {
+                                        reference_set: if reference_set == self.current_set {
+                                            1
+                                        } else {
+                                            reference_set
+                                        },
+                                        show_paths: true,
+                                    });
+                                    self.status =
+                                        super::i18n::registered(self.locale, "comparison.008")
+                                            .into();
+                                }
+                            });
                         });
-                    });
+                }
                 if self.selected.is_empty() && self.full_legacy_chrome {
                     let card = Rect::from_min_size(
                         rect.left_top() + Vec2::new(18.0, 42.0),
@@ -2486,14 +2538,12 @@ impl eframe::App for DrillApp {
                         );
                     }
                     if selected && self.drag_preview.is_none() {
+                        let ring = if self.cross_markers { 11.0 } else { 15.0 };
                         painter.circle_stroke(
                             pos,
-                            11.0 + settle_ring,
-                            Stroke::new(2.0, SELECTION_ACCENT),
+                            ring + settle_ring,
+                            Stroke::new(2.5, SELECTION_ACCENT),
                         );
-                        if self.selected.len() >= 2 {
-                            self.paint_selection_rank_badge(&painter, pos, index);
-                        }
                     }
                     // Peer rings sit outside the local accent selection ring so
                     // the two never merge into one thick smear.
@@ -2578,7 +2628,11 @@ impl eframe::App for DrillApp {
                         && response.double_clicked()
                         && nearest_index.is_none()
                     {
-                        self.field_viewport.reset(&self.document.grid);
+                        if ui.input(|input| input.modifiers.shift) {
+                            self.zoom_to_performers(viewport_size);
+                        } else {
+                            self.field_viewport.reset(&self.document.grid);
+                        }
                     } else if !pointer_gesture_taken
                         && !self.free_draw_active
                         && !interaction_locked
@@ -2649,12 +2703,12 @@ impl eframe::App for DrillApp {
                         painter.rect_filled(
                             marquee,
                             0.0,
-                            Color32::from_rgba_unmultiplied(70, 160, 255, 35),
+                            Color32::from_rgba_unmultiplied(20, 96, 200, 42),
                         );
                         painter.rect_stroke(
                             marquee,
                             0.0,
-                            Stroke::new(1.5, Color32::from_rgb(95, 180, 255)),
+                            Stroke::new(2.0, Color32::from_rgb(20, 96, 200)),
                             StrokeKind::Inside,
                         );
                     }
@@ -2944,6 +2998,17 @@ impl DrillApp {
                 self.set_navigator.open();
                 ui.close();
             }
+            if ui
+                .add_enabled(
+                    !self.document.performers.is_empty(),
+                    egui::Button::new(text(self.locale, Text::FitPeople)),
+                )
+                .clicked()
+            {
+                let screen = ui.ctx().viewport_rect();
+                self.zoom_to_performers(screen.size());
+                ui.close();
+            }
             ui.separator();
             ui.label(super::i18n::registered(self.locale, "workspace-preset.007"));
             for command in [
@@ -3002,6 +3067,22 @@ impl DrillApp {
                 super::i18n::registered(self.locale, "full-mode.039"),
             )
             .on_hover_text(super::i18n::registered(self.locale, "full-mode.040"));
+            ui.checkbox(&mut self.cross_markers, text(self.locale, Text::CrossMarks));
+            if self.document.sets.len() > 1
+                && self.set_comparison.is_none()
+                && ui.button(text(self.locale, Text::Compare)).clicked()
+            {
+                let reference_set = self.current_set.saturating_sub(1);
+                self.set_comparison = Some(super::SetComparison {
+                    reference_set: if reference_set == self.current_set {
+                        1
+                    } else {
+                        reference_set
+                    },
+                    show_paths: true,
+                });
+                ui.close();
+            }
             ui.checkbox(
                 &mut self.labels_while_playing,
                 super::i18n::registered(self.locale, "full-mode.041"),
@@ -3475,14 +3556,19 @@ impl DrillApp {
                     for (index, name, counts, set_id) in &cards {
                         let selected = *index == current_set;
                         let fill = if selected {
-                            super::app_theme::ACCENT_SOFT
+                            super::simple_mode::SIMPLE_BLUE
                         } else {
-                            ui.visuals().extreme_bg_color
+                            Color32::WHITE
                         };
                         let stroke = if selected {
-                            egui::Stroke::new(1.0, super::app_theme::ACCENT)
+                            egui::Stroke::new(2.0, super::simple_mode::SIMPLE_BLUE)
                         } else {
                             egui::Stroke::new(1.0, super::app_theme::HAIRLINE)
+                        };
+                        let ink = if selected {
+                            Color32::WHITE
+                        } else {
+                            Color32::from_rgb(32, 36, 44)
                         };
                         let response = super::app_theme::surface_frame(ui)
                             .fill(fill)
@@ -3490,7 +3576,11 @@ impl DrillApp {
                             .corner_radius(super::app_theme::CORNER_SM)
                             .inner_margin(egui::Margin::symmetric(10, 6))
                             .show(ui, |ui| {
-                                ui.label(format!("{}  {name}", index + 1));
+                                ui.label(
+                                    egui::RichText::new(format!("{}  {name}", index + 1))
+                                        .color(ink)
+                                        .size(if selected { 16.0 } else { 14.0 }),
+                                );
                             })
                             .response
                             .interact(Sense::click())
@@ -4012,51 +4102,6 @@ impl DrillApp {
         let rect = align.anchor_size(anchor, galley.size()).expand2(padding);
         painter.rect_filled(rect, 5.0, plate);
         painter.galley(rect.min + padding, galley, color);
-    }
-
-    /// Draws the small numbered badge marking a selected performer's rank in
-    /// the current click order (1 = first clicked). Callers gate on
-    /// `self.selected.len() >= 2` first — a badge on a single selected dot
-    /// is just noise. Positioned at the dot's bottom-right, a deliberately
-    /// different corner from the locked-badge "L" at top-right
-    /// (`pos + Vec2::new(7.0, -8.0)`), so a performer that is both locked
-    /// and selected shows both badges without overlap. The radius grows
-    /// with digit count so 10+ ranks aren't clipped.
-    pub(crate) fn paint_selection_rank_badge(
-        &self,
-        painter: &egui::Painter,
-        pos: Pos2,
-        index: usize,
-    ) {
-        let Some(rank) = self
-            .selected
-            .iter()
-            .position(|&i| i == index)
-            .map(|p| p + 1)
-        else {
-            return;
-        };
-        let mut digits: u32 = 1;
-        let mut remaining = rank;
-        while remaining >= 10 {
-            remaining /= 10;
-            digits += 1;
-        }
-        let radius = 7.5 + 2.3 * (digits - 1) as f32;
-        let center = pos + Vec2::new(8.0, 9.0);
-        painter.circle_filled(center, radius, Color32::from_rgb(245, 197, 66));
-        painter.circle_stroke(
-            center,
-            radius,
-            Stroke::new(1.0, Color32::from_black_alpha(200)),
-        );
-        painter.text(
-            center,
-            egui::Align2::CENTER_CENTER,
-            rank.to_string(),
-            egui::FontId::proportional(10.0),
-            Color32::BLACK,
-        );
     }
 
     pub(crate) fn show_recent_projects(&mut self, ctx: &egui::Context) {

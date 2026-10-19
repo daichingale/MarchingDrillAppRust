@@ -137,6 +137,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn two_hundred_cast_drag_and_playback_stay_inside_a_frame() {
+        let document = Document::demo(20, 10);
+        assert_eq!(document.performers.len(), 200);
+        let mut positions = Vec::with_capacity(200);
+        let frames = 60u32;
+        let started = std::time::Instant::now();
+        for frame in 0..frames {
+            document.positions_at_count(0, (frame % 16) as f32, &mut positions);
+            assert_eq!(positions.len(), 200);
+            for (index, start) in positions.iter().copied().enumerate() {
+                let _ = drag_point(
+                    start,
+                    (18.0, -12.0),
+                    20.0,
+                    &document,
+                    index.is_multiple_of(2),
+                );
+            }
+        }
+        let per_frame = started.elapsed() / frames;
+        let budget = if cfg!(debug_assertions) {
+            std::time::Duration::from_millis(16)
+        } else {
+            std::time::Duration::from_millis(4)
+        };
+        assert!(
+            per_frame <= budget,
+            "200-cast frame took {per_frame:?}, budget {budget:?}"
+        );
+    }
+
+    #[test]
     fn audio_clock_stops_exactly_at_out_point() {
         let document = Document::demo(2, 2);
         let decision = playback_decision(

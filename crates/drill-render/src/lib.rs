@@ -282,6 +282,17 @@ pub struct RenderOptions {
     /// size and aspect. Off for exports and tests, which must keep drawing
     /// only the field rectangle.
     pub extend_grid: bool,
+    /// Draw this shape for every person instead of the mark stored on the
+    /// performer. `None` keeps the document mark, which is what exports use.
+    pub symbol_override: Option<Symbol>,
+    /// Put the person's number in the middle of the dot. Off keeps the
+    /// number above the mark, which is the printed-chart layout.
+    pub label_inside: bool,
+    /// Canvas-local box the fitted field sits in. `None` is the whole
+    /// viewport, which exports and tests keep using.
+    pub content_min: Option<Vec2>,
+    /// Size of [`Self::content_min`]. Both must be set for the box to apply.
+    pub content_size: Option<Vec2>,
 }
 
 impl Default for RenderOptions {
@@ -299,6 +310,10 @@ impl Default for RenderOptions {
             show_trails_for: TrailSelection::None,
             skip_offscreen: false,
             extend_grid: false,
+            symbol_override: None,
+            label_inside: false,
+            content_min: None,
+            content_size: None,
         }
     }
 }
@@ -375,7 +390,30 @@ impl FieldMap {
         center: Option<Point>,
         zoom: f32,
     ) -> Self {
-        let mut map = Self::new(grid_width, grid_height, viewport_size, margin);
+        Self::with_content(
+            grid_width,
+            grid_height,
+            Vec2 { x: 0.0, y: 0.0 },
+            viewport_size,
+            margin,
+            center,
+            zoom,
+        )
+    }
+
+    /// Same as [`Self::with_view`], but the fitted field is letterboxed into
+    /// `content` (canvas-local pixels) instead of the whole viewport. Zoom 1
+    /// then means "the whole floor fits in the area the dock does not cover".
+    pub fn with_content(
+        grid_width: f32,
+        grid_height: f32,
+        content_min: Vec2,
+        content_size: Vec2,
+        margin: f32,
+        center: Option<Point>,
+        zoom: f32,
+    ) -> Self {
+        let mut map = Self::new(grid_width, grid_height, content_size, margin);
         let zoom = if zoom.is_finite() {
             zoom.clamp(0.25, 8.0)
         } else {
@@ -386,9 +424,11 @@ impl FieldMap {
             y: grid_height * 0.5,
         });
         map.scale *= zoom;
+        let anchor_x = content_min.x + content_size.x * 0.5;
+        let anchor_y = content_min.y + content_size.y * 0.5;
         map.origin = Vec2 {
-            x: viewport_size.x * 0.5 - center.x * map.scale,
-            y: viewport_size.y * 0.5 - (grid_height - center.y) * map.scale,
+            x: anchor_x - center.x * map.scale,
+            y: anchor_y - (grid_height - center.y) * map.scale,
         };
         map
     }
@@ -721,14 +761,25 @@ pub fn build_field_2d(scene: &Scene<'_>, _scratch: &mut BuildScratch, out: &mut 
         out.stats.dropped_nonfinite = 1;
         return;
     }
-    let field_map = FieldMap::with_view(
-        grid.width,
-        grid.height,
-        scene.viewport.size,
-        scene.options.margin,
-        scene.options.field_center,
-        scene.options.field_zoom,
-    );
+    let field_map = match (scene.options.content_min, scene.options.content_size) {
+        (Some(min), Some(size)) if size.x > 1.0 && size.y > 1.0 => FieldMap::with_content(
+            grid.width,
+            grid.height,
+            min,
+            size,
+            scene.options.margin,
+            scene.options.field_center,
+            scene.options.field_zoom,
+        ),
+        _ => FieldMap::with_view(
+            grid.width,
+            grid.height,
+            scene.viewport.size,
+            scene.options.margin,
+            scene.options.field_center,
+            scene.options.field_zoom,
+        ),
+    };
     let map = |p: Point| field_map.map(p);
     let field = Rect {
         min: field_map.origin,
@@ -1062,7 +1113,7 @@ pub fn build_field_2d(scene: &Scene<'_>, _scratch: &mut BuildScratch, out: &mut 
                     Rgba(color[0], color[1], color[2], 255)
                 },
                 stroke: scene.theme.dot_stroke,
-                symbol: performer.symbol,
+                symbol: scene.options.symbol_override.unwrap_or(performer.symbol),
             });
             out.stats.dots_emitted += 1;
         } else {
@@ -1078,16 +1129,38 @@ pub fn build_field_2d(scene: &Scene<'_>, _scratch: &mut BuildScratch, out: &mut 
     if scene.options.show_labels {
         for (performer, point) in scene.document.performers.iter().zip(scene.positions) {
             if point.x.is_finite() && point.y.is_finite() && shown(*point) {
-                let text = out.push_text(&performer.label);
                 let at = map(*point);
+                let scale = scene.viewport.ui_scale.max(0.1);
+                let (text, placed, size, ink) = if scene.options.label_inside {
+                    let number = marker_digits(&performer.label);
+                    let size = (scene.options.label_size * scale).clamp(9.0, 14.0);
+                    let fill = performer.resolved_color(&scene.document.sections);
+                    (
+                        out.push_text(&number),
+                        Vec2 {
+                            x: at.x,
+                            // The painter anchors text on its bottom edge.
+                            y: at.y + size * 0.42,
+                        },
+                        size,
+                        ink_on(fill),
+                    )
+                } else {
+                    (
+                        out.push_text(&performer.label),
+                        Vec2 {
+                            x: at.x,
+                            y: at.y - scene.options.dot_radius - 2.0,
+                        },
+                        scene.options.label_size * scale,
+                        scene.theme.text,
+                    )
+                };
                 out.commands.push(DrawCmd::Text {
-                    at: Vec2 {
-                        x: at.x,
-                        y: at.y - scene.options.dot_radius - 2.0,
-                    },
+                    at: placed,
                     text,
-                    size: scene.options.label_size * scene.viewport.ui_scale.max(0.1),
-                    color: scene.theme.text,
+                    size,
+                    color: ink,
                 });
                 out.stats.labels_emitted += 1;
             }
@@ -1097,6 +1170,66 @@ pub fn build_field_2d(scene: &Scene<'_>, _scratch: &mut BuildScratch, out: &mut 
     out.close_layer(Layer::Marker, out.commands.len());
     out.close_layer(Layer::Overlay, out.commands.len());
     let _ = grid.style == GridStyle::Dots;
+}
+
+/// The roster number painted inside a dot. Leading words are skipped so
+/// `12 山田` and `P12` both read as `12`. A name with no digits keeps two
+/// characters so the dot is never blank.
+fn marker_digits(label: &str) -> String {
+    let label = label.trim();
+    let mut digits = String::new();
+    let mut started = false;
+    for ch in label.chars() {
+        if ch.is_ascii_digit() {
+            started = true;
+            digits.push(ch);
+            if digits.len() == 3 {
+                break;
+            }
+        } else if started {
+            break;
+        }
+    }
+    if !digits.is_empty() {
+        return digits;
+    }
+    label.chars().take(2).collect()
+}
+
+fn channel_luminance(channel: u8) -> f32 {
+    let scaled = f32::from(channel) / 255.0;
+    if scaled <= 0.04045 {
+        scaled / 12.92
+    } else {
+        ((scaled + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn relative_luminance(fill: [u8; 3]) -> f32 {
+    0.2126 * channel_luminance(fill[0])
+        + 0.7152 * channel_luminance(fill[1])
+        + 0.0722 * channel_luminance(fill[2])
+}
+
+fn contrast_ratio(lighter: f32, darker: f32) -> f32 {
+    let (hi, lo) = if lighter >= darker {
+        (lighter, darker)
+    } else {
+        (darker, lighter)
+    };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+/// Dark ink on light fills, white ink on dark fills. The choice is whichever
+/// pair has the higher contrast, so orange and gold stay readable.
+fn ink_on(fill: [u8; 3]) -> Rgba {
+    let background = relative_luminance(fill);
+    let dark = relative_luminance([20, 24, 32]);
+    if contrast_ratio(background, dark) >= contrast_ratio(background, 1.0) {
+        Rgba(20, 24, 32, 255)
+    } else {
+        Rgba(255, 255, 255, 255)
+    }
 }
 
 /// Builds the same drill through a saved camera pose. This CPU path is used by
@@ -1602,6 +1735,131 @@ mod tests {
     }
 
     #[test]
+    fn filled_circles_carry_the_number_inside() {
+        let mut doc = Document::blank(2);
+        doc.performers[0].label = "12 山田".into();
+        doc.performers[0].symbol = Symbol::Cross;
+        let positions = doc.sets[0].positions.clone();
+        let options = RenderOptions {
+            symbol_override: Some(Symbol::Circle),
+            label_inside: true,
+            show_labels: true,
+            ..RenderOptions::default()
+        };
+        let mut out = DisplayList::new();
+        build_field_2d(
+            &Scene {
+                positions: &positions,
+                document: &doc,
+                viewport: Viewport {
+                    size: Vec2 { x: 800.0, y: 600.0 },
+                    ui_scale: 1.0,
+                },
+                options: &options,
+                theme: &Theme::PRINT_LIGHT,
+            },
+            &mut BuildScratch,
+            &mut out,
+        );
+        let (symbol, center) = out
+            .layer(Layer::Dot)
+            .iter()
+            .find_map(|cmd| match cmd {
+                DrawCmd::Dot { symbol, center, .. } => Some((*symbol, *center)),
+                _ => None,
+            })
+            .expect("dot");
+        assert_eq!(symbol, Symbol::Circle);
+        match &out.layer(Layer::DotLabel)[0] {
+            DrawCmd::Text { at, text, .. } => {
+                assert_eq!(out.text(*text), "12");
+                assert!((at.x - center.x).abs() < 0.01);
+                assert!(at.y > center.y);
+            }
+            other => panic!("expected a label, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn light_fills_use_dark_numbers_and_dark_fills_use_white() {
+        let mut doc = Document::blank(2);
+        doc.performers[0].color = Some([196, 132, 24]).into();
+        doc.performers[1].color = Some([32, 92, 196]).into();
+        let positions = doc.sets[0].positions.clone();
+        let options = RenderOptions {
+            symbol_override: Some(Symbol::Circle),
+            label_inside: true,
+            show_labels: true,
+            ..RenderOptions::default()
+        };
+        let mut out = DisplayList::new();
+        build_field_2d(
+            &Scene {
+                positions: &positions,
+                document: &doc,
+                viewport: Viewport {
+                    size: Vec2 { x: 800.0, y: 600.0 },
+                    ui_scale: 1.0,
+                },
+                options: &options,
+                theme: &Theme::PRINT_LIGHT,
+            },
+            &mut BuildScratch,
+            &mut out,
+        );
+        let colors: Vec<Rgba> = out
+            .layer(Layer::DotLabel)
+            .iter()
+            .filter_map(|cmd| match cmd {
+                DrawCmd::Text { color, .. } => Some(*color),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(colors.len(), 2);
+        assert_eq!(colors[0], Rgba(20, 24, 32, 255));
+        assert_eq!(colors[1], Rgba(255, 255, 255, 255));
+    }
+
+    #[test]
+    fn two_hundred_filled_markers_build_inside_a_frame() {
+        let doc = Document::demo(20, 10);
+        assert_eq!(doc.performers.len(), 200);
+        let positions = doc.sets[0].positions.clone();
+        let options = RenderOptions {
+            symbol_override: Some(Symbol::Circle),
+            label_inside: true,
+            show_labels: true,
+            ..RenderOptions::default()
+        };
+        let scene = Scene {
+            positions: &positions,
+            document: &doc,
+            viewport: Viewport {
+                size: Vec2 {
+                    x: 1280.0,
+                    y: 800.0,
+                },
+                ui_scale: 1.0,
+            },
+            options: &options,
+            theme: &Theme::PRINT_LIGHT,
+        };
+        let mut out = DisplayList::new();
+        let frames = 30u32;
+        let started = std::time::Instant::now();
+        for _ in 0..frames {
+            build_field_2d(&scene, &mut BuildScratch, &mut out);
+        }
+        assert_eq!(out.stats().dots_emitted, 200);
+        assert_eq!(out.stats().labels_emitted, 200);
+        let per_frame = started.elapsed() / frames;
+        assert!(
+            per_frame <= std::time::Duration::from_millis(16),
+            "200-marker build took {per_frame:?}"
+        );
+    }
+
+    #[test]
     fn emits_field_and_every_performer() {
         let mut out = DisplayList::new();
         build_demo(&mut out);
@@ -1671,6 +1929,43 @@ mod tests {
         assert!(
             reaches_edge,
             "grid lines continue through the side letterbox"
+        );
+    }
+
+    #[test]
+    fn content_box_keeps_the_floor_out_of_a_bottom_dock() {
+        let grid = drill_core::GridConfig::japan_floor();
+        let content_min = Vec2 { x: 12.0, y: 16.0 };
+        let content_size = Vec2 {
+            x: 1256.0,
+            y: 520.0,
+        };
+        let map = FieldMap::with_content(
+            grid.width,
+            grid.height,
+            content_min,
+            content_size,
+            0.0,
+            None,
+            1.0,
+        );
+        let top = map.origin.y;
+        let bottom = map.origin.y + grid.height * map.scale;
+        let left = map.origin.x;
+        let right = map.origin.x + grid.width * map.scale;
+        assert!(top >= content_min.y - 0.5, "top {top}");
+        assert!(
+            bottom <= content_min.y + content_size.y + 0.5,
+            "bottom {bottom}"
+        );
+        assert!(left >= content_min.x - 0.5, "left {left}");
+        assert!(
+            right <= content_min.x + content_size.x + 0.5,
+            "right {right}"
+        );
+        assert!(
+            (bottom - top) <= content_size.y + 0.5,
+            "floor taller than the open area"
         );
     }
 

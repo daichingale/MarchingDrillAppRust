@@ -104,6 +104,18 @@ pub enum Text {
     NoName,
     PlaybackOptions,
     Collapse,
+    Menu,
+    CrossMarks,
+    Export,
+    Compare,
+    Paper,
+    Orientation,
+    Range,
+    ThisSet,
+    AllSets,
+    ShowSheet,
+    ExportTitle,
+    FitPeople,
 }
 
 impl Text {
@@ -111,7 +123,7 @@ impl Text {
     /// the catalog completeness test fail during review rather than leaking a
     /// fallback string into a release build.
     #[cfg(test)]
-    pub const ALL: [Self; 55] = [
+    pub const ALL: [Self; 67] = [
         Self::File,
         Self::Edit,
         Self::Playback,
@@ -167,6 +179,18 @@ impl Text {
         Self::NoName,
         Self::PlaybackOptions,
         Self::Collapse,
+        Self::Menu,
+        Self::CrossMarks,
+        Self::Export,
+        Self::Compare,
+        Self::Paper,
+        Self::Orientation,
+        Self::Range,
+        Self::ThisSet,
+        Self::AllSets,
+        Self::ShowSheet,
+        Self::ExportTitle,
+        Self::FitPeople,
     ];
 }
 
@@ -288,6 +312,29 @@ pub fn text(locale: Locale, key: Text) -> &'static str {
         (Locale::En, Text::PlaybackOptions) => "Playback options",
         (Locale::Ja, Text::Collapse) => "閉じる",
         (Locale::En, Text::Collapse) => "Collapse",
+        (_, Text::Menu) => "☰",
+        (Locale::Ja, Text::CrossMarks) => "×印",
+        (Locale::En, Text::CrossMarks) => "Cross marks",
+        (Locale::Ja, Text::Export) => "書き出す",
+        (Locale::En, Text::Export) => "Export",
+        (Locale::Ja, Text::Compare) => "A/B比較",
+        (Locale::En, Text::Compare) => "A/B compare",
+        (Locale::Ja, Text::Paper) => "用紙",
+        (Locale::En, Text::Paper) => "Paper",
+        (Locale::Ja, Text::Orientation) => "向き",
+        (Locale::En, Text::Orientation) => "Orientation",
+        (Locale::Ja, Text::Range) => "範囲",
+        (Locale::En, Text::Range) => "Range",
+        (Locale::Ja, Text::ThisSet) => "今のセット",
+        (Locale::En, Text::ThisSet) => "This set",
+        (Locale::Ja, Text::AllSets) => "全部",
+        (Locale::En, Text::AllSets) => "All sets",
+        (Locale::Ja, Text::ShowSheet) => "進行表",
+        (Locale::En, Text::ShowSheet) => "Run sheet",
+        (Locale::Ja, Text::ExportTitle) => "書き出し",
+        (Locale::En, Text::ExportTitle) => "Export",
+        (Locale::Ja, Text::FitPeople) => "人に合わせる",
+        (Locale::En, Text::FitPeople) => "Fit performers",
     }
 }
 
@@ -307,6 +354,14 @@ pub fn roster_count(locale: Locale, count: usize) -> String {
     }
 }
 
+/// Page count beside the paper name, for the export sheet.
+pub fn page_summary(locale: Locale, pages: usize, size: &str) -> String {
+    match locale {
+        Locale::Ja => format!("{pages}ページ · {size}"),
+        Locale::En => format!("{pages} pages · {size}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -320,6 +375,11 @@ mod tests {
     #[test]
     fn locales_are_distinct_for_translated_text() {
         assert_ne!(text(Locale::Ja, Text::Play), text(Locale::En, Text::Play));
+    }
+    #[test]
+    fn page_summary_names_the_count_and_the_paper() {
+        assert_eq!(page_summary(Locale::Ja, 6, "A4"), "6ページ · A4");
+        assert_eq!(page_summary(Locale::En, 6, "A4"), "6 pages · A4");
     }
 
     #[test]

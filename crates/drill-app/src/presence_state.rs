@@ -362,8 +362,7 @@ impl PresenceState {
                 continue;
             };
             let color = color_of(peer.presence.color);
-            // Offset up-left, opposite the yellow selection-rank badge at
-            // down-right, so the two never sit on top of each other.
+            // Offset up-left, clear of the selection ring.
             let center = pos + Vec2::new(-11.0, -11.0);
             painter.circle_filled(center, 7.5, color);
             painter.circle_stroke(

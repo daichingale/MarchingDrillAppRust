@@ -175,6 +175,97 @@ pub(crate) fn cull_offscreen_dots(performers: usize) -> bool {
     performers >= LIGHT_PLAYBACK_MIN
 }
 
+fn print_kind_label(locale: Locale, kind: drill_export::report::ReportKind) -> &'static str {
+    match kind {
+        drill_export::report::ReportKind::SetChart => i18n::registered(locale, "app-state.011"),
+        drill_export::report::ReportKind::PerformerDrillBook => {
+            i18n::registered(locale, "app-state.012")
+        }
+        drill_export::report::ReportKind::CountSheet => i18n::registered(locale, "app-state.013"),
+        drill_export::report::ReportKind::ProductionSheet => text(locale, Text::ShowSheet),
+    }
+}
+
+fn print_kind_icon(kind: drill_export::report::ReportKind) -> simple_mode::PhoneIcon {
+    match kind {
+        drill_export::report::ReportKind::SetChart => simple_mode::PhoneIcon::Chart,
+        drill_export::report::ReportKind::PerformerDrillBook => simple_mode::PhoneIcon::Book,
+        drill_export::report::ReportKind::CountSheet => simple_mode::PhoneIcon::Counts,
+        drill_export::report::ReportKind::ProductionSheet => simple_mode::PhoneIcon::Sheet,
+    }
+}
+
+fn print_output_card(
+    ui: &mut egui::Ui,
+    selected: bool,
+    label: &str,
+    icon: simple_mode::PhoneIcon,
+) -> bool {
+    let fill = if selected {
+        app_theme::ACCENT_SOFT
+    } else {
+        Color32::WHITE
+    };
+    let stroke = if selected {
+        simple_mode::SIMPLE_BLUE
+    } else {
+        app_theme::HAIRLINE
+    };
+    let ink = Color32::from_rgb(32, 36, 44);
+    let width = ui.available_width().clamp(220.0, 268.0);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 64.0), Sense::click());
+    if response.hovered() && !selected {
+        ui.painter()
+            .rect_filled(rect, 8.0, Color32::from_rgb(244, 246, 250));
+    } else {
+        ui.painter().rect_filled(rect, 8.0, fill);
+    }
+    ui.painter().rect_stroke(
+        rect,
+        8.0,
+        Stroke::new(if selected { 2.0 } else { 1.0 }, stroke),
+        StrokeKind::Inside,
+    );
+    simple_mode::paint_phone_icon_at(
+        ui.painter(),
+        Pos2::new(rect.left() + 28.0, rect.center().y),
+        icon,
+        if selected {
+            simple_mode::SIMPLE_BLUE
+        } else {
+            ink
+        },
+        1.15,
+    );
+    ui.painter().text(
+        Pos2::new(rect.left() + 52.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(16.0),
+        ink,
+    );
+    response.clicked()
+}
+
+fn solid_export_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    let width = ui.available_width().clamp(180.0, 460.0);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 48.0), Sense::click());
+    let fill = if response.hovered() {
+        Color32::from_rgb(12, 72, 168)
+    } else {
+        simple_mode::SIMPLE_BLUE
+    };
+    ui.painter().rect_filled(rect, 8.0, fill);
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        egui::FontId::proportional(18.0),
+        Color32::WHITE,
+    );
+    response
+}
+
 /// How the move leaving this scene is timed and shaped. Straight and linear
 /// is the file default, so choosing it again writes nothing new.
 const SCENE_ARC_BULGE: f32 = 0.22;
@@ -1011,6 +1102,9 @@ pub(crate) struct DrillApp {
     /// Session-only. Keep those numbers up while a large cast is playing.
     /// Off by default so playback can skip a text layout per person.
     labels_while_playing: bool,
+    /// Session-only. Draw the printed-chart × instead of a filled circle.
+    /// The document mark is unchanged either way.
+    cross_markers: bool,
     /// Session-only. Faint dots for where everyone stands in the next scene.
     /// Not stored in the drill file.
     show_next_places: bool,
@@ -1192,7 +1286,8 @@ impl Default for DrillApp {
             playback_paths: false,
             show_field_marks: true,
             show_dot_labels: true,
-            labels_while_playing: false,
+            labels_while_playing: true,
+            cross_markers: false,
             show_next_places: false,
             full_toolbar_collapsed: false,
             full_legacy_chrome: false,
@@ -1936,8 +2031,7 @@ impl DrillApp {
     }
 
     fn command_menu(&mut self, ui: &mut egui::Ui, menu: CommandMenu) {
-        let ctx = ui.ctx().clone();
-        let labels = self.keybindings.map.command_labels(&ctx);
+        let labels = self.keybindings.map.command_labels(self.locale);
         let locale = self.locale;
         let context = self.command_context();
         if let Some(command) = commands::show_menu_labeled(ui, menu, context, locale, &|command| {
@@ -2076,6 +2170,32 @@ impl DrillApp {
         self.frame_positions.clear();
         self.field_tool = FieldTool::Place;
         self.status = text(self.locale, Text::Ready).into();
+    }
+
+    /// Live field drawing. Circles and the number inside them are a view
+    /// choice: exports and the saved drill keep each person's own mark.
+    pub(crate) fn field_render_options(&self, show_labels: bool) -> drill_render::RenderOptions {
+        let circles = !self.cross_markers;
+        let labels = show_labels && self.show_dot_labels;
+        let (content_min, content_size) = match self.field_viewport.content_for_render() {
+            Some((min, size)) => (Some(min), Some(size)),
+            None => (None, None),
+        };
+        drill_render::RenderOptions {
+            margin: 0.0,
+            field_center: Some(self.field_viewport.center),
+            field_zoom: self.field_viewport.zoom,
+            content_min,
+            content_size,
+            show_labels: labels,
+            skip_offscreen: cull_offscreen_dots(self.document.performers.len()),
+            extend_grid: true,
+            symbol_override: circles.then_some(drill_core::Symbol::Circle),
+            label_inside: circles && labels,
+            dot_radius: if circles { 11.0 } else { 5.0 },
+            label_size: if circles { 13.0 } else { 11.0 },
+            ..drill_render::RenderOptions::default()
+        }
     }
 
     fn add_performer(&mut self) {
@@ -3086,6 +3206,51 @@ impl DrillApp {
         .into();
     }
 
+    fn paint_print_preview(&mut self, painter: &egui::Painter, rect: egui::Rect) {
+        let positions = self
+            .document
+            .sets
+            .get(self.current_set)
+            .map(|set| set.positions.clone())
+            .unwrap_or_else(|| self.frame_positions.clone());
+        let options = drill_render::RenderOptions {
+            margin: 8.0,
+            show_labels: true,
+            dot_radius: 5.0,
+            label_size: 9.0,
+            field_center: None,
+            field_zoom: 1.0,
+            skip_offscreen: false,
+            extend_grid: false,
+            symbol_override: Some(Symbol::Circle),
+            label_inside: true,
+            ..drill_render::RenderOptions::default()
+        };
+        let mut list = drill_render::DisplayList::new();
+        let scene = drill_render::Scene {
+            document: &self.document,
+            positions: &positions,
+            viewport: drill_render::Viewport {
+                size: drill_render::Vec2 {
+                    x: rect.width(),
+                    y: rect.height(),
+                },
+                ui_scale: 1.0,
+            },
+            options: &options,
+            theme: &drill_render::Theme::PRINT_LIGHT,
+        };
+        drill_render::build_field_2d(&scene, &mut self.render_scratch, &mut list);
+        painter.rect_filled(rect, 6.0, Color32::WHITE);
+        egui_backend::paint(painter, rect.min, &list);
+        painter.rect_stroke(
+            rect,
+            6.0,
+            Stroke::new(1.0, app_theme::HAIRLINE),
+            StrokeKind::Inside,
+        );
+    }
+
     fn show_print_workspace(&mut self, context: &egui::Context) {
         self.print_state.poll(self.locale);
         if !self.print_state.open {
@@ -3093,97 +3258,421 @@ impl DrillApp {
         }
         let selected = self.selected.iter().copied().collect::<Vec<_>>();
         let mut open = self.print_state.open;
+        let mut dismiss = false;
         let mut notation = self.document.grid.coordinate_notation.clone();
         let mut notation_changed = false;
-        egui::Window::new(i18n::registered(self.locale, "app-state.007"))
-            .open(&mut open).default_width(720.0).resizable(true).scroll(true).show(context, |ui| {
-                ui.heading(i18n::registered(self.locale, "app-state.008"));
-                ui.label(i18n::registered(self.locale, "app-state.009"));
-                ui.separator();
-                ui.columns(2, |columns| {
-                    let ui=&mut columns[0]; ui.strong(i18n::registered(self.locale, "app-state.010"));
-                    ui.radio_value(&mut self.print_state.kind, drill_export::report::ReportKind::SetChart, i18n::registered(self.locale, "app-state.011"));
-                    ui.radio_value(&mut self.print_state.kind, drill_export::report::ReportKind::PerformerDrillBook, i18n::registered(self.locale, "app-state.012"));
-                    if self.print_state.kind == drill_export::report::ReportKind::PerformerDrillBook { ui.small(if self.locale == Locale::Ja { if selected.is_empty() { "全演者を出力します" } else { "選択中の演者だけを出力します" } } else if selected.is_empty() { "Exports every performer" } else { "Exports selected performers only" }); }
-                    ui.radio_value(&mut self.print_state.kind, drill_export::report::ReportKind::CountSheet, i18n::registered(self.locale, "app-state.013"));
-                    ui.radio_value(&mut self.print_state.kind, drill_export::report::ReportKind::ProductionSheet, i18n::registered(self.locale, "app-state.014"));
-                    ui.add_space(10.0); ui.strong(i18n::registered(self.locale, "app-state.015"));
+        let screen = context.viewport_rect().shrink(16.0);
+        egui::Area::new("print-sheet-dim".into())
+            .order(egui::Order::Foreground)
+            .fixed_pos(context.viewport_rect().min)
+            .interactable(true)
+            .show(context, |ui| {
+                let (rect, _) =
+                    ui.allocate_exact_size(context.viewport_rect().size(), Sense::click());
+                ui.painter()
+                    .rect_filled(rect, 0.0, Color32::from_black_alpha(88));
+            });
+        if context.input(|input| input.key_pressed(egui::Key::Escape)) {
+            dismiss = true;
+        }
+        egui::Window::new(text(self.locale, Text::ExportTitle))
+            .open(&mut open)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .order(egui::Order::Tooltip)
+            .fade_in(false)
+            .collapsible(false)
+            .resizable(true)
+            .constrain_to(screen)
+            .default_size(egui::vec2(
+                (screen.width() - 24.0).min(980.0),
+                (screen.height() - 24.0).min(700.0),
+            ))
+            .scroll(true)
+            .show(context, |ui| {
+                ui.horizontal_top(|ui| {
+                    ui.vertical(|ui| {
+                        ui.set_min_width(248.0);
+                        ui.set_max_width(268.0);
+                        for kind in [
+                            drill_export::report::ReportKind::SetChart,
+                            drill_export::report::ReportKind::PerformerDrillBook,
+                            drill_export::report::ReportKind::CountSheet,
+                            drill_export::report::ReportKind::ProductionSheet,
+                        ] {
+                            if print_output_card(
+                                ui,
+                                self.print_state.kind == kind,
+                                print_kind_label(self.locale, kind),
+                                print_kind_icon(kind),
+                            ) {
+                                self.print_state.kind = kind;
+                            }
+                            ui.add_space(8.0);
+                        }
+                    });
+                    ui.add_space(16.0);
+                    ui.vertical(|ui| {
+                        ui.set_min_width(420.0);
+                        ui.strong(i18n::registered(self.locale, "app-state.032"));
+                        let option_ink = Color32::from_rgb(32, 36, 44);
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            ui.label(
+                                egui::RichText::new(text(self.locale, Text::Paper))
+                                    .size(14.0)
+                                    .color(option_ink),
+                            );
+                            egui::ComboBox::from_id_salt("print-page-size")
+                                .width(108.0)
+                                .selected_text(self.print_state.page_size_label())
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut self.print_state.settings.page_size,
+                                        drill_export::page::PageSize::A4,
+                                        "A4",
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.print_state.settings.page_size,
+                                        drill_export::page::PageSize::Letter,
+                                        "Letter",
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.print_state.settings.page_size,
+                                        drill_export::page::PageSize::Tabloid,
+                                        "Tabloid",
+                                    );
+                                });
+                            ui.label(
+                                egui::RichText::new(text(self.locale, Text::Orientation))
+                                    .size(14.0)
+                                    .color(option_ink),
+                            );
+                            egui::ComboBox::from_id_salt("print-orientation")
+                                .width(108.0)
+                                .selected_text(self.print_state.orientation_label(self.locale))
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut self.print_state.settings.orientation,
+                                        drill_export::page::Orientation::Portrait,
+                                        i18n::registered(self.locale, "app-state.033"),
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.print_state.settings.orientation,
+                                        drill_export::page::Orientation::Landscape,
+                                        i18n::registered(self.locale, "app-state.034"),
+                                    );
+                                });
+                            ui.label(
+                                egui::RichText::new(text(self.locale, Text::Range))
+                                    .size(14.0)
+                                    .color(option_ink),
+                            );
+                            egui::ComboBox::from_id_salt("print-range")
+                                .width(128.0)
+                                .selected_text(if self.print_state.current_set_only {
+                                    text(self.locale, Text::ThisSet)
+                                } else {
+                                    text(self.locale, Text::AllSets)
+                                })
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut self.print_state.current_set_only,
+                                        false,
+                                        text(self.locale, Text::AllSets),
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.print_state.current_set_only,
+                                        true,
+                                        text(self.locale, Text::ThisSet),
+                                    );
+                                });
+                        });
+                        ui.add_space(8.0);
+                        ui.strong(i18n::registered(self.locale, "app-state.036"));
+                        self.print_state.scope_set = self.current_set;
+                        let pages = self.print_state.page_count(
+                            &self.document,
+                            self.beats_per_measure,
+                            &selected,
+                        );
+                        ui.label(
+                            egui::RichText::new(i18n::page_summary(
+                                self.locale,
+                                pages,
+                                self.print_state.page_size_label(),
+                            ))
+                            .size(16.0)
+                            .color(option_ink),
+                        );
+                        let (page_w, page_h) = self.print_state.settings.dimensions_mm();
+                        let available = ui.available_width().min(460.0);
+                        let ratio = page_h / page_w;
+                        let (rect, _) = ui.allocate_exact_size(
+                            Vec2::new(available, (available * ratio).min(280.0)),
+                            Sense::hover(),
+                        );
+                        self.paint_print_preview(ui.painter(), rect);
+                        ui.add_space(12.0);
+                        if let Some(progress) = self.print_state.progress() {
+                            ui.add(
+                                egui::ProgressBar::new(progress)
+                                    .show_percentage()
+                                    .text(i18n::registered(self.locale, "app-state.142")),
+                            );
+                            if ui
+                                .button(i18n::registered(self.locale, "app-state.143"))
+                                .clicked()
+                            {
+                                self.print_state.cancel();
+                            }
+                        } else if solid_export_button(ui, text(self.locale, Text::Export)).clicked()
+                            && let Some(path) = rfd::FileDialog::new()
+                                .set_file_name(match self.print_state.kind {
+                                    drill_export::report::ReportKind::SetChart => "set_charts.pdf",
+                                    drill_export::report::ReportKind::PerformerDrillBook => {
+                                        "drill_book.pdf"
+                                    }
+                                    drill_export::report::ReportKind::CountSheet => {
+                                        "count_sheet.pdf"
+                                    }
+                                    drill_export::report::ReportKind::ProductionSheet => {
+                                        "production_sheet.pdf"
+                                    }
+                                })
+                                .add_filter("PDF", &["pdf"])
+                                .save_file()
+                        {
+                            self.print_state.scope_set = self.current_set;
+                            self.print_state.start(
+                                &self.document,
+                                self.beats_per_measure,
+                                &selected,
+                                path,
+                                self.locale,
+                                self.underlay_state.asset_bytes.clone(),
+                            );
+                        }
+                        if !self.print_state.status.is_empty() {
+                            ui.label(&self.print_state.status);
+                        }
+                        if let Some((path, _)) = &self.print_state.completed
+                            && ui
+                                .button(i18n::registered(self.locale, "app-state.144"))
+                                .clicked()
+                        {
+                            let target = path.parent().unwrap_or(path);
+                            let _ = std::process::Command::new("explorer").arg(target).spawn();
+                        }
+                    });
+                });
+                ui.add_space(8.0);
+                ui.collapsing(i18n::registered(self.locale, "app-state.015"), |ui| {
                     ui.horizontal(|ui| {
-                        if ui.button(i18n::registered(self.locale, "app-state.016")).clicked() { notation=Default::default(); notation_changed=true; }
-                        if ui.button("DCI 8-to-5").clicked() { notation=drill_core::coordinates::CoordinateNotation::dci(); notation_changed=true; }
-                        if ui.button(i18n::registered(self.locale, "app-state.017")).clicked() { notation=drill_core::coordinates::CoordinateNotation::indoor(); notation_changed=true; }
+                        if ui
+                            .button(i18n::registered(self.locale, "app-state.016"))
+                            .clicked()
+                        {
+                            notation = Default::default();
+                            notation_changed = true;
+                        }
+                        if ui.button("DCI 8-to-5").clicked() {
+                            notation = drill_core::coordinates::CoordinateNotation::dci();
+                            notation_changed = true;
+                        }
+                        if ui
+                            .button(i18n::registered(self.locale, "app-state.017"))
+                            .clicked()
+                        {
+                            notation = drill_core::coordinates::CoordinateNotation::indoor();
+                            notation_changed = true;
+                        }
                     });
-                    egui::ComboBox::from_id_salt("coordinate-rounding").selected_text(format!("{:?}",notation.rounding)).show_ui(ui,|ui| {
-                        use drill_core::coordinates::StepRounding::*;
-                        notation_changed |= ui.selectable_value(&mut notation.rounding,Eighth,"1/8 step").changed();
-                        notation_changed |= ui.selectable_value(&mut notation.rounding,Quarter,"1/4 step").changed();
-                        notation_changed |= ui.selectable_value(&mut notation.rounding,Half,"1/2 step").changed();
-                        notation_changed |= ui.selectable_value(&mut notation.rounding,Whole,"1 step").changed();
-                    });
-                    egui::ComboBox::from_id_salt("yard-line-interval").selected_text(format!("{:?}",notation.yard_lines)).show_ui(ui,|ui| {
-                        use drill_core::coordinates::YardLineInterval::*;
-                        notation_changed |= ui.selectable_value(&mut notation.yard_lines,Grid,i18n::registered(self.locale, "app-state.018")).changed();
-                        notation_changed |= ui.selectable_value(&mut notation.yard_lines,Five,"5 yd").changed();
-                        notation_changed |= ui.selectable_value(&mut notation.yard_lines,Ten,"10 yd").changed();
-                        let custom = match notation.yard_lines { Custom(v)=>v, _=>5.0 };
-                        notation_changed |= ui.selectable_value(&mut notation.yard_lines,Custom(custom),i18n::registered(self.locale, "app-state.019")).changed();
-                    });
-                    if let drill_core::coordinates::YardLineInterval::Custom(value)=&mut notation.yard_lines { ui.horizontal(|ui| { ui.label(i18n::registered(self.locale, "app-state.020")); notation_changed |= ui.add(egui::DragValue::new(value).range(1.0..=50.0).speed(0.25)).changed(); }); }
+                    egui::ComboBox::from_id_salt("coordinate-rounding")
+                        .selected_text(format!("{:?}", notation.rounding))
+                        .show_ui(ui, |ui| {
+                            use drill_core::coordinates::StepRounding::*;
+                            notation_changed |= ui
+                                .selectable_value(&mut notation.rounding, Eighth, "1/8 step")
+                                .changed();
+                            notation_changed |= ui
+                                .selectable_value(&mut notation.rounding, Quarter, "1/4 step")
+                                .changed();
+                            notation_changed |= ui
+                                .selectable_value(&mut notation.rounding, Half, "1/2 step")
+                                .changed();
+                            notation_changed |= ui
+                                .selectable_value(&mut notation.rounding, Whole, "1 step")
+                                .changed();
+                        });
+                    egui::ComboBox::from_id_salt("yard-line-interval")
+                        .selected_text(format!("{:?}", notation.yard_lines))
+                        .show_ui(ui, |ui| {
+                            use drill_core::coordinates::YardLineInterval::*;
+                            notation_changed |= ui
+                                .selectable_value(
+                                    &mut notation.yard_lines,
+                                    Grid,
+                                    i18n::registered(self.locale, "app-state.018"),
+                                )
+                                .changed();
+                            notation_changed |= ui
+                                .selectable_value(&mut notation.yard_lines, Five, "5 yd")
+                                .changed();
+                            notation_changed |= ui
+                                .selectable_value(&mut notation.yard_lines, Ten, "10 yd")
+                                .changed();
+                            let custom = match notation.yard_lines {
+                                Custom(v) => v,
+                                _ => 5.0,
+                            };
+                            notation_changed |= ui
+                                .selectable_value(
+                                    &mut notation.yard_lines,
+                                    Custom(custom),
+                                    i18n::registered(self.locale, "app-state.019"),
+                                )
+                                .changed();
+                        });
+                    if let drill_core::coordinates::YardLineInterval::Custom(value) =
+                        &mut notation.yard_lines
+                    {
+                        ui.horizontal(|ui| {
+                            ui.label(i18n::registered(self.locale, "app-state.020"));
+                            notation_changed |= ui
+                                .add(egui::DragValue::new(value).range(1.0..=50.0).speed(0.25))
+                                .changed();
+                        });
+                    }
                     ui.horizontal(|ui| {
                         use drill_core::coordinates::OnLineStyle::*;
                         ui.label(i18n::registered(self.locale, "app-state.021"));
-                        notation_changed |= ui.selectable_value(&mut notation.on_line,Explicit,i18n::registered(self.locale, "app-state.022")).changed();
-                        notation_changed |= ui.selectable_value(&mut notation.on_line,Short,i18n::registered(self.locale, "app-state.023")).changed();
+                        notation_changed |= ui
+                            .selectable_value(
+                                &mut notation.on_line,
+                                Explicit,
+                                i18n::registered(self.locale, "app-state.022"),
+                            )
+                            .changed();
+                        notation_changed |= ui
+                            .selectable_value(
+                                &mut notation.on_line,
+                                Short,
+                                i18n::registered(self.locale, "app-state.023"),
+                            )
+                            .changed();
                     });
-                    egui::ComboBox::from_id_salt("step-notation-style").selected_text(format!("{:?}",notation.step_style)).show_ui(ui,|ui| {
-                        use drill_core::coordinates::StepNotationStyle::*;
-                        notation_changed |= ui.selectable_value(&mut notation.step_style,Steps,i18n::registered(self.locale, "app-state.024")).changed();
-                        notation_changed |= ui.selectable_value(&mut notation.step_style,EightToFive,"8-to-5").changed();
-                        notation_changed |= ui.selectable_value(&mut notation.step_style,SixToFive,"6-to-5").changed();
-                    });
-                    egui::ComboBox::from_id_salt("depth-reference").selected_text(match &notation.front_back { drill_core::coordinates::FrontBackReference::NearestLine=>i18n::registered(self.locale, "app-state.026"), drill_core::coordinates::FrontBackReference::NearestHash=>i18n::registered(self.locale, "app-state.025"), drill_core::coordinates::FrontBackReference::FixedLabel(v)=>v.as_str() }).show_ui(ui,|ui| {
-                        use drill_core::coordinates::FrontBackReference::*;
-                        notation_changed |= ui.selectable_value(&mut notation.front_back,NearestLine,i18n::registered(self.locale, "app-state.027")).changed();
-                        notation_changed |= ui.selectable_value(&mut notation.front_back,NearestHash,i18n::registered(self.locale, "app-state.028")).changed();
-                        for line in &self.document.grid.hashes { notation_changed |= ui.selectable_value(&mut notation.front_back,FixedLabel(line.label.clone()),&line.label).changed(); }
-                    });
-                    egui::ComboBox::from_id_salt("production-template").selected_text(format!("{:?}",notation.production_template)).show_ui(ui,|ui| {
-                        use drill_core::coordinates::ProductionTemplatePreset::*;
-                        notation_changed |= ui.selectable_value(&mut notation.production_template,Standard,i18n::registered(self.locale, "app-state.029")).changed();
-                        notation_changed |= ui.selectable_value(&mut notation.production_template,Compact,i18n::registered(self.locale, "app-state.030")).changed();
-                        notation_changed |= ui.selectable_value(&mut notation.production_template,Rehearsal,i18n::registered(self.locale, "app-state.031")).changed();
-                    });
-                    ui.add_space(10.0); ui.strong(i18n::registered(self.locale, "app-state.032"));
-                    egui::ComboBox::from_id_salt("print-page-size").selected_text(self.print_state.page_size_label()).show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.print_state.settings.page_size, drill_export::page::PageSize::A4, "A4");
-                        ui.selectable_value(&mut self.print_state.settings.page_size, drill_export::page::PageSize::Letter, "Letter");
-                        ui.selectable_value(&mut self.print_state.settings.page_size, drill_export::page::PageSize::Tabloid, "Tabloid");
-                    });
-                    egui::ComboBox::from_id_salt("print-orientation").selected_text(self.print_state.orientation_label(self.locale)).show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.print_state.settings.orientation, drill_export::page::Orientation::Portrait, i18n::registered(self.locale, "app-state.033"));
-                        ui.selectable_value(&mut self.print_state.settings.orientation, drill_export::page::Orientation::Landscape, i18n::registered(self.locale, "app-state.034"));
-                    });
+                    egui::ComboBox::from_id_salt("step-notation-style")
+                        .selected_text(format!("{:?}", notation.step_style))
+                        .show_ui(ui, |ui| {
+                            use drill_core::coordinates::StepNotationStyle::*;
+                            notation_changed |= ui
+                                .selectable_value(
+                                    &mut notation.step_style,
+                                    Steps,
+                                    i18n::registered(self.locale, "app-state.024"),
+                                )
+                                .changed();
+                            notation_changed |= ui
+                                .selectable_value(&mut notation.step_style, EightToFive, "8-to-5")
+                                .changed();
+                            notation_changed |= ui
+                                .selectable_value(&mut notation.step_style, SixToFive, "6-to-5")
+                                .changed();
+                        });
+                    egui::ComboBox::from_id_salt("depth-reference")
+                        .selected_text(match &notation.front_back {
+                            drill_core::coordinates::FrontBackReference::NearestLine => {
+                                i18n::registered(self.locale, "app-state.026")
+                            }
+                            drill_core::coordinates::FrontBackReference::NearestHash => {
+                                i18n::registered(self.locale, "app-state.025")
+                            }
+                            drill_core::coordinates::FrontBackReference::FixedLabel(v) => {
+                                v.as_str()
+                            }
+                        })
+                        .show_ui(ui, |ui| {
+                            use drill_core::coordinates::FrontBackReference::*;
+                            notation_changed |= ui
+                                .selectable_value(
+                                    &mut notation.front_back,
+                                    NearestLine,
+                                    i18n::registered(self.locale, "app-state.027"),
+                                )
+                                .changed();
+                            notation_changed |= ui
+                                .selectable_value(
+                                    &mut notation.front_back,
+                                    NearestHash,
+                                    i18n::registered(self.locale, "app-state.028"),
+                                )
+                                .changed();
+                            for line in &self.document.grid.hashes {
+                                notation_changed |= ui
+                                    .selectable_value(
+                                        &mut notation.front_back,
+                                        FixedLabel(line.label.clone()),
+                                        &line.label,
+                                    )
+                                    .changed();
+                            }
+                        });
+                    egui::ComboBox::from_id_salt("production-template")
+                        .selected_text(format!("{:?}", notation.production_template))
+                        .show_ui(ui, |ui| {
+                            use drill_core::coordinates::ProductionTemplatePreset::*;
+                            notation_changed |= ui
+                                .selectable_value(
+                                    &mut notation.production_template,
+                                    Standard,
+                                    i18n::registered(self.locale, "app-state.029"),
+                                )
+                                .changed();
+                            notation_changed |= ui
+                                .selectable_value(
+                                    &mut notation.production_template,
+                                    Compact,
+                                    i18n::registered(self.locale, "app-state.030"),
+                                )
+                                .changed();
+                            notation_changed |= ui
+                                .selectable_value(
+                                    &mut notation.production_template,
+                                    Rehearsal,
+                                    i18n::registered(self.locale, "app-state.031"),
+                                )
+                                .changed();
+                        });
                     ui.label(i18n::registered(self.locale, "app-state.137"));
-                    ui.horizontal(|ui| { ui.label(i18n::registered(self.locale, "app-state.138")); ui.add(egui::DragValue::new(&mut self.print_state.settings.margins.top_mm).range(3.0..=40.0)); ui.label(i18n::registered(self.locale, "app-state.139")); ui.add(egui::DragValue::new(&mut self.print_state.settings.margins.bottom_mm).range(3.0..=40.0)); });
-                    ui.horizontal(|ui| { ui.label(i18n::registered(self.locale, "app-state.140")); ui.add(egui::DragValue::new(&mut self.print_state.settings.margins.left_mm).range(3.0..=40.0)); ui.label(i18n::registered(self.locale, "app-state.141")); ui.add(egui::DragValue::new(&mut self.print_state.settings.margins.right_mm).range(3.0..=40.0)); });
-                    ui.add_space(12.0);
-                    if let Some(progress)=self.print_state.progress() { ui.add(egui::ProgressBar::new(progress).show_percentage().text(i18n::registered(self.locale, "app-state.142"))); if ui.button(i18n::registered(self.locale, "app-state.143")).clicked() { self.print_state.cancel(); } }
-                    else if ui.button(i18n::registered(self.locale, "app-state.035")).clicked() && let Some(path)=rfd::FileDialog::new().set_file_name(match self.print_state.kind { drill_export::report::ReportKind::SetChart=>"set_charts.pdf",drill_export::report::ReportKind::PerformerDrillBook=>"drill_book.pdf",drill_export::report::ReportKind::CountSheet=>"count_sheet.pdf",drill_export::report::ReportKind::ProductionSheet=>"production_sheet.pdf" }).add_filter("PDF", &["pdf"]).save_file() { self.print_state.start(&self.document,self.beats_per_measure,&selected,path,self.locale,self.underlay_state.asset_bytes.clone()); }
-                    if !self.print_state.status.is_empty() { ui.label(&self.print_state.status); }
-                    if let Some((path,_))=&self.print_state.completed && ui.button(i18n::registered(self.locale, "app-state.144")).clicked() { let target=path.parent().unwrap_or(path); let _=std::process::Command::new("explorer").arg(target).spawn(); }
-
-                    let ui=&mut columns[1]; ui.strong(i18n::registered(self.locale, "app-state.036"));
-                    let pages=self.print_state.page_count(&self.document,self.beats_per_measure,&selected);
-                    let (w,h)=self.print_state.settings.dimensions_mm(); ui.label(format!("{pages} ページ · {w:.1} × {h:.1} mm"));
-                    let available=ui.available_width().min(300.0); let ratio=h/w; let (rect,_)=ui.allocate_exact_size(Vec2::new(available, (available*ratio).min(430.0)),Sense::hover());
-                    ui.painter().rect_filled(rect,3.0,Color32::from_gray(245)); ui.painter().rect_stroke(rect,3.0,Stroke::new(1.0,Color32::from_gray(100)),StrokeKind::Inside);
-                    let inner=rect.shrink(16.0); ui.painter().text(inner.left_top(),egui::Align2::LEFT_TOP,&self.document.title,egui::FontId::proportional(13.0),Color32::from_gray(25));
-                    let report_name=match self.print_state.kind { drill_export::report::ReportKind::SetChart=>"SET CHARTS",drill_export::report::ReportKind::PerformerDrillBook=>"PERFORMER DRILL BOOK",drill_export::report::ReportKind::CountSheet=>"COUNT SHEET",drill_export::report::ReportKind::ProductionSheet=>"PRODUCTION SHEET" };
-                    ui.painter().text(Pos2::new(inner.left(),inner.top()+28.0),egui::Align2::LEFT_TOP,report_name,egui::FontId::monospace(10.0),Color32::from_gray(60));
-                    for row in 0..8 { let y=inner.top()+55.0+row as f32*18.0; ui.painter().line_segment([Pos2::new(inner.left(),y),Pos2::new(inner.right(),y)],Stroke::new(1.0,Color32::from_gray(190))); }
-                    ui.small("ページ内容の概要表示です。PDFでは実寸レイアウトとフィールド図を生成します。");
+                    ui.horizontal(|ui| {
+                        ui.label(i18n::registered(self.locale, "app-state.138"));
+                        ui.add(
+                            egui::DragValue::new(&mut self.print_state.settings.margins.top_mm)
+                                .range(3.0..=40.0),
+                        );
+                        ui.label(i18n::registered(self.locale, "app-state.139"));
+                        ui.add(
+                            egui::DragValue::new(&mut self.print_state.settings.margins.bottom_mm)
+                                .range(3.0..=40.0),
+                        );
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(i18n::registered(self.locale, "app-state.140"));
+                        ui.add(
+                            egui::DragValue::new(&mut self.print_state.settings.margins.left_mm)
+                                .range(3.0..=40.0),
+                        );
+                        ui.label(i18n::registered(self.locale, "app-state.141"));
+                        ui.add(
+                            egui::DragValue::new(&mut self.print_state.settings.margins.right_mm)
+                                .range(3.0..=40.0),
+                        );
+                    });
                 });
             });
+        if dismiss {
+            open = false;
+        }
         self.print_state.open = open;
         if notation_changed {
             let mut grid = self.document.grid.clone();
@@ -3197,6 +3686,7 @@ impl DrillApp {
             );
         }
     }
+
     fn new(creation: &eframe::CreationContext<'_>) -> Self {
         let app_theme = app_theme::AppTheme::load();
         app_theme.apply(&creation.egui_ctx);
@@ -3996,6 +4486,32 @@ impl DrillApp {
             let Some(point) = self.frame_positions.get(index).copied() else {
                 continue;
             };
+            if !point.x.is_finite() || !point.y.is_finite() {
+                continue;
+            }
+            any = true;
+            min.x = min.x.min(point.x);
+            min.y = min.y.min(point.y);
+            max.x = max.x.max(point.x);
+            max.y = max.y.max(point.y);
+        }
+        if any {
+            self.field_viewport
+                .frame_bounds(&self.document.grid, size, min, max);
+        }
+    }
+
+    fn zoom_to_performers(&mut self, size: Vec2) {
+        let mut min = Point {
+            x: f32::MAX,
+            y: f32::MAX,
+        };
+        let mut max = Point {
+            x: f32::MIN,
+            y: f32::MIN,
+        };
+        let mut any = false;
+        for point in &self.frame_positions {
             if !point.x.is_finite() || !point.y.is_finite() {
                 continue;
             }

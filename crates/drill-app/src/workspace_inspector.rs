@@ -1998,11 +1998,14 @@ impl DrillApp {
                 .next()
                 .and_then(|&index| self.inspector_point(index))
             {
-                ui.small(coordinates::readable_localized(
-                    point,
-                    &self.document.grid,
-                    self.locale,
-                ));
+                ui.label(
+                    egui::RichText::new(coordinates::readable_localized(
+                        point,
+                        &self.document.grid,
+                        self.locale,
+                    ))
+                    .color(super::app_theme::SECONDARY_TEXT),
+                );
             }
         }
         if !editable {
