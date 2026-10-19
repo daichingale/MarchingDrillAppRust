@@ -1182,8 +1182,8 @@ impl super::DrillApp {
                 let name = self.action_label(action);
                 let chords = self.keybindings.map.chords(action);
                 let armed = self.keybindings.recording == Some(action);
+                let changed = chords != default_chords(action);
                 ui.horizontal(|ui| {
-                    paint_category_icon(ui, category);
                     ui.label(name);
                     if chords.is_empty() {
                         if key_chip(ui, unbound, armed).clicked() {
@@ -1197,7 +1197,7 @@ impl super::DrillApp {
                             }
                         }
                     }
-                    if ui.button(reset).clicked() {
+                    if changed && ui.button(reset).clicked() {
                         self.keybindings.map.reset_action(action);
                         self.keybindings.recording = None;
                         self.keybindings.pending = None;
@@ -1598,15 +1598,13 @@ fn paint_category_icon_in(painter: &egui::Painter, rect: egui::Rect, category: C
             painter.rect_filled(rect.shrink(3.0), 3.0, color);
         }
         Category::Playback => {
-            painter.add(egui::Shape::convex_polygon(
-                vec![
-                    center + egui::vec2(-4.0, -5.0),
-                    center + egui::vec2(6.0, 0.0),
-                    center + egui::vec2(-4.0, 5.0),
-                ],
+            // A transport button, not a second triangle beside the collapse chevron.
+            painter.circle_stroke(center, 6.5, egui::Stroke::new(1.6, color));
+            painter.rect_filled(
+                egui::Rect::from_center_size(center, egui::vec2(4.5, 4.5)),
+                1.0,
                 color,
-                egui::Stroke::NONE,
-            ));
+            );
         }
         Category::Sets => {
             painter.rect_stroke(

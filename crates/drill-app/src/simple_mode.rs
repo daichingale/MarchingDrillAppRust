@@ -1120,6 +1120,11 @@ impl DrillApp {
         }
         if stage == "full" {
             self.set_simple_mode(false);
+            // The return chip, coach, and guidance banner are real chrome,
+            // but they cover the field this fixture exists to show.
+            self.simple_mode.return_hint = false;
+            self.show_guidance = false;
+            self.onboarding.coach_dismissed = true;
         }
         if stage == "move" || stage == "play" || stage == "done" {
             self.duplicate_current_set();
@@ -7432,6 +7437,7 @@ impl DrillApp {
             field_center: Some(self.field_viewport.center),
             field_zoom: self.field_viewport.zoom,
             skip_offscreen: super::cull_offscreen_dots(self.document.performers.len()),
+            extend_grid: true,
             ..drill_render::RenderOptions::default()
         };
         let scene = drill_render::Scene {
@@ -7634,7 +7640,9 @@ impl DrillApp {
         let shift_held = ui.input(|input| input.modifiers.shift);
         let snap_now = self.document.grid.snap_enabled && !shift_held;
         if let Some(pointer) = response.interact_pointer_pos() {
-            if response.clicked() {
+            if response.double_clicked() && nearest.is_none() {
+                self.field_viewport.reset(&self.document.grid);
+            } else if response.clicked() {
                 let additive = ui.input(|input| {
                     input.modifiers.command || input.modifiers.ctrl || input.modifiers.shift
                 });

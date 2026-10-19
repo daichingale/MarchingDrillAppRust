@@ -277,6 +277,11 @@ pub struct RenderOptions {
     /// Skip dots and labels that fall outside the viewport. Off by default
     /// so exports and small casts still draw every person.
     pub skip_offscreen: bool,
+    /// Continue the step grid and major lines across the whole viewport.
+    /// The real floor (sidelines, reference frames, dots) stays at its true
+    /// size and aspect. Off for exports and tests, which must keep drawing
+    /// only the field rectangle.
+    pub extend_grid: bool,
 }
 
 impl Default for RenderOptions {
@@ -293,6 +298,7 @@ impl Default for RenderOptions {
             field_zoom: 1.0,
             show_trails_for: TrailSelection::None,
             skip_offscreen: false,
+            extend_grid: false,
         }
     }
 }
@@ -631,6 +637,76 @@ fn distance(a: Point, b: Point) -> f32 {
     (dx * dx + dy * dy).sqrt()
 }
 
+/// Viewport corners in field units. The map is linear, so the four corners
+/// are the visible bounds. Not clamped to the floor.
+fn visible_field_bounds(map: &FieldMap, viewport: Vec2) -> (f32, f32, f32, f32) {
+    let corners = [
+        Vec2 { x: 0.0, y: 0.0 },
+        Vec2 {
+            x: viewport.x,
+            y: 0.0,
+        },
+        Vec2 {
+            x: 0.0,
+            y: viewport.y,
+        },
+        Vec2 {
+            x: viewport.x,
+            y: viewport.y,
+        },
+    ];
+    let mut min_x = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for corner in corners {
+        let point = map.unmap(corner);
+        min_x = min_x.min(point.x);
+        max_x = max_x.max(point.x);
+        min_y = min_y.min(point.y);
+        max_y = max_y.max(point.y);
+    }
+    (min_x, max_x, min_y, max_y)
+}
+
+/// Major-line positions that fall outside the real floor, using the same
+/// center-and-snap spacing as `GridConfig::horizontal_major_positions`.
+/// In-floor lines are drawn by that method; this only continues them into
+/// the letterbox when the interactive view asks for an edge-to-edge grid.
+fn extra_major_positions(
+    axis_len: f32,
+    interval: f32,
+    step_units: f32,
+    steps: u16,
+    min: f32,
+    max: f32,
+) -> Vec<f32> {
+    let interval = interval.max(0.001);
+    let step = step_units / f32::from(steps.max(1));
+    let center = axis_len * 0.5;
+    let reach = (max - center).abs().max((center - min).abs());
+    let max_k = (reach / interval).ceil() as i32 + 1;
+    let mut positions = Vec::new();
+    for k in -max_k..=max_k {
+        let raw = center + k as f32 * interval;
+        let snapped = if step > 0.0 {
+            (raw / step).round() * step
+        } else {
+            raw
+        };
+        if snapped >= 0.0 && snapped <= axis_len {
+            continue;
+        }
+        if snapped < min || snapped > max {
+            continue;
+        }
+        positions.push(snapped);
+    }
+    positions.sort_by(f32::total_cmp);
+    positions.dedup_by(|a, b| (*a - *b).abs() < 1e-3);
+    positions
+}
+
 /// Builds a 2D field using index multiplication, never cumulative floating-point stepping.
 pub fn build_field_2d(scene: &Scene<'_>, _scratch: &mut BuildScratch, out: &mut DisplayList) {
     out.clear();
@@ -670,11 +746,27 @@ pub fn build_field_2d(scene: &Scene<'_>, _scratch: &mut BuildScratch, out: &mut 
     out.close_layer(Layer::FieldFill, start);
 
     start = out.commands.len();
+    let extend = scene.options.extend_grid;
+    let (view_min_x, view_max_x, view_min_y, view_max_y) = if extend {
+        visible_field_bounds(&field_map, scene.viewport.size)
+    } else {
+        (0.0, grid.width, 0.0, grid.height)
+    };
     if scene.options.show_step_grid && grid.show_step_grid {
         let dx = grid.horizontal_units / f32::from(grid.horizontal_steps.max(1));
         let dy = grid.vertical_units / f32::from(grid.vertical_steps.max(1));
-        let nx = (grid.width / dx).floor().max(0.0) as u32;
-        let ny = (grid.height / dy).floor().max(0.0) as u32;
+        let span_x = if extend {
+            (view_max_x - view_min_x).max(0.0)
+        } else {
+            grid.width
+        };
+        let span_y = if extend {
+            (view_max_y - view_min_y).max(0.0)
+        } else {
+            grid.height
+        };
+        let nx = (span_x / dx).floor().max(0.0) as u32;
+        let ny = (span_y / dy).floor().max(0.0) as u32;
         let total = nx.saturating_add(ny).max(1);
         let stride = total.div_ceil(scene.options.max_minor_lines.max(1)).max(1);
 
@@ -689,36 +781,68 @@ pub fn build_field_2d(scene: &Scene<'_>, _scratch: &mut BuildScratch, out: &mut 
         // dedicated bold center line drawn below.
         let stride_x = dx * stride as f32;
         let center_x = grid.width * 0.5;
-        let max_kx = (center_x / stride_x).ceil() as i32 + 1;
+        let cover_x = if extend {
+            (view_max_x - center_x)
+                .abs()
+                .max((center_x - view_min_x).abs())
+        } else {
+            center_x
+        };
+        let max_kx = (cover_x / stride_x).ceil() as i32 + 1;
         for k in -max_kx..=max_kx {
             if k == 0 {
                 continue;
             }
             let x = center_x + k as f32 * stride_x;
-            if x <= 0.0 || x >= grid.width {
+            if extend {
+                if x < view_min_x || x > view_max_x {
+                    continue;
+                }
+            } else if x <= 0.0 || x >= grid.width {
                 continue;
             }
+            let (y0, y1) = if extend {
+                (view_min_y, view_max_y)
+            } else {
+                (0.0, grid.height)
+            };
             out.commands.push(DrawCmd::Line {
-                a: map(Point { x, y: 0.0 }),
-                b: map(Point { x, y: grid.height }),
+                a: map(Point { x, y: y0 }),
+                b: map(Point { x, y: y1 }),
                 width: 0.5,
                 color: scene.theme.minor,
             });
         }
         let stride_y = dy * stride as f32;
         let center_y = grid.height * 0.5;
-        let max_ky = (center_y / stride_y).ceil() as i32 + 1;
+        let cover_y = if extend {
+            (view_max_y - center_y)
+                .abs()
+                .max((center_y - view_min_y).abs())
+        } else {
+            center_y
+        };
+        let max_ky = (cover_y / stride_y).ceil() as i32 + 1;
         for k in -max_ky..=max_ky {
             if k == 0 {
                 continue;
             }
             let y = center_y + k as f32 * stride_y;
-            if y <= 0.0 || y >= grid.height {
+            if extend {
+                if y < view_min_y || y > view_max_y {
+                    continue;
+                }
+            } else if y <= 0.0 || y >= grid.height {
                 continue;
             }
+            let (x0, x1) = if extend {
+                (view_min_x, view_max_x)
+            } else {
+                (0.0, grid.width)
+            };
             out.commands.push(DrawCmd::Line {
-                a: map(Point { x: 0.0, y }),
-                b: map(Point { x: grid.width, y }),
+                a: map(Point { x: x0, y }),
+                b: map(Point { x: x1, y }),
                 width: 0.5,
                 color: scene.theme.minor,
             });
@@ -734,13 +858,40 @@ pub fn build_field_2d(scene: &Scene<'_>, _scratch: &mut BuildScratch, out: &mut 
     // `japan_floor`'s round 5m major interval vs. its `4.572/8`m step size),
     // which otherwise leaves bold lines visibly off from the fine grid
     // everywhere except the origin.
+    let (major_y0, major_y1) = if extend {
+        (view_min_y, view_max_y)
+    } else {
+        (0.0, grid.height)
+    };
+    let (major_x0, major_x1) = if extend {
+        (view_min_x, view_max_x)
+    } else {
+        (0.0, grid.width)
+    };
     for x in grid.horizontal_major_positions() {
         out.commands.push(DrawCmd::Line {
-            a: map(Point { x, y: 0.0 }),
-            b: map(Point { x, y: grid.height }),
+            a: map(Point { x, y: major_y0 }),
+            b: map(Point { x, y: major_y1 }),
             width: 1.0,
             color: scene.theme.major,
         });
+    }
+    if extend {
+        for x in extra_major_positions(
+            grid.width,
+            grid.major_line_interval,
+            grid.horizontal_units,
+            grid.horizontal_steps,
+            view_min_x,
+            view_max_x,
+        ) {
+            out.commands.push(DrawCmd::Line {
+                a: map(Point { x, y: major_y0 }),
+                b: map(Point { x, y: major_y1 }),
+                width: 1.0,
+                color: scene.theme.major,
+            });
+        }
     }
     // Horizontal major lines at the same interval as the vertical ones above,
     // so both axes carry equal visual weight. Previously only the vertical
@@ -751,11 +902,28 @@ pub fn build_field_2d(scene: &Scene<'_>, _scratch: &mut BuildScratch, out: &mut 
     // all beyond the two sideline edges.
     for y in grid.vertical_major_positions() {
         out.commands.push(DrawCmd::Line {
-            a: map(Point { x: 0.0, y }),
-            b: map(Point { x: grid.width, y }),
+            a: map(Point { x: major_x0, y }),
+            b: map(Point { x: major_x1, y }),
             width: 1.0,
             color: scene.theme.major,
         });
+    }
+    if extend {
+        for y in extra_major_positions(
+            grid.height,
+            grid.major_line_interval,
+            grid.vertical_units,
+            grid.vertical_steps,
+            view_min_y,
+            view_max_y,
+        ) {
+            out.commands.push(DrawCmd::Line {
+                a: map(Point { x: major_x0, y }),
+                b: map(Point { x: major_x1, y }),
+                width: 1.0,
+                color: scene.theme.major,
+            });
+        }
     }
     for (a, b) in [
         (
@@ -802,11 +970,11 @@ pub fn build_field_2d(scene: &Scene<'_>, _scratch: &mut BuildScratch, out: &mut 
     out.commands.push(DrawCmd::Line {
         a: map(Point {
             x: center_x,
-            y: 0.0,
+            y: major_y0,
         }),
         b: map(Point {
             x: center_x,
-            y: grid.height,
+            y: major_y1,
         }),
         width: 1.75,
         color: scene.theme.center,
@@ -819,11 +987,11 @@ pub fn build_field_2d(scene: &Scene<'_>, _scratch: &mut BuildScratch, out: &mut 
         .y;
     out.commands.push(DrawCmd::Line {
         a: map(Point {
-            x: 0.0,
+            x: major_x0,
             y: center_y,
         }),
         b: map(Point {
-            x: grid.width,
+            x: major_x1,
             y: center_y,
         }),
         width: 1.75,
@@ -1440,6 +1608,70 @@ mod tests {
         assert_eq!(out.layer(Layer::FieldFill).len(), 1);
         assert_eq!(out.stats().dots_emitted, 40);
         assert_eq!(out.stats().labels_emitted, 40);
+    }
+
+    #[test]
+    fn extended_grid_reaches_past_a_landscape_floor() {
+        let mut doc = Document::demo(1, 1);
+        doc.grid = drill_core::GridConfig::japan_floor();
+        assert!(
+            doc.grid.width > doc.grid.height,
+            "a marching floor is landscape"
+        );
+        let positions = doc.sets[0].positions.clone();
+        let options = RenderOptions {
+            margin: 0.0,
+            extend_grid: true,
+            ..RenderOptions::default()
+        };
+        let viewport = Viewport {
+            size: Vec2 {
+                x: 1280.0,
+                y: 800.0,
+            },
+            ui_scale: 1.0,
+        };
+        let mut out = DisplayList::new();
+        build_field_2d(
+            &Scene {
+                positions: &positions,
+                document: &doc,
+                viewport,
+                options: &options,
+                theme: &Theme::PRINT_LIGHT,
+            },
+            &mut BuildScratch,
+            &mut out,
+        );
+        let map = FieldMap::with_view(
+            doc.grid.width,
+            doc.grid.height,
+            viewport.size,
+            0.0,
+            None,
+            1.0,
+        );
+        let field_left = map.origin.x;
+        let field_right = map.origin.x + doc.grid.width * map.scale;
+        let drawn_w = field_right - field_left;
+        let drawn_h = doc.grid.height * map.scale;
+        assert!(drawn_w > drawn_h, "fitted floor stays landscape");
+        assert!(
+            (drawn_h - viewport.size.y).abs() < 1.0,
+            "default fit uses the full window height"
+        );
+        let reaches_edge = out.layer(Layer::GridMinor).iter().any(|cmd| match cmd {
+            DrawCmd::Line { a, b, .. } => {
+                let min_x = a.x.min(b.x);
+                let max_x = a.x.max(b.x);
+                min_x < field_left - 8.0 || max_x > field_right + 8.0
+            }
+            _ => false,
+        });
+        assert!(
+            reaches_edge,
+            "grid lines continue through the side letterbox"
+        );
     }
 
     #[test]

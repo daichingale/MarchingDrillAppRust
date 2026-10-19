@@ -1036,6 +1036,20 @@ mod viewport_tests {
     }
 
     #[test]
+    fn japan_floor_fit_fills_the_window_and_stays_landscape() {
+        let grid = GridConfig::japan_floor();
+        assert!(grid.width > grid.height);
+        let view = FieldViewport::fit(&grid);
+        let size = Vec2::new(1280.0, 800.0);
+        let scale = view.unit_scale(&grid, size);
+        let drawn_w = grid.width * scale;
+        let drawn_h = grid.height * scale;
+        assert!(drawn_w > drawn_h);
+        assert!((drawn_h - size.y).abs() < 1.0);
+        assert!(drawn_w < size.x);
+    }
+
+    #[test]
     fn pan_is_bounded_to_the_field_at_high_magnification() {
         let grid = grid();
         let mut view = FieldViewport::fit(&grid);
