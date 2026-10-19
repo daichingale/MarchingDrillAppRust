@@ -446,10 +446,10 @@ enum DockAction {
     More,
 }
 
-struct PictogramTile {
+struct PictogramTile<'a> {
     icon: PhoneIcon,
-    label: &'static str,
-    tip: &'static str,
+    label: &'a str,
+    tip: &'a str,
     width: f32,
     enabled: bool,
     active: bool,
@@ -1589,7 +1589,6 @@ impl DrillApp {
             self.simple_apply_watch_range();
         }
         self.poll_simple_metronome();
-        self.simple_try_arrow_nudge(ui);
         self.autosave_simple_draft(ui.ctx());
         self.expire_simple_saved_note(ui.ctx());
         self.note_simple_chrome_motion(ui.ctx());
@@ -2080,7 +2079,12 @@ impl DrillApp {
             egui::FontId::proportional(12.0),
             label_ink,
         );
-        let _ = response.on_hover_text(self.simple_previous_hover_text());
+        let previous_hover = self.key_tip(
+            ui.ctx(),
+            self.simple_previous_hover_text(),
+            super::keybindings::Action::TogglePreviousGhost,
+        );
+        let _ = response.on_hover_text(previous_hover);
     }
 
     fn simple_previous_hover_text(&self) -> &'static str {
@@ -2400,12 +2404,17 @@ impl DrillApp {
                 }
             }
             let mirror_on = self.simple_mode.mirror_moves;
+            let mirror_tip = self.key_tip(
+                ui.ctx(),
+                i18n::registered(self.locale, "simple-mode.325"),
+                super::keybindings::Action::ToggleSymmetry,
+            );
             let (mirror_rect, mirror_click) = self.simple_pictogram_tile(
                 ui,
                 PictogramTile {
                     icon: PhoneIcon::Mirror,
                     label: i18n::registered(self.locale, "simple-mode.320"),
-                    tip: i18n::registered(self.locale, "simple-mode.325"),
+                    tip: &mirror_tip,
                     width: 72.0,
                     enabled: !playing,
                     active: mirror_on,
@@ -2424,12 +2433,17 @@ impl DrillApp {
                 }
             }
             let next_pulse = hint == Some(SimpleGuide::NextSet) && !playing;
+            let next_tip = self.key_tip(
+                ui.ctx(),
+                i18n::registered(self.locale, "simple-mode.308"),
+                super::keybindings::Action::Command(UiCommand::DuplicateSet),
+            );
             let (next_rect, next_click) = self.simple_pictogram_tile(
                 ui,
                 PictogramTile {
                     icon: PhoneIcon::SheetsNext,
                     label: i18n::registered(self.locale, "simple-mode.307"),
-                    tip: i18n::registered(self.locale, "simple-mode.308"),
+                    tip: &next_tip,
                     width: tile,
                     enabled: can_next,
                     active: spotlight == SimpleGuide::NextSet && !playing,
@@ -2462,12 +2476,17 @@ impl DrillApp {
             };
             let play_pulse = (hint == Some(SimpleGuide::Play) && !playing)
                 || (hint.is_none() && spotlight == SimpleGuide::Play && !playing);
+            let play_tip = self.key_tip(
+                ui.ctx(),
+                play_tip,
+                super::keybindings::Action::Command(UiCommand::PlayPause),
+            );
             let (play_rect, play_click) = self.simple_pictogram_tile(
                 ui,
                 PictogramTile {
                     icon: play_icon,
                     label: play_label,
-                    tip: play_tip,
+                    tip: &play_tip,
                     width: SIMPLE_PLAY_TILE,
                     enabled: can_play,
                     active: true,
@@ -2485,12 +2504,17 @@ impl DrillApp {
                     blocked = true;
                 }
             }
+            let song_tip = self.key_tip(
+                ui.ctx(),
+                i18n::registered(self.locale, "simple-mode.341"),
+                super::keybindings::Action::ImportSong,
+            );
             let (song_rect, song_click) = self.simple_pictogram_tile(
                 ui,
                 PictogramTile {
                     icon: PhoneIcon::Note,
                     label: i18n::registered(self.locale, "simple-mode.340"),
-                    tip: i18n::registered(self.locale, "simple-mode.341"),
+                    tip: &song_tip,
                     width: SIMPLE_TILE,
                     enabled: true,
                     active: self.document.audio.is_some() && !self.simple_mode.song_missing,
@@ -2504,12 +2528,17 @@ impl DrillApp {
             if song_click {
                 self.simple_pick_and_import_song();
             }
+            let undo_tip = self.key_tip(
+                ui.ctx(),
+                i18n::registered(self.locale, "simple-mode.092"),
+                super::keybindings::Action::Command(UiCommand::Undo),
+            );
             let (undo_rect, undo_click) = self.simple_pictogram_tile(
                 ui,
                 PictogramTile {
                     icon: PhoneIcon::Undo,
                     label: i18n::registered(self.locale, "simple-mode.087"),
-                    tip: i18n::registered(self.locale, "simple-mode.092"),
+                    tip: &undo_tip,
                     width: tile,
                     enabled: self.history.can_undo(),
                     active: false,
@@ -2524,12 +2553,17 @@ impl DrillApp {
                 self.simple_mode.overlap_note = false;
                 self.execute_command(UiCommand::Undo, ui.ctx());
             }
+            let redo_tip = self.key_tip(
+                ui.ctx(),
+                i18n::registered(self.locale, "simple-mode.091"),
+                super::keybindings::Action::Command(UiCommand::Redo),
+            );
             let (redo_rect, redo_click) = self.simple_pictogram_tile(
                 ui,
                 PictogramTile {
                     icon: PhoneIcon::Redo,
                     label: i18n::registered(self.locale, "simple-mode.090"),
-                    tip: i18n::registered(self.locale, "simple-mode.091"),
+                    tip: &redo_tip,
                     width: tile,
                     enabled: self.history.can_redo(),
                     active: false,
@@ -2550,11 +2584,16 @@ impl DrillApp {
             } else {
                 i18n::registered(self.locale, "simple-mode.098")
             };
+            let delete_tip = self.key_tip(
+                ui.ctx(),
+                i18n::registered(self.locale, "simple-mode.314"),
+                super::keybindings::Action::Command(UiCommand::RemoveSelectedPerformers),
+            );
             let (delete_rect, delete_response) = self.simple_hold_tile(
                 ui,
                 PhoneIcon::Trash,
                 delete_label,
-                i18n::registered(self.locale, "simple-mode.314"),
+                &delete_tip,
                 tile,
                 can_delete,
             );
@@ -2562,12 +2601,17 @@ impl DrillApp {
             if delete_response {
                 self.simple_commit_held_delete();
             }
+            let hide_tip = self.key_tip(
+                ui.ctx(),
+                i18n::registered(self.locale, "simple-mode.317"),
+                super::keybindings::Action::ToggleToolbar,
+            );
             let (hide_rect, hide_click) = self.simple_pictogram_tile(
                 ui,
                 PictogramTile {
                     icon: PhoneIcon::ChevronDown,
                     label: i18n::registered(self.locale, "simple-mode.316"),
-                    tip: i18n::registered(self.locale, "simple-mode.317"),
+                    tip: &hide_tip,
                     width: SIMPLE_HIT,
                     enabled: true,
                     active: false,
@@ -2580,6 +2624,30 @@ impl DrillApp {
             let _ = hide_rect;
             if hide_click {
                 self.onboarding.simple_toolbar_collapsed = true;
+            }
+            let keys_tip = self.key_tip(
+                ui.ctx(),
+                i18n::registered(self.locale, "shortcuts.025"),
+                super::keybindings::Action::OpenKeySettings,
+            );
+            let (keys_rect, keys_click) = self.simple_pictogram_tile(
+                ui,
+                PictogramTile {
+                    icon: PhoneIcon::Tools,
+                    label: i18n::registered(self.locale, "shortcuts.024"),
+                    tip: &keys_tip,
+                    width: SIMPLE_HIT,
+                    enabled: true,
+                    active: false,
+                    pulse: false,
+                    filled: false,
+                    compact: true,
+                    time,
+                },
+            );
+            let _ = keys_rect;
+            if keys_click {
+                self.keybindings.settings_open = true;
             }
         });
         if blocked {
@@ -2609,7 +2677,11 @@ impl DrillApp {
         }
     }
 
-    fn simple_pictogram_tile(&self, ui: &mut egui::Ui, tile: PictogramTile) -> (egui::Rect, bool) {
+    fn simple_pictogram_tile(
+        &self,
+        ui: &mut egui::Ui,
+        tile: PictogramTile<'_>,
+    ) -> (egui::Rect, bool) {
         let height = if tile.compact {
             SIMPLE_TILE.max(SIMPLE_HIT)
         } else {
@@ -3062,7 +3134,7 @@ impl DrillApp {
 
     /// One count forward or back, without writing the picture. Editing stays
     /// locked until the count is a scene's arrival again.
-    fn simple_step_beat(&mut self, delta: i32) {
+    pub(crate) fn simple_step_beat(&mut self, delta: i32) {
         if self.playing || delta == 0 || !self.show_has_motion() {
             return;
         }
@@ -4018,7 +4090,7 @@ impl DrillApp {
     }
 
     /// One grid step. Forward is toward the audience (decreasing field y).
-    fn simple_nudge(&mut self, horizontal: i32, vertical: i32) {
+    pub(crate) fn simple_nudge(&mut self, horizontal: i32, vertical: i32) {
         if self.playing
             || !self.is_editable_set_start()
             || self.selected.is_empty()
@@ -4052,7 +4124,7 @@ impl DrillApp {
     }
 
     /// Session-only. Nothing is written into the drill file.
-    fn simple_toggle_mirror(&mut self) {
+    pub(crate) fn simple_toggle_mirror(&mut self) {
         self.simple_mode.mirror_moves = !self.simple_mode.mirror_moves;
         self.simple_mode.mirror_preview.clear();
     }
@@ -4764,44 +4836,34 @@ impl DrillApp {
         lines
     }
 
-    /// Arrow keys follow the screen: up is away from the audience. One step,
-    /// same as the 前 / 後ろ / 左 / 右 buttons.
-    fn simple_try_arrow_nudge(&mut self, ui: &mut egui::Ui) {
-        if self.playing
-            || self.simple_mode.naming
-            || self.simple_mode.memo_open
-            || self.simple_mode.place_sheet_open
-            || self.simple_mode.show_sheet_open
-            || self.show_recent_projects
-            || self.selected.is_empty()
-            || !self.is_editable_set_start()
-            || ui.ctx().egui_wants_keyboard_input()
+    /// Sheets and naming own the keyboard. The central shortcut poll asks
+    /// this before it will nudge.
+    pub(crate) fn key_nudge_allowed(&self) -> bool {
+        if self.playing || self.selected.is_empty() || !self.is_editable_set_start() {
+            return false;
+        }
+        if self.simple_mode.enabled
+            && (self.simple_mode.naming
+                || self.simple_mode.memo_open
+                || self.simple_mode.place_sheet_open
+                || self.simple_mode.show_sheet_open
+                || self.show_recent_projects)
         {
+            return false;
+        }
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn key_mirror_on(&self) -> bool {
+        self.simple_mode.mirror_moves
+    }
+
+    pub(crate) fn toggle_previous_ghost(&mut self) {
+        if !simple_previous_toggle_enabled(self.current_set) {
             return;
         }
-        let step = ui.input_mut(|input| {
-            if input.modifiers.command
-                || input.modifiers.ctrl
-                || input.modifiers.alt
-                || input.modifiers.shift
-            {
-                return None;
-            }
-            for key in [
-                egui::Key::ArrowLeft,
-                egui::Key::ArrowRight,
-                egui::Key::ArrowUp,
-                egui::Key::ArrowDown,
-            ] {
-                if input.consume_key(egui::Modifiers::NONE, key) {
-                    return simple_arrow_step(key);
-                }
-            }
-            None
-        });
-        if let Some((horizontal, vertical)) = step {
-            self.simple_nudge(horizontal, vertical);
-        }
+        self.set_show_previous(!self.simple_mode.show_previous);
     }
 
     #[allow(dead_code)]
@@ -5734,12 +5796,17 @@ impl DrillApp {
                     .corner_radius(18.0)
                     .inner_margin(egui::Margin::symmetric(4, 4))
                     .show(ui, |ui| {
+                        let toolbar_tip = self.key_tip(
+                            ui.ctx(),
+                            i18n::registered(self.locale, "simple-mode.319"),
+                            super::keybindings::Action::ToggleToolbar,
+                        );
                         let (rect, click) = self.simple_pictogram_tile(
                             ui,
                             PictogramTile {
                                 icon: PhoneIcon::Tools,
                                 label: i18n::registered(self.locale, "simple-mode.318"),
-                                tip: i18n::registered(self.locale, "simple-mode.319"),
+                                tip: &toolbar_tip,
                                 width: SIMPLE_HIT,
                                 enabled: true,
                                 active: false,
@@ -6125,12 +6192,18 @@ impl DrillApp {
                     .color(super::app_theme::SECONDARY_TEXT),
                 );
             }
+            let downbeat_label = i18n::registered(self.locale, "simple-mode.343");
+            let downbeat_tip = self.key_tip(
+                ui.ctx(),
+                downbeat_label,
+                super::keybindings::Action::MarkDownbeat,
+            );
             let (downbeat, downbeat_click) = self.simple_pictogram_tile(
                 ui,
                 PictogramTile {
                     icon: PhoneIcon::Note,
-                    label: i18n::registered(self.locale, "simple-mode.343"),
-                    tip: "",
+                    label: downbeat_label,
+                    tip: &downbeat_tip,
                     width: 108.0,
                     enabled: true,
                     active: false,
@@ -6144,12 +6217,17 @@ impl DrillApp {
             if downbeat_click {
                 self.simple_mark_downbeat();
             }
+            let earlier_tip = self.key_tip(
+                ui.ctx(),
+                i18n::registered(self.locale, "simple-mode.344"),
+                super::keybindings::Action::NudgeSongEarlier,
+            );
             let (earlier, earlier_click) = self.simple_pictogram_tile(
                 ui,
                 PictogramTile {
                     icon: PhoneIcon::Minus,
                     label: "",
-                    tip: i18n::registered(self.locale, "simple-mode.344"),
+                    tip: &earlier_tip,
                     width: SIMPLE_HIT,
                     enabled: true,
                     active: false,
@@ -6163,12 +6241,17 @@ impl DrillApp {
             if earlier_click {
                 self.simple_nudge_song(-1);
             }
+            let later_tip = self.key_tip(
+                ui.ctx(),
+                i18n::registered(self.locale, "simple-mode.345"),
+                super::keybindings::Action::NudgeSongLater,
+            );
             let (later, later_click) = self.simple_pictogram_tile(
                 ui,
                 PictogramTile {
                     icon: PhoneIcon::Plus,
                     label: "",
-                    tip: i18n::registered(self.locale, "simple-mode.345"),
+                    tip: &later_tip,
                     width: SIMPLE_HIT,
                     enabled: true,
                     active: false,
@@ -6182,12 +6265,18 @@ impl DrillApp {
             if later_click {
                 self.simple_nudge_song(1);
             }
+            let remove_label = i18n::registered(self.locale, "simple-mode.346");
+            let remove_tip = self.key_tip(
+                ui.ctx(),
+                remove_label,
+                super::keybindings::Action::RemoveSong,
+            );
             let (remove, remove_click) = self.simple_pictogram_tile(
                 ui,
                 PictogramTile {
                     icon: PhoneIcon::NoteOff,
-                    label: i18n::registered(self.locale, "simple-mode.346"),
-                    tip: "",
+                    label: remove_label,
+                    tip: &remove_tip,
                     width: 88.0,
                     enabled: true,
                     active: false,
@@ -6204,7 +6293,7 @@ impl DrillApp {
         });
     }
 
-    fn simple_pick_and_import_song(&mut self) {
+    pub(crate) fn simple_pick_and_import_song(&mut self) {
         let Some(path) = rfd::FileDialog::new()
             .add_filter(
                 i18n::registered(self.locale, "simple-mode.349"),
@@ -6236,7 +6325,7 @@ impl DrillApp {
         true
     }
 
-    fn simple_remove_song(&mut self) {
+    pub(crate) fn simple_remove_song(&mut self) {
         if self.document.audio.is_none() {
             return;
         }
@@ -6249,7 +6338,7 @@ impl DrillApp {
         }
     }
 
-    fn simple_mark_downbeat(&mut self) {
+    pub(crate) fn simple_mark_downbeat(&mut self) {
         if self.simple_mode.song_missing {
             return;
         }
@@ -6274,7 +6363,7 @@ impl DrillApp {
         }
     }
 
-    fn simple_nudge_song(&mut self, steps: i32) {
+    pub(crate) fn simple_nudge_song(&mut self, steps: i32) {
         if steps == 0 || self.simple_mode.song_missing {
             return;
         }
@@ -8560,6 +8649,7 @@ fn simple_scene_name_text(raw: &str) -> String {
 
 /// Screen arrows. Up moves away from the audience, because the audience
 /// label sits on the bottom edge of the field.
+#[cfg(test)]
 fn simple_arrow_step(key: egui::Key) -> Option<(i32, i32)> {
     match key {
         egui::Key::ArrowLeft => Some((-1, 0)),

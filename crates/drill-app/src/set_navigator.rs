@@ -31,20 +31,8 @@ impl SetNavigator {
         self.focus_query = true;
     }
 
-    /// Cmd/Ctrl+J is intentionally separate from the command palette: it is
-    /// a direct navigation gesture, comparable to Finder's jump surfaces.
-    pub(crate) fn open_if_requested(&mut self, context: &egui::Context) {
-        if self.open || context.egui_wants_keyboard_input() || context.text_edit_focused() {
-            return;
-        }
-        if context.input_mut(|input| {
-            input.consume_shortcut(&egui::KeyboardShortcut::new(
-                egui::Modifiers::COMMAND,
-                egui::Key::J,
-            ))
-        }) {
-            self.open();
-        }
+    pub(crate) fn is_open(&self) -> bool {
+        self.open
     }
 
     pub(crate) fn show(
