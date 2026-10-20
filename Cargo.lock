@@ -924,6 +924,7 @@ dependencies = [
  "drill-presence",
  "drill-project",
  "drill-render",
+ "drill-sync",
  "drill-updater",
  "eframe",
  "rfd",
@@ -1051,10 +1052,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "drill-relay"
+version = "0.1.0"
+dependencies = [
+ "drill-core",
+ "drill-presence",
+ "drill-sync",
+ "tungstenite",
+]
+
+[[package]]
 name = "drill-render"
 version = "0.1.0"
 dependencies = [
  "drill-core",
+]
+
+[[package]]
+name = "drill-sync"
+version = "0.1.0"
+dependencies = [
+ "drill-core",
+ "serde",
+ "serde_json",
+ "tungstenite",
 ]
 
 [[package]]
@@ -1065,6 +1086,20 @@ dependencies = [
  "serde",
  "serde_json",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "drill-web"
+version = "0.1.0"
+dependencies = [
+ "drill-core",
+ "drill-render",
+ "drill-sync",
+ "eframe",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]

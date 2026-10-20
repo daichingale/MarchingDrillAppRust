@@ -24,6 +24,15 @@ impl eframe::App for DrillApp {
         self.update_state.poll();
         // Presence is view-only: this reads the document and selection to
         // publish "where I am", and drains peers to draw. It cannot edit.
+        // The join signal it records is consumed here, and the edit socket
+        // is a separate client on the same room.
+        if let Some(signal) = self.presence.take_session_signal() {
+            self.collab.on_signal(&signal, &self.document);
+        }
+        self.apply_remote_sync();
+        if self.collab.is_live() {
+            ui.ctx().request_repaint_after(Duration::from_millis(80));
+        }
         self.presence
             .poll(&self.document, self.current_set, &self.selected);
         if let Some(event) = self.underlay_state.poll(ui.ctx()) {

@@ -16,6 +16,7 @@ drill-updater = { path = "../drill-updater", version = "0.1.0" }
 drill-interop = { path = "../drill-interop", version = "0.1.0" }
 drill-plugin = { path = "../drill-plugin", version = "0.1.0" }
 drill-presence = { path = "../drill-presence", version = "0.1.0" }
+drill-sync = { path = "../drill-sync", version = "0.1.0" }
 drill-mobile-viewer = { path = "../drill-mobile-viewer", version = "0.1.0" }
 eframe = { version = "0.35.0", default-features = false, features = ["accesskit", "wgpu", "glow", "__screenshot", "wayland", "x11"] }
 rfd = "0.17.2"

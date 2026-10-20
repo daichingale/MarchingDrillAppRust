@@ -8,6 +8,8 @@ mod app_ui;
 mod audio_state;
 #[path = "bootstrap.rs"]
 mod bootstrap;
+#[path = "collab_state.rs"]
+mod collab_state;
 #[path = "command_palette.rs"]
 mod command_palette;
 #[path = "commands.rs"]
@@ -1170,6 +1172,7 @@ pub(crate) struct DrillApp {
     /// Live collaborator presence. View-only by construction: this can draw
     /// who is looking at what, and can never mutate the document.
     presence: presence_state::PresenceState,
+    collab: collab_state::CollabState,
     gpu: Option<gpu_bridge::Bridge>,
     /// Toggleable frame-pacing overlay. Session-only diagnostics: never part
     /// of the document, never touches undo history.
@@ -1397,6 +1400,7 @@ impl Default for DrillApp {
             update_state: update_state::UpdateState::default(),
             import_state: import_state::ImportState::default(),
             presence: presence_state::PresenceState::default(),
+            collab: collab_state::CollabState::default(),
             gpu: None,
             perf_hud: perf_hud::PerfHud::default(),
             plugin_state: plugin_state::PluginUiState::default(),
@@ -4219,9 +4223,17 @@ impl DrillApp {
     }
 
     fn execute_edit(&mut self, edit: Edit, failure: &str) -> bool {
+        let echo = if self.collab.is_applying() {
+            None
+        } else {
+            collab_state::echo_from(&self.document, &edit)
+        };
         match self.history.execute(&mut self.document, edit) {
             Ok(()) => {
                 self.dirty = true;
+                if let Some(echo) = echo {
+                    self.collab.publish_echo(echo);
+                }
                 true
             }
             Err(_) => {
@@ -4229,6 +4241,21 @@ impl DrillApp {
                 false
             }
         }
+    }
+
+    /// Applies edits that won the room's last-writer-wins merge.
+    ///
+    /// `set_applying` keeps `execute_edit` from publishing them back out.
+    fn apply_remote_sync(&mut self) {
+        let edits = self.collab.poll_edits(&self.document);
+        if edits.is_empty() {
+            return;
+        }
+        self.collab.set_applying(true);
+        for edit in edits {
+            let _ = self.execute_edit(edit, "");
+        }
+        self.collab.set_applying(false);
     }
 
     fn show_subset_snapshot_workspace(&mut self, context: &egui::Context) {
