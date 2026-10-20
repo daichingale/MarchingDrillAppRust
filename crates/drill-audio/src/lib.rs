@@ -1,6 +1,7 @@
 //! Deterministic, device-independent audio decoding and waveform data.
 
 mod asset;
+mod beats;
 mod click;
 mod clock;
 mod decode;
@@ -9,6 +10,7 @@ mod peaks;
 mod rate;
 
 pub use asset::{AudioAsset, DecodeLimits};
+pub use beats::{BpmGuess, suggest_bpm};
 pub use click::{
     ClickEvent, ClickMixer, ClickMode, ClickSchedule, ClickSettings, ClickVoices, CountIn,
     DuckingMode, render_mix_with_clicks,

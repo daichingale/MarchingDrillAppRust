@@ -1,7 +1,7 @@
 use super::i18n::StatusMessage;
 use drill_audio::{
     AudioAsset, AudioOutput, DecodeLimits, DecodeOutput, Peak, PeakPyramid, ProgressSink,
-    decode_bytes, decode_file,
+    decode_bytes, decode_file, suggest_bpm,
 };
 use drill_jobs::{Job, JobErrorCode, JobFailure, JobKind, JobMsg, ProgressHandle};
 use eframe::egui::{self, Color32, Pos2, Sense, Stroke, Vec2};
@@ -42,6 +42,16 @@ pub(crate) enum DecodeEvent {
     Cancelled,
 }
 
+struct WaveCache {
+    key: (u32, u32, u32, u32, u64),
+    columns: Vec<(f32, f32)>,
+}
+
+struct CarrierJob {
+    generation: u32,
+    job: Job<AudioOutput>,
+}
+
 pub(crate) struct AudioState {
     job: Option<Job<DecodeOutput>>,
     asset: Option<Arc<AudioAsset>>,
@@ -54,7 +64,12 @@ pub(crate) struct AudioState {
         f64,
         drill_core::tempo::TempoMap,
         u32,
+        u64,
     )>,
+    bpm_guess: Option<f32>,
+    wave_cache: Option<WaveCache>,
+    carrier: Option<CarrierJob>,
+    media_generation: u32,
     pub status: StatusMessage,
 }
 
@@ -68,6 +83,10 @@ impl Default for AudioState {
             buckets: Vec::new(),
             click_schedule: drill_audio::ClickSchedule::default(),
             last_click_config: None,
+            bpm_guess: None,
+            wave_cache: None,
+            carrier: None,
+            media_generation: 0,
             status: StatusMessage::new("audio-status.001"),
         }
     }
@@ -78,10 +97,7 @@ impl AudioState {
         if let Some(job) = &self.job {
             job.cancel();
         }
-        self.output = None;
-        self.asset = None;
-        self.peaks = None;
-        self.last_click_config = None;
+        self.forget_media();
         self.status = StatusMessage::new("audio-status.002");
         self.job = Some(Job::spawn_typed(JobKind::AudioDecode, move |progress| {
             decode_file(
@@ -97,10 +113,7 @@ impl AudioState {
         if let Some(job) = &self.job {
             job.cancel();
         }
-        self.output = None;
-        self.asset = None;
-        self.peaks = None;
-        self.last_click_config = None;
+        self.forget_media();
         self.status = StatusMessage::new("audio-status.003");
         let extension = PathBuf::from(original_name)
             .extension()
@@ -135,8 +148,7 @@ impl AudioState {
                         None
                     }
                 };
-                self.asset = Some(asset);
-                self.peaks = Some(decoded.peaks);
+                self.remember_asset(asset, decoded.peaks);
                 // Force one output-program update on the next UI pass. A matching
                 // schedule may already have been built while decode was running.
                 self.last_click_config = None;
@@ -167,11 +179,8 @@ impl AudioState {
         self.pause();
         self.cancel();
         self.job = None;
-        self.output = None;
-        self.asset = None;
-        self.peaks = None;
+        self.forget_media();
         self.buckets.clear();
-        self.last_click_config = None;
         self.status = StatusMessage::new("audio-status.001");
     }
     pub fn is_loading(&self) -> bool {
@@ -198,11 +207,173 @@ impl AudioState {
             output.set_muted(muted);
         }
     }
+    fn forget_media(&mut self) {
+        self.media_generation = self.media_generation.wrapping_add(1);
+        if let Some(carrier) = &self.carrier {
+            carrier.job.cancel();
+        }
+        self.carrier = None;
+        self.output = None;
+        self.asset = None;
+        self.peaks = None;
+        self.bpm_guess = None;
+        self.wave_cache = None;
+        self.last_click_config = None;
+    }
+
+    fn remember_asset(&mut self, asset: Arc<AudioAsset>, peaks: PeakPyramid) {
+        self.bpm_guess = suggest_bpm(&asset).map(|guess| guess.bpm);
+        self.wave_cache = None;
+        self.asset = Some(asset);
+        self.peaks = Some(peaks);
+    }
+
+    /// Suggested constant tempo from the loaded song, in BPM.
+    #[must_use]
+    pub fn bpm_guess(&self) -> Option<f32> {
+        self.bpm_guess
+    }
+
+    /// Install a decoded asset without opening a device. Used by the
+    /// screenshot harness so the timeline can draw a waveform headlessly.
+    pub fn install_preview(&mut self, asset: AudioAsset) {
+        let peaks = PeakPyramid::build(&asset);
+        self.remember_asset(Arc::new(asset), peaks);
+    }
+
+    /// Open a silent carrier so the metronome can tick when no song is loaded.
+    pub fn open_click_carrier(&mut self) {
+        if self.output.is_some() || self.carrier.is_some() || self.job.is_some() {
+            return;
+        }
+        if self.asset.is_none() {
+            let Ok(asset) = AudioAsset::from_interleaved(vec![0_i16; 48_000], 48_000, 1, 1.0)
+            else {
+                return;
+            };
+            let asset = Arc::new(asset);
+            let peaks = PeakPyramid::build(&asset);
+            self.asset = Some(asset);
+            self.peaks = Some(peaks);
+            self.bpm_guess = None;
+            self.wave_cache = None;
+        }
+        let Some(asset) = self.asset.clone() else {
+            return;
+        };
+        let generation = self.media_generation;
+        self.carrier = Some(CarrierJob {
+            generation,
+            job: Job::spawn_typed(JobKind::AudioDecode, move |_| {
+                AudioOutput::open_default(asset)
+                    .map_err(|_| JobFailure::new(JobErrorCode::External))
+            }),
+        });
+    }
+
+    pub fn poll_click_carrier(&mut self, playing: bool, show_seconds: f32) {
+        let Some(generation) = self.carrier.as_ref().map(|carrier| carrier.generation) else {
+            return;
+        };
+        if generation != self.media_generation {
+            if let Some(carrier) = &self.carrier {
+                carrier.job.cancel();
+            }
+            self.carrier = None;
+            return;
+        }
+        let Some(message) = self.carrier.as_mut().and_then(|carrier| carrier.job.poll()) else {
+            return;
+        };
+        self.carrier = None;
+        if let JobMsg::Done(output) = message {
+            self.output = Some(output);
+            self.last_click_config = None;
+            if playing {
+                self.seek_seconds(show_seconds);
+                self.play();
+            }
+        }
+    }
+
+    /// Min/max columns for the visible count span. Empty when no song is loaded.
+    /// A constant tempo uses one linear read. A tempo map samples each column
+    /// in file time so a later tempo change stretches the wave.
+    pub fn timeline_columns(
+        &mut self,
+        track: Option<&drill_core::audio::AudioTrack>,
+        tempo: &drill_core::tempo::TempoMap,
+        visible: std::ops::RangeInclusive<f32>,
+        width: f32,
+    ) -> Vec<(f32, f32)> {
+        let Some(track) = track else {
+            return Vec::new();
+        };
+        let Some(asset) = self.asset.clone() else {
+            return Vec::new();
+        };
+        let Some(peaks) = self.peaks.clone() else {
+            return Vec::new();
+        };
+        let buckets = waveform_bucket_count(width);
+        let start = *visible.start();
+        let end = *visible.end();
+        let key = (
+            start.to_bits(),
+            (end - start).to_bits(),
+            buckets as u32,
+            track.offset_seconds.to_bits(),
+            tempo_stamp(tempo),
+        );
+        if let Some(cache) = &self.wave_cache
+            && cache.key == key
+        {
+            return cache.columns.clone();
+        }
+        let columns = if tempo.events().len() <= 1 {
+            let t0 = drill_core::audio::count_to_audio_time(track, tempo, start)
+                .clamp(0.0, track.duration_seconds);
+            let t1 = drill_core::audio::count_to_audio_time(track, tempo, end)
+                .clamp(t0, track.duration_seconds);
+            let rate = asset.sample_rate() as f32;
+            let frame0 = (t0 * rate).round().max(0.0) as u64;
+            let frame1 = (t1 * rate).round().max(0.0) as u64;
+            let mut scratch = Vec::new();
+            peaks.range(
+                &asset,
+                frame0,
+                frame1.max(frame0.saturating_add(1)),
+                buckets,
+                &mut scratch,
+            );
+            merge_channel_peaks(&scratch, asset.channels(), buckets)
+        } else {
+            let span = (end - start).max(f32::EPSILON);
+            let windows = (0..buckets)
+                .map(|index| {
+                    let left = start + span * index as f32 / buckets as f32;
+                    let right = start + span * (index + 1) as f32 / buckets as f32;
+                    (
+                        f64::from(drill_core::audio::count_to_audio_time(track, tempo, left)),
+                        f64::from(drill_core::audio::count_to_audio_time(track, tempo, right)),
+                    )
+                })
+                .collect::<Vec<_>>();
+            peaks.column_envelope(&asset, &windows)
+        };
+        self.wave_cache = Some(WaveCache {
+            key,
+            columns: columns.clone(),
+        });
+        columns
+    }
+
     pub fn configure_click(
         &mut self,
         tempo: &drill_core::tempo::TempoMap,
         end_count: f64,
         settings: &drill_audio::ClickSettings,
+        file_origin_seconds: f64,
     ) -> usize {
         let rate = self.output.as_ref().map_or_else(
             || {
@@ -212,11 +383,17 @@ impl AudioState {
             },
             AudioOutput::output_sample_rate,
         );
+        let origin = if file_origin_seconds.is_finite() {
+            file_origin_seconds
+        } else {
+            0.0
+        };
         // The full tempo map (not just its bpm at count 0) must be part of the
         // signature: a tempo change anchored anywhere after count 0 needs to
         // invalidate the cached click schedule too, or the click track can go
-        // stale after a mid-show tempo edit.
-        let signature = (*settings, end_count, tempo.clone(), rate);
+        // stale after a mid-show tempo edit. The file origin slides the clicks
+        // onto the same timeline as the song.
+        let signature = (*settings, end_count, tempo.clone(), rate, origin.to_bits());
         if self.last_click_config.as_ref() == Some(&signature) {
             return self.click_schedule.events().len();
         }
@@ -228,6 +405,11 @@ impl AudioState {
             rate,
             &mut self.click_schedule,
         );
+        let shift = (origin * f64::from(rate)).round();
+        if shift.is_finite() {
+            self.click_schedule
+                .shift_samples(shift.clamp(i64::MIN as f64, i64::MAX as f64) as i64);
+        }
         if let Some(output) = &self.output {
             if settings.enabled {
                 let voices = drill_audio::ClickVoices::render(settings, rate);
@@ -391,6 +573,28 @@ impl AudioState {
         }
         action
     }
+}
+
+fn tempo_stamp(tempo: &drill_core::tempo::TempoMap) -> u64 {
+    tempo.events().iter().fold(0u64, |hash, event| {
+        hash.wrapping_mul(0x9E37_79B1)
+            .wrapping_add(u64::from(event.count.to_bits()))
+            .wrapping_mul(0x9E37_79B1)
+            .wrapping_add(u64::from(event.bpm.to_bits()))
+    })
+}
+
+fn merge_channel_peaks(peaks: &[Peak], channels: u8, buckets: usize) -> Vec<(f32, f32)> {
+    let channels = usize::from(channels).max(1);
+    let mut columns = Vec::with_capacity(buckets);
+    for chunk in peaks.chunks(channels).take(buckets) {
+        let peak = chunk.iter().copied().fold(Peak::SILENT, Peak::merge);
+        columns.push((
+            f32::from(peak.min) / 32_768.0,
+            f32::from(peak.max) / 32_768.0,
+        ));
+    }
+    columns
 }
 
 #[cfg(test)]

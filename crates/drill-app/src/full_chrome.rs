@@ -886,6 +886,7 @@ impl DrillApp {
                         self.show_set_card_strip(ui);
                         if self.full_timeline_expanded {
                             let (playhead_set, playhead_count) = self.render_playhead();
+                            let wave = self.timeline_wave(ui.available_width());
                             let change = super::timeline::draw_count_track(
                                 ui,
                                 &self.document,
@@ -896,6 +897,7 @@ impl DrillApp {
                                 &mut self.timeline_view,
                                 self.locale,
                                 self.presence.set_marks(),
+                                &wave,
                             );
                             self.apply_full_timeline_change(change);
                             ui.collapsing(text(self.locale, Text::PlaybackOptions), |ui| {

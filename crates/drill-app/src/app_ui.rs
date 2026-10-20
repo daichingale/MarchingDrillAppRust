@@ -225,6 +225,27 @@ impl eframe::App for DrillApp {
         if let Some(track) = &self.document.audio {
             self.audio_state.set_mix(track.gain_linear(), track.muted);
         }
+        let file_origin = self
+            .document
+            .audio
+            .as_ref()
+            .map(|track| f64::from(track.offset_seconds))
+            .unwrap_or(0.0);
+        self.audio_state.configure_click(
+            &self.document.tempo,
+            f64::from(self.document.timeline_counts()),
+            &self.click_settings,
+            file_origin,
+        );
+        if self.click_settings.enabled && self.document.audio.is_none() {
+            self.audio_state.open_click_carrier();
+        }
+        let show_seconds = self.document.tempo.seconds_at(
+            self.document
+                .global_count(self.current_set, self.count_position),
+        );
+        self.audio_state
+            .poll_click_carrier(self.playing, show_seconds);
         if self.dirty && self.last_autosave.elapsed().as_secs() >= 30 {
             self.project_state
                 .autosave(&self.document, self.current_path.as_deref());
@@ -244,6 +265,10 @@ impl eframe::App for DrillApp {
                     &self.document.tempo,
                     seconds,
                 ))
+            } else if self.click_settings.enabled {
+                self.audio_state
+                    .clock_seconds()
+                    .map(|seconds| self.document.tempo.count_at(seconds))
             } else {
                 None
             };
@@ -1443,6 +1468,7 @@ impl eframe::App for DrillApp {
                     // The NOW line glides with the field, so a set jump moves one playhead
                     // across two views rather than teleporting each of them separately.
                     let (playhead_set, playhead_count) = self.render_playhead();
+                    let wave = self.timeline_wave(ui.available_width());
                     let timeline_change = draw_count_track(
                         ui,
                         &self.document,
@@ -1453,6 +1479,7 @@ impl eframe::App for DrillApp {
                         &mut self.timeline_view,
                         self.locale,
                         self.presence.set_marks(),
+                        &wave,
                     );
                     if let Some((start, end)) = timeline_change.range {
                         self.playback_start = start;
@@ -3318,6 +3345,31 @@ impl DrillApp {
             .clicked()
         {
             self.scene_tempo_faster();
+        }
+        let guessed = self.audio_state.bpm_guess();
+        if ui
+            .add_enabled(
+                guessed.is_some(),
+                egui::Button::new(text(self.locale, Text::SuggestTempo)),
+            )
+            .on_hover_text(text(self.locale, Text::SuggestTempoHint))
+            .clicked()
+            && let Some(bpm) = guessed
+        {
+            self.apply_song_tempo(bpm);
+        }
+        if ui
+            .selectable_label(
+                self.click_settings.enabled,
+                text(self.locale, Text::Metronome),
+            )
+            .on_hover_text(text(self.locale, Text::MetronomeHint))
+            .clicked()
+        {
+            self.click_settings.enabled = !self.click_settings.enabled;
+            if !self.click_settings.enabled && self.document.audio.is_none() {
+                self.audio_state.clear();
+            }
         }
         let current_walk = self.current_scene_walk();
         ui.menu_button(

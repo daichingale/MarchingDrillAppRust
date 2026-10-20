@@ -9,6 +9,13 @@ pub(crate) struct TimelineChange {
     pub(crate) marker_edit: Option<Edit>,
 }
 
+/// Waveform columns for the visible count span, plus the bar size used to
+/// mark downbeats. Empty columns leave the track as a plain count lane.
+pub(crate) struct TimelineWave {
+    pub(crate) columns: Vec<(f32, f32)>,
+    pub(crate) beats_per_measure: u16,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct TimelineViewport {
     pub(crate) start: f32,
@@ -363,6 +370,75 @@ fn paint_track_chip(
 
 /// Daylight labels stay dark enough to read on the white count track.
 /// Night mode keeps the brighter set so they still read on the dark lane.
+fn paint_waveform(painter: &egui::Painter, rect: Rect, columns: &[(f32, f32)], dark: bool) {
+    let band = Rect::from_min_max(
+        Pos2::new(rect.left(), rect.top() + 36.0),
+        Pos2::new(rect.right(), rect.bottom() - 4.0),
+    );
+    if band.height() < 8.0 || columns.is_empty() {
+        return;
+    }
+    let color = if dark {
+        Color32::from_rgb(120, 190, 255)
+    } else {
+        Color32::from_rgb(20, 96, 200)
+    };
+    let mid = band.center().y;
+    let half = band.height() * 0.48;
+    for (index, (min, max)) in columns.iter().enumerate() {
+        let x = band.left() + index as f32 / columns.len() as f32 * band.width();
+        let top = mid - max.clamp(-1.0, 1.0) * half;
+        let bottom = mid - min.clamp(-1.0, 1.0) * half;
+        painter.line_segment(
+            [
+                Pos2::new(x, top.min(bottom)),
+                Pos2::new(x, top.max(bottom).max(top + 1.0)),
+            ],
+            Stroke::new(1.5, color),
+        );
+    }
+}
+
+fn paint_beat_ticks(
+    painter: &egui::Painter,
+    rect: Rect,
+    viewport: TimelineViewport,
+    beats_per_measure: u16,
+    dark: bool,
+    over_wave: bool,
+) {
+    let beats = u32::from(beats_per_measure.max(1));
+    let first = viewport.start.floor().max(0.0) as u32;
+    let last = (viewport.start + viewport.span).ceil() as u32;
+    let stride = timeline_tick_stride(viewport.span.ceil() as u32, rect.width());
+    for count in first..=last {
+        let downbeat = count.is_multiple_of(beats);
+        if !downbeat && !count.is_multiple_of(stride) {
+            continue;
+        }
+        let x = viewport.count_to_x(count as f32, rect.left(), rect.width());
+        if x < rect.left() || x > rect.right() {
+            continue;
+        }
+        let top = if downbeat && over_wave {
+            rect.top() + 34.0
+        } else {
+            rect.bottom() - if downbeat { 16.0 } else { 8.0 }
+        };
+        let color = if downbeat {
+            Color32::from_rgb(196, 132, 18)
+        } else if dark {
+            Color32::from_white_alpha(90)
+        } else {
+            Color32::from_black_alpha(70)
+        };
+        painter.line_segment(
+            [Pos2::new(x, top), Pos2::new(x, rect.bottom() - 1.0)],
+            Stroke::new(if downbeat { 2.0 } else { 1.0 }, color),
+        );
+    }
+}
+
 fn waypoint_label_color(dark: bool) -> Color32 {
     if dark {
         Color32::from_rgb(208, 222, 255)
@@ -400,6 +476,7 @@ pub(crate) fn draw_count_track(
     // `(set index, color)` per connected collaborator. Empty when presence is
     // off, which is the overwhelmingly common case.
     peer_sets: &[(usize, [u8; 3])],
+    wave: &TimelineWave,
 ) -> TimelineChange {
     let mut change = TimelineChange::default();
     let total_counts = document.timeline_counts();
@@ -408,8 +485,9 @@ pub(crate) fn draw_count_track(
     let global = document
         .global_count(current_set, local_count)
         .clamp(0.0, total);
+    let track_height = if wave.columns.is_empty() { 84.0 } else { 128.0 };
     let (response, painter) = ui.allocate_painter(
-        Vec2::new(ui.available_width(), 84.0),
+        Vec2::new(ui.available_width(), track_height),
         Sense::click_and_drag(),
     );
     let waypoint_lane = Rect::from_min_max(
@@ -618,6 +696,18 @@ pub(crate) fn draw_count_track(
         }
         start_count = end_count;
     }
+
+    if !wave.columns.is_empty() {
+        paint_waveform(&painter, rect, &wave.columns, dark);
+    }
+    paint_beat_ticks(
+        &painter,
+        rect,
+        *viewport,
+        wave.beats_per_measure,
+        dark,
+        !wave.columns.is_empty(),
+    );
 
     let range_left = viewport.count_to_x(playback_start as f32, rect.left(), rect.width());
     let range_right = viewport.count_to_x(playback_end as f32, rect.left(), rect.width());
@@ -1302,6 +1392,10 @@ mod tests {
                     &mut viewport,
                     drill_core::Locale::En,
                     &[],
+                    &TimelineWave {
+                        columns: Vec::new(),
+                        beats_per_measure: 4,
+                    },
                 );
             });
             let update = output

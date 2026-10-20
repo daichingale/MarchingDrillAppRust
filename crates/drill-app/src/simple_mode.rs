@@ -1275,7 +1275,7 @@ impl DrillApp {
     /// `guide-collapsed`, `guide-song`, `full-selected`, `full-collapsed`,
     /// `full-timeline`, `full-multi`, `full-list`, `full-export`, `cast`,
     /// `cast-full`, `cast-one`, `cast-many`, `cast-roster`, `cast-timeline`,
-    /// `cast-export`, `cast-video`, `cast-play`, or `cast-play-mid`.
+    /// `cast-export`, `cast-video`, `cast-play`, `cast-play-mid`, or `full-music`.
     pub(crate) fn apply_qa_simple_fixture(&mut self) {
         let Ok(stage) = std::env::var("DRILLFORGE_QA_SIMPLE") else {
             return;
@@ -1326,7 +1326,7 @@ impl DrillApp {
             self.replace_selection(std::iter::once(0).collect());
             self.full_inspector_collapsed = true;
         }
-        if stage == "full-timeline" {
+        if stage == "full-timeline" || stage == "full-music" {
             // A second set gives the count track a real IN→OUT span.
             self.duplicate_current_set();
             self.navigate_to_set(0);
@@ -1334,6 +1334,9 @@ impl DrillApp {
             self.full_timeline_expanded = true;
             self.full_inspector_collapsed = true;
             self.clear_selection();
+        }
+        if stage == "full-music" {
+            self.install_music_preview();
         }
         if stage == "full-multi" {
             self.replace_selection([0, 1].into_iter().collect());
@@ -6561,6 +6564,30 @@ impl DrillApp {
             let _ = downbeat;
             if downbeat_click {
                 self.simple_mark_downbeat();
+            }
+            if let Some(bpm) = self.audio_state.bpm_guess() {
+                let tempo_label = text(self.locale, Text::SuggestTempo);
+                let tempo_tip = text(self.locale, Text::SuggestTempoHint);
+                let (tempo_tile, tempo_click) = self.simple_pictogram_tile(
+                    ui,
+                    PictogramTile {
+                        icon: PhoneIcon::Note,
+                        label: tempo_label,
+                        tip: tempo_tip,
+                        width: 108.0,
+                        enabled: true,
+                        active: false,
+                        pulse: false,
+                        filled: false,
+                        compact: false,
+                        time,
+                        lock_width: false,
+                    },
+                );
+                let _ = tempo_tile;
+                if tempo_click {
+                    self.apply_song_tempo(bpm);
+                }
             }
             let earlier_label = i18n::registered(self.locale, "simple-mode.344");
             let earlier_tip = self.key_tip(

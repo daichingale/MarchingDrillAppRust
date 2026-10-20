@@ -67,6 +67,43 @@ impl PeakPyramid {
         self.frames
     }
 
+    /// One min/max pair per time window, mixed to a single channel in `-1..=1`.
+    /// Windows outside the file, or with no span, are silent.
+    #[must_use]
+    pub fn column_envelope(&self, asset: &AudioAsset, windows: &[(f64, f64)]) -> Vec<(f32, f32)> {
+        let mut scratch = Vec::new();
+        let mut columns = Vec::with_capacity(windows.len());
+        let rate = f64::from(asset.sample_rate());
+        let duration = asset.duration_seconds();
+        for &(start, end) in windows {
+            if !start.is_finite() || !end.is_finite() {
+                columns.push((0.0, 0.0));
+                continue;
+            }
+            let left = start.min(end).clamp(0.0, duration);
+            let right = start.max(end).clamp(0.0, duration);
+            if right <= left + 1.0e-4 {
+                columns.push((0.0, 0.0));
+                continue;
+            }
+            let frame0 = (left * rate).floor().max(0.0) as u64;
+            let frame1 = (right * rate).ceil().max(0.0) as u64;
+            self.range(
+                asset,
+                frame0,
+                frame1.max(frame0.saturating_add(1)),
+                1,
+                &mut scratch,
+            );
+            let peak = scratch.iter().copied().fold(Peak::SILENT, Peak::merge);
+            columns.push((
+                f32::from(peak.min) / 32_768.0,
+                f32::from(peak.max) / 32_768.0,
+            ));
+        }
+        columns
+    }
+
     /// Produces bucket-major, channel-minor min/max values for `[start, end)`.
     pub fn range(
         &self,
@@ -214,6 +251,20 @@ mod tests {
         assert_eq!(output.len(), 7);
         pyramid.range(&asset, 100, 10, 7, &mut output);
         assert!(output.is_empty());
+    }
+
+    #[test]
+    fn column_envelope_marks_the_pulse_and_stays_quiet_between_beats() {
+        let rate = 8_000u32;
+        let mut samples = vec![0i16; rate as usize * 2];
+        samples[0] = 16_000;
+        samples[rate as usize] = 16_000;
+        let asset = AudioAsset::from_interleaved(samples, rate, 1, 1.0).unwrap();
+        let pyramid = PeakPyramid::build(&asset);
+        let columns = pyramid.column_envelope(&asset, &[(0.0, 0.05), (0.4, 0.6), (0.95, 1.05)]);
+        assert!(columns[0].1 > 0.2, "pulse at 0s: {:?}", columns[0]);
+        assert!(columns[1].1.abs() < 0.01, "gap: {:?}", columns[1]);
+        assert!(columns[2].1 > 0.2, "pulse at 1s: {:?}", columns[2]);
     }
 
     #[test]
