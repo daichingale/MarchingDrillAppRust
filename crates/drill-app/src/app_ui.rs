@@ -394,6 +394,9 @@ impl eframe::App for DrillApp {
         if self.simple_mode.enabled {
             self.ensure_simple_chrome(ui.ctx());
             self.simple_ui(ui);
+            // The export sheet is shared. Simple mode returns before the full
+            // editor, so open it here too.
+            self.show_print_workspace(ui.ctx());
             // These sheets live in this module. Simple mode returns before the
             // full editor, so keep the same close/open guards reachable here.
             self.show_close_guard(ui.ctx());

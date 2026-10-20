@@ -1,0 +1,403 @@
+//! A Blender project bundle: `drill_scene.py` plus `drill_scene.json`.
+//!
+//! The JSON is the drill (people, colors, counts, tempo). The script builds
+//! the field, figures, cameras, and lights, and can render headless:
+//! `blender -b -P drill_scene.py -- --render out.mp4`.
+
+use drill_core::tempo::TempoMap;
+use drill_core::{Document, PerformerKind};
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+pub const SCENE_SCRIPT: &str = include_str!("blender_scene.py");
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlenderCamera {
+    PressBox,
+    EndZone,
+    Orbit,
+    Follow,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlenderEngine {
+    Eevee,
+    Cycles,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TimeOfDay {
+    Day,
+    Night,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FigureStyle {
+    Capsule,
+    Person,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RenderQuality {
+    Draft,
+    Fine,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BlenderOptions {
+    pub fps: u16,
+    pub width: u32,
+    pub height: u32,
+    pub engine: BlenderEngine,
+    pub quality: RenderQuality,
+    pub time_of_day: TimeOfDay,
+    pub camera: BlenderCamera,
+    pub figures: FigureStyle,
+    pub audio: bool,
+    /// `None` is the whole show. `Some` is one set's move, in set index.
+    pub set_index: Option<usize>,
+}
+
+impl Default for BlenderOptions {
+    fn default() -> Self {
+        Self {
+            fps: 30,
+            width: 1920,
+            height: 1080,
+            engine: BlenderEngine::Eevee,
+            quality: RenderQuality::Draft,
+            time_of_day: TimeOfDay::Day,
+            camera: BlenderCamera::PressBox,
+            figures: FigureStyle::Capsule,
+            audio: true,
+            set_index: None,
+        }
+    }
+}
+
+impl BlenderOptions {
+    pub fn samples(&self) -> u16 {
+        match self.quality {
+            RenderQuality::Draft => 8,
+            RenderQuality::Fine => 64,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BlenderScene {
+    pub schema: u16,
+    pub title: String,
+    pub fps: u16,
+    pub width: u32,
+    pub height: u32,
+    pub engine: BlenderEngine,
+    pub samples: u16,
+    pub time_of_day: TimeOfDay,
+    pub camera: BlenderCamera,
+    pub figures: FigureStyle,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follow_section: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_path: Option<String>,
+    pub audio_offset_seconds: f32,
+    pub field: BlenderField,
+    pub performers: Vec<BlenderPerformer>,
+    pub keyframes: Vec<BlenderKeyframe>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BlenderField {
+    pub width: f32,
+    pub height: f32,
+    pub unit: String,
+    pub major_x: Vec<f32>,
+    pub major_y: Vec<f32>,
+    /// Each item is `(min_x, min_y, max_x, max_y)` in field meters.
+    pub frames: Vec<[f32; 4]>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BlenderPerformer {
+    pub index: usize,
+    pub label: String,
+    pub section: String,
+    pub color: [u8; 3],
+    pub kind: String,
+    pub height_m: f32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BlenderKeyframe {
+    pub performer: usize,
+    pub frame: u32,
+    pub x: f32,
+    pub y: f32,
+}
+
+/// Last sampled frame, or 1 when the show has no dots.
+pub fn last_frame(scene: &BlenderScene) -> u32 {
+    scene
+        .keyframes
+        .iter()
+        .map(|key| key.frame)
+        .max()
+        .unwrap_or(1)
+}
+
+/// Blender frame at a global count. Frame 1 is count 0.
+pub fn blender_frame(tempo: &TempoMap, global_count: f64, fps: u16) -> u32 {
+    let seconds = tempo.seconds_at_f64(global_count);
+    let frames = (seconds * f64::from(fps.max(1))).round();
+    1 + frames.max(0.0) as u32
+}
+
+/// Counts sampled for the bundle, one per count across the show or one set.
+pub fn sample_counts(document: &Document, set_index: Option<usize>) -> Vec<f32> {
+    let last = document.sets.len().saturating_sub(1);
+    let (start, end) = match set_index {
+        Some(index) => {
+            let start = document.global_count(index, 0.0);
+            let outgoing = index < last;
+            let length = if outgoing {
+                document
+                    .sets
+                    .get(index)
+                    .map_or(0.0, |set| f32::from(set.counts) + f32::from(set.hold))
+            } else {
+                0.0
+            };
+            (start, start + length)
+        }
+        None => (0.0, document.timeline_counts() as f32),
+    };
+    let mut counts = Vec::new();
+    let mut count = start;
+    while count < end - 0.001 {
+        counts.push(count);
+        count += 1.0;
+    }
+    counts.push(end);
+    counts
+}
+
+pub fn build_scene(document: &Document, options: &BlenderOptions) -> BlenderScene {
+    let follow = document
+        .sections
+        .first()
+        .map(|section| section.short.clone())
+        .filter(|short| !short.is_empty());
+    let audio_path = if options.audio {
+        document
+            .audio
+            .as_ref()
+            .map(|track| track.path.clone())
+            .filter(|path| !path.is_empty())
+    } else {
+        None
+    };
+    let audio_offset_seconds = document
+        .audio
+        .as_ref()
+        .map(|track| track.offset_seconds)
+        .unwrap_or(0.0);
+    let performers = document
+        .performers
+        .iter()
+        .enumerate()
+        .map(|(index, performer)| BlenderPerformer {
+            index,
+            label: performer.label.clone(),
+            section: document
+                .sections
+                .iter()
+                .find(|section| section.id == performer.section)
+                .map(|section| {
+                    if section.short.is_empty() {
+                        section.name.clone()
+                    } else {
+                        section.short.clone()
+                    }
+                })
+                .unwrap_or_default(),
+            color: performer.resolved_color(&document.sections),
+            kind: match performer.kind {
+                PerformerKind::Wind => "wind",
+                PerformerKind::Percussion => "percussion",
+                PerformerKind::Guard => "guard",
+                PerformerKind::Prop => "prop",
+            }
+            .to_owned(),
+            height_m: performer.height_m,
+        })
+        .collect();
+    let mut keyframes = Vec::new();
+    let mut positions = Vec::new();
+    for count in sample_counts(document, options.set_index) {
+        let (set_index, local) = document.locate_count(count);
+        document.positions_at_count(set_index, local, &mut positions);
+        let frame = blender_frame(&document.tempo, f64::from(count), options.fps);
+        for (index, point) in positions.iter().enumerate() {
+            if !point.x.is_finite() || !point.y.is_finite() {
+                continue;
+            }
+            keyframes.push(BlenderKeyframe {
+                performer: index,
+                frame,
+                x: point.x,
+                y: point.y,
+            });
+        }
+    }
+    BlenderScene {
+        schema: 1,
+        title: document.title.clone(),
+        fps: options.fps,
+        width: options.width,
+        height: options.height,
+        engine: options.engine,
+        samples: options.samples(),
+        time_of_day: options.time_of_day,
+        camera: options.camera,
+        figures: options.figures,
+        follow_section: follow,
+        audio_path,
+        audio_offset_seconds,
+        field: BlenderField {
+            width: document.grid.width,
+            height: document.grid.height,
+            unit: match document.grid.unit {
+                drill_core::Unit::Meters => "m",
+                drill_core::Unit::Yards => "yd",
+            }
+            .to_owned(),
+            major_x: document.grid.horizontal_major_positions(),
+            major_y: document.grid.vertical_major_positions(),
+            frames: document
+                .grid
+                .reference_frame_bounds()
+                .into_iter()
+                .map(|(min_x, min_y, max_x, max_y)| [min_x, min_y, max_x, max_y])
+                .collect(),
+        },
+        performers,
+        keyframes,
+    }
+}
+
+pub fn scene_json(scene: &BlenderScene) -> Result<String, serde_json::Error> {
+    serde_json::to_string_pretty(scene)
+}
+
+pub fn parse_scene(json: &str) -> Result<BlenderScene, serde_json::Error> {
+    serde_json::from_str(json)
+}
+
+/// Writes `drill_scene.py` and `drill_scene.json` into `directory`.
+pub fn write_bundle(directory: &Path, scene: &BlenderScene) -> std::io::Result<(PathBuf, PathBuf)> {
+    fs::create_dir_all(directory)?;
+    let script = directory.join("drill_scene.py");
+    let data = directory.join("drill_scene.json");
+    fs::write(&script, SCENE_SCRIPT)?;
+    fs::write(&data, scene_json(scene).map_err(std::io::Error::other)?)?;
+    Ok((script, data))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use drill_core::{Document, Point};
+
+    fn two_step_show() -> Document {
+        let mut document = Document::blank(2);
+        document.title = "test".into();
+        document.sets[0].counts = 8;
+        document.sets[0].positions = vec![Point { x: 1.0, y: 2.0 }, Point { x: 3.0, y: 4.0 }];
+        let mut next = document.sets[0].clone();
+        next.positions = vec![Point { x: 5.0, y: 2.0 }, Point { x: 7.0, y: 6.0 }];
+        document.sets.push(next);
+        document
+    }
+
+    #[test]
+    fn frames_follow_tempo() {
+        let tempo = TempoMap::default();
+        assert_eq!(blender_frame(&tempo, 0.0, 30), 1);
+        // 120 bpm is two counts a second, so count 2 is one second, frame 31.
+        assert_eq!(blender_frame(&tempo, 2.0, 30), 31);
+        assert_eq!(blender_frame(&tempo, 2.0, 60), 61);
+        assert_eq!(blender_frame(&tempo, 4.0, 24), 1 + 48);
+    }
+
+    #[test]
+    fn scene_json_round_trips_and_keyframes_span_the_move() {
+        let scene = build_scene(&two_step_show(), &BlenderOptions::default());
+        let parsed = parse_scene(&scene_json(&scene).unwrap()).unwrap();
+        assert_eq!(parsed, scene);
+        assert_eq!(scene.schema, 1);
+        assert_eq!(scene.performers.len(), 2);
+        assert!(scene.field.width > 1.0);
+        let frames: Vec<u32> = scene.keyframes.iter().map(|key| key.frame).collect();
+        assert_eq!(*frames.iter().min().unwrap(), 1);
+        // 8 counts at 120 bpm is 4 seconds, 30 fps, frame 1 + 120.
+        assert_eq!(*frames.iter().max().unwrap(), 121);
+        let start = scene
+            .keyframes
+            .iter()
+            .find(|key| key.performer == 0 && key.frame == 1)
+            .unwrap();
+        assert!((start.x - 1.0).abs() < 1e-3);
+        let end = scene
+            .keyframes
+            .iter()
+            .filter(|key| key.performer == 0)
+            .max_by_key(|key| key.frame)
+            .unwrap();
+        assert!((end.x - 5.0).abs() < 1e-3);
+        let first = build_scene(
+            &two_step_show(),
+            &BlenderOptions {
+                set_index: Some(0),
+                ..BlenderOptions::default()
+            },
+        );
+        assert_eq!(first.keyframes.iter().map(|key| key.frame).max(), Some(121));
+        let last = build_scene(
+            &two_step_show(),
+            &BlenderOptions {
+                set_index: Some(1),
+                ..BlenderOptions::default()
+            },
+        );
+        assert_eq!(last.keyframes.len(), 2);
+        assert!(last.keyframes.iter().all(|key| key.frame == 121));
+    }
+
+    #[test]
+    fn bundle_script_is_the_headless_scene_builder() {
+        let directory =
+            std::env::temp_dir().join(format!("drill-blender-bundle-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        let scene = build_scene(&two_step_show(), &BlenderOptions::default());
+        let (script, data) = write_bundle(&directory, &scene).unwrap();
+        let text = fs::read_to_string(&script).unwrap();
+        assert_eq!(text, SCENE_SCRIPT);
+        assert!(text.contains("blender -b -P drill_scene.py -- --render out.mp4"));
+        assert!(text.contains("press_box"));
+        assert!(text.contains("end_zone"));
+        assert!(text.contains("orbit"));
+        assert!(text.contains("follow"));
+        assert!(text.contains("BLENDER_EEVEE"));
+        assert!(text.contains("H264"));
+        assert!(text.contains("MPEG4"));
+        let loaded = parse_scene(&fs::read_to_string(&data).unwrap()).unwrap();
+        assert_eq!(loaded, scene);
+        let _ = fs::remove_dir_all(&directory);
+    }
+}

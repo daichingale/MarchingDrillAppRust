@@ -1,5 +1,6 @@
 //! Deterministic CPU export backends.
 
+pub mod blender;
 pub mod page;
 pub mod pdf;
 pub mod report;
