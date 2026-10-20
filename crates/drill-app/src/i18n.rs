@@ -139,6 +139,15 @@ pub enum Text {
     StopRender,
     Pick,
     OpenWhenDone,
+    TimeWord,
+    TitleCard,
+    CameraCuts,
+    BlenderFound,
+    BlenderAbsent,
+    BlenderInstall,
+    BlenderAuto,
+    EeveeName,
+    CyclesName,
 }
 
 impl Text {
@@ -146,7 +155,7 @@ impl Text {
     /// the catalog completeness test fail during review rather than leaking a
     /// fallback string into a release build.
     #[cfg(test)]
-    pub const ALL: [Self; 90] = [
+    pub const ALL: [Self; 99] = [
         Self::File,
         Self::Edit,
         Self::Playback,
@@ -237,6 +246,15 @@ impl Text {
         Self::StopRender,
         Self::Pick,
         Self::OpenWhenDone,
+        Self::TimeWord,
+        Self::TitleCard,
+        Self::CameraCuts,
+        Self::BlenderFound,
+        Self::BlenderAbsent,
+        Self::BlenderInstall,
+        Self::BlenderAuto,
+        Self::EeveeName,
+        Self::CyclesName,
     ];
 }
 
@@ -427,6 +445,24 @@ pub fn text(locale: Locale, key: Text) -> &'static str {
         (Locale::En, Text::Pick) => "Choose",
         (Locale::Ja, Text::OpenWhenDone) => "終わったら開く",
         (Locale::En, Text::OpenWhenDone) => "Open when finished",
+        (Locale::Ja, Text::TimeWord) => "時間",
+        (Locale::En, Text::TimeWord) => "Time",
+        (Locale::Ja, Text::TitleCard) => "題名",
+        (Locale::En, Text::TitleCard) => "Title",
+        (Locale::Ja, Text::CameraCuts) => "切替",
+        (Locale::En, Text::CameraCuts) => "Cuts",
+        (Locale::Ja, Text::BlenderFound) => "見つかった",
+        (Locale::En, Text::BlenderFound) => "Found",
+        (Locale::Ja, Text::BlenderAbsent) => "見つからない",
+        (Locale::En, Text::BlenderAbsent) => "Not found",
+        (Locale::Ja, Text::BlenderInstall) => "入手",
+        (Locale::En, Text::BlenderInstall) => "Get Blender",
+        (Locale::Ja, Text::BlenderAuto) => "自動",
+        (Locale::En, Text::BlenderAuto) => "Auto",
+        (Locale::Ja, Text::EeveeName) => "Eevee",
+        (Locale::En, Text::EeveeName) => "Eevee",
+        (Locale::Ja, Text::CyclesName) => "Cycles",
+        (Locale::En, Text::CyclesName) => "Cycles",
     }
 }
 

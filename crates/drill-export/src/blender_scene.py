@@ -1,8 +1,9 @@
 # DrillForge 3D scene. Open in Blender, or render headless:
 #   blender -b -P drill_scene.py -- --render out.mp4
-# Optional: --data drill_scene.json --stills DIR --seconds 8 --samples 8
-#           --engine eevee|cycles --camera press_box|end_zone|orbit|follow
-#           --width 1920 --height 1080 --fps 30
+# Optional: --data drill_scene.json --stills DIR --night-stills DIR
+#           --seconds 16 --samples 8 --engine eevee|cycles
+#           --camera press_box|end_zone|orbit|follow
+#           --width 1280 --height 720 --fps 24
 
 import argparse
 import json
@@ -13,6 +14,7 @@ import subprocess
 import sys
 
 import bpy
+import bmesh
 from mathutils import Vector
 
 
@@ -27,6 +29,7 @@ def parse_args():
     parser.add_argument("--data", default="")
     parser.add_argument("--render", default="")
     parser.add_argument("--stills", default="")
+    parser.add_argument("--night-stills", default="")
     parser.add_argument("--seconds", type=float, default=0.0)
     parser.add_argument("--samples", type=int, default=0)
     parser.add_argument("--engine", default="")
@@ -50,8 +53,19 @@ def clear_scene():
     bpy.ops.wm.read_factory_settings(use_empty=True)
 
 
-def principle(color, roughness=0.6):
-    mat = bpy.data.materials.new("drill")
+def link(obj):
+    bpy.context.scene.collection.objects.link(obj)
+    return obj
+
+
+def mesh_object(name, mesh, location=(0.0, 0.0, 0.0)):
+    obj = bpy.data.objects.new(name, mesh)
+    obj.location = location
+    return link(obj)
+
+
+def shade(color, roughness=0.55, name="drill"):
+    mat = bpy.data.materials.new(name)
     mat.use_nodes = True
     node = mat.node_tree.nodes.get("Principled BSDF")
     if node:
@@ -66,23 +80,57 @@ def principle(color, roughness=0.6):
     return mat
 
 
-def world_color(rgba, strength):
-    world = bpy.data.worlds.new("drill-world")
+def striped_turf():
+    mat = shade((48, 132, 58), 0.9, "turf")
+    tree = mat.node_tree
+    nodes = tree.nodes
+    links = tree.links
+    bsdf = nodes.get("Principled BSDF")
+    if bsdf is None:
+        return mat
+    coord = nodes.new("ShaderNodeTexCoord")
+    mapping = nodes.new("ShaderNodeMapping")
+    mapping.inputs["Scale"].default_value = (0.42, 0.02, 1.0)
+    wave = nodes.new("ShaderNodeTexWave")
+    wave.wave_type = "BANDS"
+    wave.bands_direction = "X"
+    wave.inputs["Scale"].default_value = 1.0
+    ramp = nodes.new("ShaderNodeValToRGB")
+    ramp.color_ramp.elements[0].color = (0.07, 0.30, 0.11, 1.0)
+    ramp.color_ramp.elements[1].color = (0.24, 0.58, 0.24, 1.0)
+    links.new(coord.outputs["Object"], mapping.inputs["Vector"])
+    links.new(mapping.outputs["Vector"], wave.inputs["Vector"])
+    links.new(wave.outputs["Fac"], ramp.inputs["Fac"])
+    links.new(ramp.outputs["Color"], bsdf.inputs["Base Color"])
+    return mat
+
+
+def sky(night):
+    world = bpy.data.worlds.new("sky")
     bpy.context.scene.world = world
     world.use_nodes = True
-    node = world.node_tree.nodes.get("Background")
-    if node:
-        node.inputs[0].default_value = rgba
-        node.inputs[1].default_value = strength
-
-
-def add_box(name, center, scale, material):
-    bpy.ops.mesh.primitive_cube_add(size=1.0, location=center)
-    obj = bpy.context.active_object
-    obj.name = name
-    obj.scale = scale
-    obj.data.materials.append(material)
-    return obj
+    tree = world.node_tree
+    nodes = tree.nodes
+    links = tree.links
+    nodes.clear()
+    out = nodes.new("ShaderNodeOutputWorld")
+    bg = nodes.new("ShaderNodeBackground")
+    coord = nodes.new("ShaderNodeTexCoord")
+    grad = nodes.new("ShaderNodeTexGradient")
+    grad.gradient_type = "SPHERICAL"
+    ramp = nodes.new("ShaderNodeValToRGB")
+    if night:
+        ramp.color_ramp.elements[0].color = (0.01, 0.015, 0.04, 1.0)
+        ramp.color_ramp.elements[1].color = (0.0, 0.0, 0.01, 1.0)
+        bg.inputs["Strength"].default_value = 0.35
+    else:
+        ramp.color_ramp.elements[0].color = (0.40, 0.58, 0.86, 1.0)
+        ramp.color_ramp.elements[1].color = (0.78, 0.84, 0.90, 1.0)
+        bg.inputs["Strength"].default_value = 0.42
+    links.new(coord.outputs["Generated"], grad.inputs["Vector"])
+    links.new(grad.outputs["Fac"], ramp.inputs["Fac"])
+    links.new(ramp.outputs["Color"], bg.inputs["Color"])
+    links.new(bg.outputs["Background"], out.inputs["Surface"])
 
 
 def to_world(field, x, y, z):
@@ -93,150 +141,389 @@ def to_world(field, x, y, z):
     )
 
 
+def box_mesh(sx, sy, sz):
+    mesh = bpy.data.meshes.new("box")
+    bm = bmesh.new()
+    bmesh.ops.create_cube(bm, size=1.0)
+    for vert in bm.verts:
+        vert.co.x *= sx
+        vert.co.y *= sy
+        vert.co.z *= sz
+    bm.to_mesh(mesh)
+    bm.free()
+    return mesh
+
+
+def cylinder_mesh(radius, depth, vertices=8, origin="center"):
+    mesh = bpy.data.meshes.new("cyl")
+    bm = bmesh.new()
+    bmesh.ops.create_cone(
+        bm,
+        cap_ends=True,
+        segments=vertices,
+        radius1=radius,
+        radius2=radius,
+        depth=depth,
+    )
+    if origin == "top":
+        for vert in bm.verts:
+            vert.co.z -= depth * 0.5
+    bm.to_mesh(mesh)
+    bm.free()
+    return mesh
+
+
+def cone_mesh(radius, depth):
+    mesh = bpy.data.meshes.new("cone")
+    bm = bmesh.new()
+    bmesh.ops.create_cone(
+        bm,
+        cap_ends=True,
+        segments=8,
+        radius1=radius,
+        radius2=radius * 0.15,
+        depth=depth,
+    )
+    bm.to_mesh(mesh)
+    bm.free()
+    return mesh
+
+
+def uv_sphere(radius, segments=8):
+    mesh = bpy.data.meshes.new("sph")
+    bm = bmesh.new()
+    bmesh.ops.create_uvsphere(bm, u_segments=segments, v_segments=max(4, segments // 2), radius=radius)
+    bm.to_mesh(mesh)
+    bm.free()
+    return mesh
+
+
+def paint(obj, material):
+    data = obj.data
+    if data is None or not hasattr(data, "materials"):
+        return
+    # Shared meshes stay uncolored. Each object carries its own slot so a
+    # trumpet and a drum can share a torso mesh without sharing a uniform.
+    if len(data.materials) == 0:
+        data.materials.append(None)
+    if not obj.material_slots:
+        return
+    slot = obj.material_slots[0]
+    slot.link = "OBJECT"
+    slot.material = material
+
+
+def add_line(name, field, x, y, sx, sy, material, z=0.03):
+    mesh = box_mesh(sx, sy, 0.02)
+    obj = mesh_object(name, mesh, to_world(field, x, y, z))
+    paint(obj, material)
+    return obj
+
+
+def yard_label(field, x, text, material):
+    curve = bpy.data.curves.new("yard", "FONT")
+    curve.body = text
+    curve.size = 0.9
+    curve.align_x = "CENTER"
+    curve.align_y = "CENTER"
+    curve.extrude = 0.01
+    obj = bpy.data.objects.new(f"num-{text}-{x:.0f}", curve)
+    # Numbers read from the audience, sitting just inside the near sideline.
+    obj.location = to_world(field, x, 2.2, 0.05)
+    obj.rotation_euler = (0.0, 0.0, 0.0)
+    link(obj)
+    paint(obj, material)
+    return obj
+
+
 def build_field(scene):
     field = scene["field"]
     width = float(field["width"])
     height = float(field["height"])
-    grass = principle([46, 140, 62], 0.92)
-    line = principle([236, 236, 228], 0.4)
-    frame_mat = principle([250, 214, 92], 0.45)
-    bpy.ops.mesh.primitive_plane_add(size=2.0, location=(0.0, 0.0, 0.0))
-    ground = bpy.context.active_object
-    ground.name = "field"
-    ground.scale = (width * 0.5, height * 0.5, 1.0)
-    ground.data.materials.append(grass)
-    z = 0.012
-    for x in field.get("major_x", []):
-        wx, wy, _ = to_world(field, x, height * 0.5, z)
-        add_box(f"yard-x-{x:.1f}", (wx, wy, z), (0.04, height, 0.02), line)
-    for y in field.get("major_y", []):
-        wx, wy, _ = to_world(field, width * 0.5, y, z)
-        add_box(f"yard-y-{y:.1f}", (wx, wy, z), (width, 0.04, 0.02), line)
-    for index, bounds in enumerate(field.get("frames", [])):
-        min_x, min_y, max_x, max_y = bounds
-        cx = (min_x + max_x) * 0.5
-        cy = (min_y + max_y) * 0.5
-        span_x = max(0.2, max_x - min_x)
-        span_y = max(0.2, max_y - min_y)
-        for name, center, scale in (
-            ("n", (cx, max_y, z), (span_x, 0.06, 0.025)),
-            ("s", (cx, min_y, z), (span_x, 0.06, 0.025)),
-            ("w", (min_x, cy, z), (0.06, span_y, 0.025)),
-            ("e", (max_x, cy, z), (0.06, span_y, 0.025)),
-        ):
-            wx, wy, wz = to_world(field, center[0], center[1], center[2])
-            add_box(f"frame-{index}-{name}", (wx, wy, wz), scale, frame_mat)
+    kind = field.get("kind") or "football"
+    white = shade((236, 236, 228), 0.35, "white-line")
+    gold = shade((250, 214, 92), 0.4, "frame")
+    track = shade((176, 74, 58), 0.7, "track")
+    concrete = shade((168, 166, 160), 0.85, "concrete")
+    # Football, pitch, and contest floor get mowing stripes. Indoor stays wood.
+    turf = striped_turf() if kind != "indoor" else shade((214, 176, 120), 0.75, "floor")
+    # Surrounding ground, then a track or gym border, then the playing surface.
+    ground = mesh_object("horizon", box_mesh(width + 80.0, height + 60.0, 0.05), (0.0, 0.0, -0.08))
+    paint(ground, shade((74, 92, 62), 0.95, "horizon"))
+    border = mesh_object(
+        "border",
+        box_mesh(width + (18.0 if kind == "football" else 8.0), height + 14.0, 0.04),
+        (0.0, 0.0, -0.02),
+    )
+    paint(border, track if kind == "football" else concrete)
+    playing = mesh_object("field", box_mesh(width, height, 0.04), (0.0, 0.0, 0.0))
+    paint(playing, turf)
+    if kind == "football":
+        # End zones sit past the goal lines.
+        for name, x in (("near-end", -6.0), ("far-end", width + 6.0)):
+            zone = mesh_object(name, box_mesh(10.0, height, 0.03), to_world(field, x, height * 0.5, 0.01))
+            paint(zone, shade((30, 110, 52), 0.85, "endzone"))
+        add_line("sideline-s", field, width * 0.5, 0.15, width, 0.18, white)
+        add_line("sideline-n", field, width * 0.5, height - 0.15, width, 0.18, white)
+        add_line("goal-w", field, 0.15, height * 0.5, 0.22, height, white)
+        add_line("goal-e", field, width - 0.15, height * 0.5, 0.22, height, white)
+        for x in field.get("major_x", []):
+            add_line(f"yard-{x:.1f}", field, x, height * 0.5, 0.08, height, white)
+            yards = min(float(x), width - float(x))
+            number = int(round(yards))
+            if number >= 10 and number % 10 == 0 and number <= 50:
+                yard_label(field, x, str(number), white)
+        dash = box_mesh(0.12, 0.55, 0.02)
+        for y in field.get("hashes", []):
+            step = 1.0 if field.get("unit") == "yd" else 5.0
+            x = 0.0
+            while x <= width:
+                mark = mesh_object(f"hash-{x:.0f}-{y:.0f}", dash, to_world(field, x, y, 0.035))
+                paint(mark, white)
+                x += step
+    elif kind == "pitch":
+        add_line("touch-s", field, width * 0.5, 0.2, width, 0.16, white)
+        add_line("touch-n", field, width * 0.5, height - 0.2, width, 0.16, white)
+        add_line("goal-w", field, 0.2, height * 0.5, 0.16, height, white)
+        add_line("goal-e", field, width - 0.2, height * 0.5, 0.16, height, white)
+        add_line("halfway", field, width * 0.5, height * 0.5, 0.16, height, white)
+        circle = mesh_object("center", cylinder_mesh(9.15, 0.02, 24), to_world(field, width * 0.5, height * 0.5, 0.03))
+        paint(circle, white)
+    else:
+        # Indoor / school floor: contest squares and meter ticks, no yard hashes.
+        for index, bounds in enumerate(field.get("frames", [])):
+            min_x, min_y, max_x, max_y = bounds
+            cx = (min_x + max_x) * 0.5
+            cy = (min_y + max_y) * 0.5
+            span_x = max(0.2, max_x - min_x)
+            span_y = max(0.2, max_y - min_y)
+            for edge, center, scale in (
+                ("n", (cx, max_y), (span_x, 0.12)),
+                ("s", (cx, min_y), (span_x, 0.12)),
+                ("w", (min_x, cy), (0.12, span_y)),
+                ("e", (max_x, cy), (0.12, span_y)),
+            ):
+                add_line(f"frame-{index}-{edge}", field, center[0], center[1], scale[0], scale[1], gold if index == 0 else white)
+        for x in field.get("major_x", []):
+            meters = int(round(float(x)))
+            if meters % 5 == 0:
+                yard_label(field, x, str(abs(meters)), shade((28, 32, 36), 0.45, "ink"))
+    build_stands(field, kind)
 
 
-def join_active(parts):
-    bpy.ops.object.select_all(action="DESELECT")
-    for obj in parts:
-        obj.select_set(True)
-    bpy.context.view_layer.objects.active = parts[0]
-    if len(parts) > 1:
-        bpy.ops.object.join()
-    return bpy.context.active_object
-
-
-def build_figure(person, style):
-    height = max(1.2, float(person.get("height_m") or 1.7))
-    color = person.get("color") or [180, 180, 180]
-    mat = principle(color, 0.55)
-    kind = person.get("kind") or "wind"
-    parts = []
-    if style == "person":
-        bpy.ops.mesh.primitive_cube_add(size=1.0, location=(0.0, 0.0, height * 0.42))
-        torso = bpy.context.active_object
-        torso.scale = (0.22, 0.12, height * 0.28)
-        parts.append(torso)
-        bpy.ops.mesh.primitive_uv_sphere_add(
-            segments=8, ring_count=6, radius=0.13, location=(0.0, 0.0, height * 0.78)
-        )
-        parts.append(bpy.context.active_object)
-        for side in (-1.0, 1.0):
-            bpy.ops.mesh.primitive_cylinder_add(
-                vertices=6,
-                radius=0.05,
-                depth=height * 0.42,
-                location=(side * 0.1, 0.0, height * 0.2),
+def build_stands(field, kind):
+    width = float(field["width"])
+    height = float(field["height"])
+    seat = shade((92, 98, 108), 0.7, "seat")
+    glass = shade((150, 186, 214), 0.15, "glass")
+    # Stepped bleachers along both sidelines, outside the border.
+    for side, y in (("south", -6.5), ("north", height + 6.5)):
+        for row in range(5):
+            depth = 1.3
+            rise = 0.55
+            block = mesh_object(
+                f"stand-{side}-{row}",
+                box_mesh(width * 0.72, depth, rise),
+                to_world(field, width * 0.5, y + (1.4 if y < 0 else -1.4) * row, 0.4 + row * rise),
             )
-            parts.append(bpy.context.active_object)
-    else:
-        bpy.ops.mesh.primitive_cylinder_add(
-            vertices=8,
-            radius=0.16,
-            depth=height * 0.62,
-            location=(0.0, 0.0, height * 0.36),
-        )
-        parts.append(bpy.context.active_object)
-        bpy.ops.mesh.primitive_uv_sphere_add(
-            segments=8, ring_count=6, radius=0.14, location=(0.0, 0.0, height * 0.74)
-        )
-        parts.append(bpy.context.active_object)
-    if kind == "guard":
-        bpy.ops.mesh.primitive_plane_add(size=0.55, location=(0.32, 0.0, height * 0.85))
-        flag = bpy.context.active_object
-        flag.rotation_euler = (0.2, 0.5, 0.4)
-        parts.append(flag)
-    elif kind == "percussion":
-        bpy.ops.mesh.primitive_cylinder_add(
-            vertices=8, radius=0.18, depth=0.12, location=(0.0, 0.22, height * 0.5)
-        )
-        drum = bpy.context.active_object
-        drum.rotation_euler = (1.2, 0.0, 0.0)
-        parts.append(drum)
-    figure = join_active(parts)
-    figure.name = f"p{person['index']}"
-    bpy.ops.object.transform_apply(location=False, rotation=True, scale=True)
-    if hasattr(figure, "cycles"):
-        figure.cycles.use_motion_blur = False
-    if figure.data.materials:
-        figure.data.materials[0] = mat
-    else:
-        figure.data.materials.append(mat)
-    return figure
+            paint(block, seat)
+    booth = mesh_object(
+        "press-box",
+        box_mesh(8.0, 3.2, 2.4),
+        to_world(field, width * 0.5, -9.5, 4.6),
+    )
+    paint(booth, glass)
+    if kind != "football":
+        return
+    # A low rail between the track and the field.
+    rail = shade((210, 210, 206), 0.4, "rail")
+    add_line("rail", field, width * 0.5, -1.2, width, 0.08, rail, 0.4)
 
 
-def linear_keys(obj):
+def parent(child, parent_obj):
+    child.parent = parent_obj
+    child.matrix_parent_inverse = parent_obj.matrix_world.inverted()
+
+
+def build_templates():
+    return {
+        "torso": box_mesh(0.34, 0.18, 0.55),
+        "head": uv_sphere(0.11, 8),
+        "shako": cylinder_mesh(0.12, 0.16, 8),
+        "brim": cylinder_mesh(0.16, 0.02, 8),
+        "leg": cylinder_mesh(0.055, 0.72, 6, origin="top"),
+        "bell": cone_mesh(0.09, 0.28),
+        "wood": cylinder_mesh(0.025, 0.42, 6),
+        "drum": cylinder_mesh(0.16, 0.12, 8),
+        "mallet": cylinder_mesh(0.012, 0.36, 5),
+        "pole": cylinder_mesh(0.015, 1.15, 5),
+        "flag": box_mesh(0.42, 0.02, 0.55),
+        "rifle": box_mesh(0.04, 0.03, 0.85),
+        "shadow": cylinder_mesh(0.32, 0.015, 8),
+    }
+
+
+def darker(color):
+    return tuple(max(0, int(channel * 0.55)) for channel in color)
+
+
+def lighter(color):
+    return tuple(min(255, int(channel * 0.45 + 140)) for channel in color)
+
+
+def add_prop(root, prop, templates, color, height):
+    gold = shade((212, 170, 64), 0.35, "brass")
+    black = shade((28, 28, 32), 0.4, "black-prop")
+    cloth = shade(lighter(color), 0.6, "flag-cloth")
+    if prop == "brass":
+        bell = mesh_object("bell", templates["bell"], (0.0, -0.16, height * 0.55))
+        bell.rotation_euler = (math.radians(80), 0.0, 0.0)
+        paint(bell, gold)
+        parent(bell, root)
+    elif prop == "woodwind":
+        tube = mesh_object("wood", templates["wood"], (0.08, -0.12, height * 0.5))
+        tube.rotation_euler = (math.radians(70), 0.0, 0.2)
+        paint(tube, black)
+        parent(tube, root)
+    elif prop == "drum":
+        drum = mesh_object("drum", templates["drum"], (0.0, -0.02, height * 0.42))
+        drum.rotation_euler = (math.radians(90), 0.0, 0.0)
+        paint(drum, shade((240, 240, 236), 0.3, "head"))
+        parent(drum, root)
+    elif prop == "mallet":
+        for side in (-0.08, 0.08):
+            stick = mesh_object("mallet", templates["mallet"], (side, -0.1, height * 0.7))
+            stick.rotation_euler = (math.radians(40), 0.0, side)
+            paint(stick, black)
+            parent(stick, root)
+    elif prop == "flag":
+        pole = mesh_object("pole", templates["pole"], (0.16, -0.05, height * 0.85))
+        paint(pole, shade((230, 230, 226), 0.3, "pole"))
+        parent(pole, root)
+        flag = mesh_object("flag", templates["flag"], (0.38, -0.05, height * 0.95))
+        paint(flag, cloth)
+        parent(flag, root)
+    elif prop == "rifle":
+        rifle = mesh_object("rifle", templates["rifle"], (0.05, -0.08, height * 0.7))
+        rifle.rotation_euler = (0.3, 0.0, 0.4)
+        paint(rifle, black)
+        parent(rifle, root)
+
+
+def build_figure(person, templates, style, materials):
+    height = max(1.2, float(person.get("height_m") or 1.7))
+    color = tuple(person.get("color") or [180, 180, 180])
+    key = color
+    if key not in materials:
+        materials[key] = shade(color, 0.5, "uniform")
+        materials[("hat", key)] = shade(darker(color), 0.45, "hat")
+        materials[("leg", key)] = shade(darker(color), 0.6, "leg")
+        materials[("skin", key)] = shade((214, 170, 140), 0.55, "skin")
+    root = bpy.data.objects.new(f"p{person['index']}", None)
+    link(root)
+    torso = mesh_object("torso", templates["torso"], (0.0, 0.0, height * 0.62))
+    paint(torso, materials[key])
+    parent(torso, root)
+    head = mesh_object("head", templates["head"], (0.0, -0.02, height * 0.95))
+    paint(head, materials[("skin", key)])
+    parent(head, root)
+    if style != "capsule":
+        shako = mesh_object("shako", templates["shako"], (0.0, 0.0, height * 1.08))
+        paint(shako, materials[("hat", key)])
+        parent(shako, root)
+        brim = mesh_object("brim", templates["brim"], (0.0, -0.04, height * 1.0))
+        paint(brim, materials[("hat", key)])
+        parent(brim, root)
+    legs = []
+    for side, name in ((-1.0, "leg-l"), (1.0, "leg-r")):
+        leg = mesh_object(name, templates["leg"], (side * 0.09, 0.0, height * 0.58))
+        paint(leg, materials[("leg", key)])
+        parent(leg, root)
+        legs.append(leg)
+    add_prop(root, person.get("prop") or "brass", templates, color, height)
+    shadow = mesh_object("shadow", templates["shadow"], (0.0, 0.0, 0.02))
+    paint(shadow, shade((16, 24, 16), 0.95, "contact"))
+    parent(shadow, root)
+    return root, legs
+
+
+def action_curves(obj):
     action = obj.animation_data.action if obj.animation_data else None
     if action is None:
-        return
-    curves = getattr(action, "fcurves", None)
-    if curves is None and hasattr(action, "layers"):
-        curves = []
+        return []
+    curves = list(getattr(action, "fcurves", None) or [])
+    if not curves and hasattr(action, "layers"):
         for layer in action.layers:
-            for strip in layer.strips:
-                channelbag = strip.channelbag(action.slots[0]) if action.slots else None
-                if channelbag:
-                    curves.extend(channelbag.fcurves)
-    for curve in curves or []:
+            for strip in getattr(layer, "strips", []):
+                slots = getattr(action, "slots", None)
+                bag = None
+                if slots and hasattr(strip, "channelbag"):
+                    bag = strip.channelbag(slots[0])
+                if bag is not None and getattr(bag, "fcurves", None):
+                    curves.extend(bag.fcurves)
+    return curves
+
+
+def linear_keys(obj, data_path):
+    for curve in action_curves(obj):
+        if data_path and curve.data_path != data_path:
+            continue
         for point in curve.keyframe_points:
             point.interpolation = "LINEAR"
 
 
-def build_performers(scene, style):
+def set_interpolation(obj, mode):
+    for curve in action_curves(obj):
+        for point in curve.keyframe_points:
+            point.interpolation = mode
+            if mode == "BEZIER":
+                point.handle_left_type = "AUTO"
+                point.handle_right_type = "AUTO"
+
+
+def build_performers(scene):
     field = scene["field"]
-    figures = {}
+    templates = build_templates()
+    materials = {}
+    style = scene.get("figures") or "person"
+    roots = {}
+    legs = {}
     for person in scene["performers"]:
-        figures[person["index"]] = build_figure(person, style)
-    by_person = {}
+        root, pair = build_figure(person, templates, style, materials)
+        roots[person["index"]] = root
+        legs[person["index"]] = pair
+    grouped = {}
     for sample in scene["keyframes"]:
-        by_person.setdefault(sample["performer"], []).append(sample)
-    for index, samples in by_person.items():
-        obj = figures.get(index)
-        if obj is None:
+        grouped.setdefault(sample["performer"], []).append(sample)
+    for index, samples in grouped.items():
+        root = roots.get(index)
+        if root is None:
             continue
         samples.sort(key=lambda item: item["frame"])
         seen = set()
+        pair = legs.get(index) or []
         for sample in samples:
             frame = int(sample["frame"])
             if frame in seen:
                 continue
             seen.add(frame)
-            obj.location = to_world(field, sample["x"], sample["y"], 0.0)
-            obj.keyframe_insert(data_path="location", frame=frame)
-        linear_keys(obj)
-    return figures
+            root.location = to_world(field, sample["x"], sample["y"], 0.0)
+            root.rotation_euler = (0.0, 0.0, float(sample.get("facing") or 0.0))
+            root.keyframe_insert("location", frame=frame)
+            root.keyframe_insert("rotation_euler", frame=frame)
+            step = int(sample.get("step") or 0)
+            swing = 0.42 if step == 0 else -0.42
+            if sample.get("holding"):
+                swing *= 0.7
+            for leg_index, leg in enumerate(pair):
+                sign = 1.0 if leg_index == 0 else -1.0
+                leg.rotation_euler = (sign * swing, 0.0, 0.0)
+                leg.keyframe_insert("rotation_euler", frame=frame)
+        linear_keys(root, "location")
+        linear_keys(root, "rotation_euler")
+        for leg in pair:
+            linear_keys(leg, "rotation_euler")
+    return roots
 
 
 def look_at(obj, target):
@@ -246,37 +533,58 @@ def look_at(obj, target):
     obj.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
 
 
-def add_camera(name, location):
+def add_camera(name, location, lens):
     camera = bpy.data.cameras.new(name)
-    camera.lens = 28
+    camera.lens = lens
+    camera.clip_end = 500.0
     obj = bpy.data.objects.new(name, camera)
-    bpy.context.scene.collection.objects.link(obj)
+    link(obj)
     obj.location = location
     return obj
 
 
-def build_cameras(scene, figures):
+def fit_lens(distance, span_x, span_y, aspect):
+    # 36mm wide sensor. Pick the tighter of the horizontal and vertical fits.
+    lens_x = 36.0 * distance / max(span_x, 0.1)
+    lens_y = (36.0 / max(aspect, 0.1)) * distance / max(span_y, 0.1)
+    return max(14.0, min(lens_x, lens_y) * 0.9)
+
+
+def build_cameras(scene):
     field = scene["field"]
     width = float(field["width"])
     height = float(field["height"])
-    center = (0.0, 0.0, 1.2)
-    press = add_camera("press_box", (0.0, -height * 0.72, height * 0.42))
+    aspect = float(scene.get("width") or 1280) / float(scene.get("height") or 720)
+    center = (0.0, 0.0, 1.4)
+    distance = max(width, height) * 0.95
+    press = add_camera(
+        "press_box",
+        (0.0, -(height * 0.5 + 14.0), max(16.0, height * 0.55)),
+        28.0,
+    )
     look_at(press, center)
-    end = add_camera("end_zone", (width * 0.62, 0.0, height * 0.28))
+    press.data.lens = fit_lens(press.location.length, width + 16.0, height + 18.0, aspect)
+    end = add_camera(
+        "end_zone",
+        (width * 0.5 + 12.0, 0.0, max(8.0, height * 0.28)),
+        28.0,
+    )
     look_at(end, center)
-    orbit = add_camera("orbit", (0.0, -width * 0.55, height * 0.38))
+    end.data.lens = fit_lens(end.location.length, height + 12.0, width * 0.5, aspect)
+    orbit = add_camera("orbit", (0.0, -width * 0.55, height * 0.4), press.data.lens)
     frames = [int(item["frame"]) for item in scene["keyframes"]] or [1]
     start, end_frame = min(frames), max(frames)
     span = max(1, end_frame - start)
-    for step in range(0, 9):
-        frame = start + int(span * step / 8)
-        angle = math.tau * step / 8.0
-        radius = max(width, height) * 0.62
-        orbit.location = (math.sin(angle) * radius, -math.cos(angle) * radius, height * 0.36)
+    radius = max(width, height) * 0.72
+    for step in range(0, 17):
+        frame = start + int(span * step / 16)
+        angle = math.tau * step / 16.0
+        orbit.location = (math.sin(angle) * radius, -math.cos(angle) * radius, height * 0.42)
         look_at(orbit, center)
-        orbit.keyframe_insert(data_path="location", frame=frame)
-        orbit.keyframe_insert(data_path="rotation_euler", frame=frame)
-    follow = add_camera("follow", (0.0, -8.0, 6.0))
+        orbit.keyframe_insert("location", frame=frame)
+        orbit.keyframe_insert("rotation_euler", frame=frame)
+    set_interpolation(orbit, "BEZIER")
+    follow = add_camera("follow", (0.0, -8.0, 6.0), 35.0)
     section = scene.get("follow_section") or ""
     wanted = [
         person["index"]
@@ -290,51 +598,116 @@ def build_cameras(scene, figures):
     for frame, samples in sorted(grouped.items()):
         sx = sum(float(item["x"]) for item in samples) / len(samples)
         sy = sum(float(item["y"]) for item in samples) / len(samples)
-        target = to_world(field, sx, sy, 1.2)
-        follow.location = (target[0] - 7.0, target[1] - 9.0, 6.5)
+        target = to_world(field, sx, sy, 1.3)
+        follow.location = (target[0], target[1] - 11.0, 7.5)
         look_at(follow, target)
-        follow.keyframe_insert(data_path="location", frame=frame)
-        follow.keyframe_insert(data_path="rotation_euler", frame=frame)
-    return {
+        follow.keyframe_insert("location", frame=frame)
+        follow.keyframe_insert("rotation_euler", frame=frame)
+    linear_keys(follow, "location")
+    cameras = {
         "press_box": press,
         "end_zone": end,
         "orbit": orbit,
         "follow": follow,
     }
+    if scene.get("cuts"):
+        program = add_camera("program", press.location, press.data.lens)
+        order = [press, end, follow, orbit]
+        cues = scene.get("cues") or [{"frame": start}]
+        for index, cue in enumerate(cues):
+            source = order[index % len(order)]
+            frame = int(cue["frame"])
+            program.location = source.location
+            program.rotation_euler = source.rotation_euler
+            program.keyframe_insert("location", frame=frame)
+            program.keyframe_insert("rotation_euler", frame=frame)
+        set_interpolation(program, "CONSTANT")
+        cameras["program"] = program
+    return cameras
 
 
-def build_lights(time_of_day):
-    if time_of_day == "night":
-        world_color((0.01, 0.02, 0.05, 1.0), 0.15)
-        spots = (
-            ((-20.0, -15.0, 18.0), (0.75, 0.85, 1.0)),
-            ((20.0, -15.0, 18.0), (0.75, 0.85, 1.0)),
-            ((-20.0, 15.0, 16.0), (1.0, 0.85, 0.6)),
-            ((20.0, 15.0, 16.0), (1.0, 0.85, 0.6)),
+def clear_named(prefix):
+    for obj in list(bpy.data.objects):
+        if obj.name.startswith(prefix):
+            bpy.data.objects.remove(obj, do_unlink=True)
+
+
+def build_lights(scene):
+    clear_named("lite-")
+    field = scene["field"]
+    width = float(field["width"])
+    height = float(field["height"])
+    night = (scene.get("time_of_day") or "day") == "night"
+    sky(night)
+    if night:
+        corners = (
+            (-8.0, -8.0),
+            (width + 8.0, -8.0),
+            (-8.0, height + 8.0),
+            (width + 8.0, height + 8.0),
         )
-        for index, (location, color) in enumerate(spots):
-            light = bpy.data.lights.new(f"stadium-{index}", "SPOT")
-            light.energy = 4000
-            light.color = color
-            light.spot_size = math.radians(55)
+        pole_mesh = cylinder_mesh(0.22, 16.0, 6)
+        head_mesh = box_mesh(1.6, 0.55, 0.35)
+        lamp = shade((255, 214, 150), 0.3, "lamp")
+        lamp_node = lamp.node_tree.nodes.get("Principled BSDF")
+        if lamp_node is not None:
+            if "Emission Color" in lamp_node.inputs:
+                lamp_node.inputs["Emission Color"].default_value = (1.0, 0.86, 0.62, 1.0)
+            if "Emission Strength" in lamp_node.inputs:
+                lamp_node.inputs["Emission Strength"].default_value = 8.0
+        for index, (x, y) in enumerate(corners):
+            pole = mesh_object(f"lite-pole-{index}", pole_mesh, to_world(field, x, y, 8.0))
+            paint(pole, shade((40, 42, 48), 0.6, "tower"))
+            head = mesh_object(f"lite-head-{index}", head_mesh, to_world(field, x, y, 16.3))
+            paint(head, lamp)
+            # Sit the spot just inside the pole, clear of the mesh, aimed at the field.
+            inward_x = width * 0.5 + (x - width * 0.5) * 0.92
+            inward_y = height * 0.5 + (y - height * 0.5) * 0.92
+            light = bpy.data.lights.new(f"lite-spot-{index}", "SPOT")
+            light.energy = 6000
+            light.color = (1.0, 0.93, 0.8)
+            light.spot_size = math.radians(78)
+            light.spot_blend = 0.4
             obj = bpy.data.objects.new(light.name, light)
-            bpy.context.scene.collection.objects.link(obj)
-            obj.location = location
-            look_at(obj, (0.0, 0.0, 0.0))
+            obj.location = to_world(field, inward_x, inward_y, 15.4)
+            link(obj)
+            look_at(obj, (0.0, 0.0, 1.0))
+        wash = bpy.data.lights.new("lite-wash", "AREA")
+        wash.energy = 200
+        wash.color = (0.75, 0.82, 1.0)
+        wash.size = 30.0
+        wash_obj = bpy.data.objects.new("lite-wash", wash)
+        wash_obj.location = (0.0, 0.0, 24.0)
+        link(wash_obj)
+        look_at(wash_obj, (0.0, 0.0, 0.0))
     else:
-        world_color((0.55, 0.74, 1.0, 1.0), 1.0)
-        sun = bpy.data.lights.new("day", "SUN")
-        sun.energy = 4.5
-        sun.color = (1.0, 0.96, 0.88)
-        sun.angle = math.radians(2)
-        obj = bpy.data.objects.new("day", sun)
-        bpy.context.scene.collection.objects.link(obj)
-        obj.rotation_euler = (math.radians(48), math.radians(8), math.radians(32))
+        sun = bpy.data.lights.new("lite-sun", "SUN")
+        sun.energy = 1.15
+        sun.color = (1.0, 0.97, 0.9)
+        sun.angle = math.radians(2.5)
+        obj = bpy.data.objects.new("lite-sun", sun)
+        link(obj)
+        obj.rotation_euler = (math.radians(52), math.radians(8), math.radians(28))
+        fill = bpy.data.lights.new("lite-fill", "AREA")
+        fill.energy = 60
+        fill.color = (0.75, 0.84, 1.0)
+        fill.size = 12.0
+        fill_obj = bpy.data.objects.new("lite-fill", fill)
+        fill_obj.location = (0.0, -height * 0.4, 14.0)
+        link(fill_obj)
+        look_at(fill_obj, (0.0, 0.0, 0.0))
 
 
 def apply_engine(scene_data, samples):
     blend = bpy.context.scene
     engine = scene_data.get("engine") or "eevee"
+    quality = scene_data.get("quality") or "draft"
+    forced = int(samples or 0)
+    fine = quality == "fine" or forced >= 24
+    try:
+        blend.view_settings.view_transform = "AgX"
+    except TypeError:
+        blend.view_settings.view_transform = "Filmic"
     if engine == "cycles":
         blend.render.engine = "CYCLES"
         blend.cycles.samples = max(1, samples)
@@ -353,8 +726,20 @@ def apply_engine(scene_data, samples):
         except TypeError:
             continue
     eevee = getattr(blend, "eevee", None)
-    if eevee is not None and hasattr(eevee, "taa_render_samples"):
-        eevee.taa_render_samples = max(1, samples)
+    if eevee is None:
+        return
+    if hasattr(eevee, "taa_render_samples"):
+        eevee.taa_render_samples = forced if forced > 0 else (32 if fine else 8)
+    if hasattr(eevee, "use_gtao"):
+        eevee.use_gtao = fine
+    if hasattr(eevee, "use_bloom"):
+        eevee.use_bloom = fine
+        if hasattr(eevee, "bloom_intensity"):
+            eevee.bloom_intensity = 0.08
+    if hasattr(eevee, "use_soft_shadows"):
+        eevee.use_soft_shadows = fine
+    if hasattr(eevee, "shadow_cube_size"):
+        eevee.shadow_cube_size = "1024" if fine else "512"
 
 
 def apply_audio(scene_data, frame_start):
@@ -384,17 +769,96 @@ def configure_render(scene_data, options):
     blend.frame_start = start
     blend.frame_end = max(start, end)
     blend.render.fps = fps
-    blend.render.resolution_x = options.width or int(scene_data.get("width") or 1920)
-    blend.render.resolution_y = options.height or int(scene_data.get("height") or 1080)
+    blend.render.resolution_x = options.width or int(scene_data.get("width") or 1280)
+    blend.render.resolution_y = options.height or int(scene_data.get("height") or 720)
     blend.render.resolution_percentage = 100
     blend.render.film_transparent = False
     blend.render.use_motion_blur = False
-    samples = options.samples or int(scene_data.get("samples") or 32)
+    samples = options.samples or int(scene_data.get("samples") or 8)
     if options.engine:
         scene_data["engine"] = options.engine
     apply_engine(scene_data, samples)
     apply_audio(scene_data, start)
     return start
+
+
+def stick_to_camera(obj, camera, location):
+    obj.parent = camera
+    obj.location = location
+    obj.rotation_euler = (0.0, 0.0, 0.0)
+
+
+def ui_font():
+    for path in (
+        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    ):
+        if os.path.isfile(path):
+            try:
+                return bpy.data.fonts.load(path)
+            except RuntimeError:
+                continue
+    return None
+
+
+def add_overlay(scene, camera):
+    if not scene.get("title_card", True):
+        return
+    font = ui_font()
+    plate = mesh_object("title-plate", box_mesh(2.0, 0.42, 0.02), (0.0, 0.0, 0.0))
+    stick_to_camera(plate, camera, (0.0, 0.58, -1.9))
+    paint(plate, shade((16, 20, 26), 0.8, "plate"))
+    title = bpy.data.curves.new("title-card", "FONT")
+    title.body = scene.get("title") or "Drill"
+    title.size = 0.22
+    title.align_x = "CENTER"
+    title.align_y = "CENTER"
+    title.extrude = 0.004
+    if font is not None:
+        title.font = font
+    card = bpy.data.objects.new("title-card", title)
+    stick_to_camera(card, camera, (0.0, 0.58, -1.82))
+    link(card)
+    paint(card, shade((248, 244, 230), 0.4, "card-ink"))
+    burn_plate = mesh_object("burn-plate", box_mesh(1.8, 0.18, 0.02), (0.0, 0.0, 0.0))
+    stick_to_camera(burn_plate, camera, (0.0, -0.58, -1.9))
+    paint(burn_plate, shade((16, 20, 26), 0.8, "burn-plate"))
+    burn = bpy.data.curves.new("burn-in", "FONT")
+    burn.body = ""
+    burn.size = 0.08
+    burn.align_x = "CENTER"
+    burn.align_y = "CENTER"
+    burn.extrude = 0.003
+    if font is not None:
+        burn.font = font
+    label = bpy.data.objects.new("burn-in", burn)
+    stick_to_camera(label, camera, (0.0, -0.58, -1.82))
+    link(label)
+    paint(label, shade((248, 244, 230), 0.4, "burn-ink"))
+    cues = sorted(scene.get("cues") or [], key=lambda item: int(item["frame"]))
+    show_name = scene.get("title") or ""
+    fps = int(bpy.context.scene.render.fps or 24)
+
+    def on_frame(blend, *_args):
+        show = int(blend.frame_current) <= fps
+        for name in ("title-card", "title-plate"):
+            obj = bpy.data.objects.get(name)
+            if obj is not None:
+                obj.hide_render = not show
+        obj = bpy.data.objects.get("burn-in")
+        if obj is None or not cues:
+            return
+        chosen = cues[0]
+        for cue in cues:
+            if int(cue["frame"]) <= blend.frame_current:
+                chosen = cue
+            else:
+                break
+        obj.data.body = f"{show_name}   {chosen.get('set', 1)}   {chosen.get('count', 0)}"
+
+    bpy.app.handlers.frame_change_pre.append(on_frame)
+    on_frame(bpy.context.scene)
 
 
 def render_once(animation, samples):
@@ -413,14 +877,17 @@ def render_once(animation, samples):
         blend.cycles.device = "CPU"
         blend.render.use_persistent_data = False
         blend.cycles.use_denoising = False
-        for view in blend.view_layers:
-            cycles = getattr(view, "cycles", None)
-            if cycles is not None and hasattr(cycles, "use_denoising"):
-                cycles.use_denoising = False
         if animation:
             bpy.ops.render.render(animation=True)
         else:
             bpy.ops.render.render(write_still=True)
+
+
+def hide_title():
+    for name in ("title-card", "title-plate"):
+        card = bpy.data.objects.get(name)
+        if card:
+            card.hide_render = True
 
 
 def render_stills(cameras, directory, frame, samples):
@@ -428,7 +895,10 @@ def render_stills(cameras, directory, frame, samples):
     blend = bpy.context.scene
     blend.render.image_settings.file_format = "PNG"
     blend.frame_set(frame)
+    hide_title()
     for name, camera in cameras.items():
+        if name == "program":
+            continue
         blend.camera = camera
         blend.render.filepath = os.path.join(directory, name)
         print(f"Fra:{frame} still {name}", flush=True)
@@ -438,9 +908,6 @@ def render_stills(cameras, directory, frame, samples):
 def render_movie(camera, path, samples):
     blend = bpy.context.scene
     blend.camera = camera
-    # Cycles headless animation rebuilds a motion BVH and can crash Embree
-    # (rtcSetSharedGeometryBuffer) after a few dozen frames. Still frames of
-    # the same scene are stable, so the movie is those frames encoded to H.264.
     if blend.render.engine == "CYCLES":
         render_movie_from_stills(path, samples)
         return
@@ -465,7 +932,6 @@ def render_movie_from_stills(path, samples):
         blend.render.filepath = os.path.join(folder, f"{frame:04d}")
         print(f"Fra:{frame}", flush=True)
         render_once(False, samples)
-    pattern = os.path.join(folder, "%04d.png")
     command = [
         "ffmpeg",
         "-y",
@@ -474,24 +940,15 @@ def render_movie_from_stills(path, samples):
         "-start_number",
         str(start),
         "-i",
-        pattern,
+        os.path.join(folder, "%04d.png"),
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        path,
     ]
-    audio = ""
-    editor = blend.sequence_editor
-    if editor is not None:
-        strips = getattr(editor, "strips", None) or getattr(editor, "sequences", None)
-        if strips:
-            for strip in strips:
-                sound = getattr(strip, "sound", None)
-                filepath = getattr(sound, "filepath", "") if sound else ""
-                if filepath and os.path.isfile(filepath):
-                    audio = filepath
-                    break
-    if audio:
-        command.extend(["-i", audio, "-shortest", "-c:a", "aac"])
-    command.extend(
-        ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", path]
-    )
     subprocess.check_call(command)
     shutil.rmtree(folder, ignore_errors=True)
 
@@ -502,20 +959,40 @@ def main():
     scene = load_scene(data_path)
     clear_scene()
     build_field(scene)
-    style = scene.get("figures") or "capsule"
-    figures = build_performers(scene, style)
-    cameras = build_cameras(scene, figures)
-    build_lights(scene.get("time_of_day") or "day")
+    build_performers(scene)
+    cameras = build_cameras(scene)
+    build_lights(scene)
     start = configure_render(scene, options)
     camera_name = options.camera or scene.get("camera") or "press_box"
+    if scene.get("cuts") and "program" in cameras and not options.camera:
+        camera_name = "program"
     chosen = cameras.get(camera_name) or cameras["press_box"]
     bpy.context.scene.camera = chosen
+    add_overlay(scene, chosen)
     blend_path = os.path.join(script_dir(), "drill_scene.blend")
     bpy.ops.wm.save_as_mainfile(filepath=blend_path)
     samples = options.samples or int(scene.get("samples") or 8)
+    still_frame = start + int(bpy.context.scene.render.fps or 24)
+    still_frame = min(still_frame, int(bpy.context.scene.frame_end))
     if options.stills:
-        render_stills(cameras, options.stills, start, samples)
+        blend = bpy.context.scene
+        blend.render.image_settings.file_format = "PNG"
+        blend.frame_set(start)
+        blend.camera = chosen
+        blend.render.filepath = os.path.join(options.stills, "title")
+        print(f"Fra:{start} still title", flush=True)
+        render_once(False, samples)
+        render_stills(cameras, options.stills, still_frame, samples)
+    saved_time = scene.get("time_of_day") or "day"
+    if options.night_stills:
+        scene["time_of_day"] = "night"
+        build_lights(scene)
+        render_stills(cameras, options.night_stills, still_frame, samples)
+        scene["time_of_day"] = saved_time
+        if saved_time != "night":
+            build_lights(scene)
     if options.render:
+        bpy.context.scene.camera = chosen
         render_movie(chosen, options.render, samples)
 
 

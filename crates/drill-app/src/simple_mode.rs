@@ -10043,8 +10043,12 @@ mod tests {
         };
         let document = qa_cast_document();
         let options = drill_export::blender::BlenderOptions {
-            figures: drill_export::blender::FigureStyle::Capsule,
+            figures: drill_export::blender::FigureStyle::Person,
             camera: drill_export::blender::BlenderCamera::PressBox,
+            quality: drill_export::blender::RenderQuality::Fine,
+            fps: 24,
+            width: 1280,
+            height: 720,
             ..drill_export::blender::BlenderOptions::default()
         };
         let scene = drill_export::blender::build_scene(&document, &options);

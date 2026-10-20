@@ -5,7 +5,8 @@
 //! `blender -b -P drill_scene.py -- --render out.mp4`.
 
 use drill_core::tempo::TempoMap;
-use drill_core::{Document, PerformerKind};
+use drill_core::transition::{Easing, RouteShape};
+use drill_core::{Document, PerformerKind, Set};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -60,6 +61,10 @@ pub struct BlenderOptions {
     pub camera: BlenderCamera,
     pub figures: FigureStyle,
     pub audio: bool,
+    /// Burn the show name, set, and count into the picture.
+    pub title_card: bool,
+    /// Jump the render camera between presets at each set.
+    pub cuts: bool,
     /// `None` is the whole show. `Some` is one set's move, in set index.
     pub set_index: Option<usize>,
 }
@@ -68,24 +73,28 @@ impl Default for BlenderOptions {
     fn default() -> Self {
         Self {
             fps: 30,
-            width: 1920,
-            height: 1080,
             engine: BlenderEngine::Eevee,
             quality: RenderQuality::Draft,
             time_of_day: TimeOfDay::Day,
             camera: BlenderCamera::PressBox,
-            figures: FigureStyle::Capsule,
+            figures: FigureStyle::Person,
             audio: true,
+            title_card: true,
+            cuts: false,
             set_index: None,
+            width: 1280,
+            height: 720,
         }
     }
 }
 
 impl BlenderOptions {
     pub fn samples(&self) -> u16 {
-        match self.quality {
-            RenderQuality::Draft => 8,
-            RenderQuality::Fine => 64,
+        match (self.engine, self.quality) {
+            (BlenderEngine::Cycles, RenderQuality::Fine) => 64,
+            (BlenderEngine::Cycles, RenderQuality::Draft) => 8,
+            (BlenderEngine::Eevee, RenderQuality::Fine) => 32,
+            (BlenderEngine::Eevee, RenderQuality::Draft) => 8,
         }
     }
 }
@@ -102,6 +111,10 @@ pub struct BlenderScene {
     pub time_of_day: TimeOfDay,
     pub camera: BlenderCamera,
     pub figures: FigureStyle,
+    pub quality: RenderQuality,
+    pub title_card: bool,
+    pub cuts: bool,
+    pub cues: Vec<BlenderCue>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub follow_section: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -117,8 +130,11 @@ pub struct BlenderField {
     pub width: f32,
     pub height: f32,
     pub unit: String,
+    /// `football`, `floor`, `indoor`, or `pitch`.
+    pub kind: String,
     pub major_x: Vec<f32>,
     pub major_y: Vec<f32>,
+    pub hashes: Vec<f32>,
     /// Each item is `(min_x, min_y, max_x, max_y)` in field meters.
     pub frames: Vec<[f32; 4]>,
 }
@@ -130,6 +146,7 @@ pub struct BlenderPerformer {
     pub section: String,
     pub color: [u8; 3],
     pub kind: String,
+    pub prop: String,
     pub height_m: f32,
 }
 
@@ -139,6 +156,19 @@ pub struct BlenderKeyframe {
     pub frame: u32,
     pub x: f32,
     pub y: f32,
+    /// Yaw in radians. `0` faces the audience.
+    pub facing: f32,
+    /// `0` or `1`, alternating marching step.
+    pub step: u8,
+    pub holding: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BlenderCue {
+    pub frame: u32,
+    /// 1-based set number.
+    pub set: u16,
+    pub count: u16,
 }
 
 /// Last sampled frame, or 1 when the show has no dots.
@@ -234,24 +264,69 @@ pub fn build_scene(document: &Document, options: &BlenderOptions) -> BlenderScen
                 PerformerKind::Prop => "prop",
             }
             .to_owned(),
+            prop: prop_for(
+                document
+                    .sections
+                    .iter()
+                    .find(|section| section.id == performer.section)
+                    .map(|section| section.name.as_str())
+                    .unwrap_or(""),
+                document
+                    .sections
+                    .iter()
+                    .find(|section| section.id == performer.section)
+                    .map(|section| section.short.as_str())
+                    .unwrap_or(""),
+                performer.kind,
+            )
+            .to_owned(),
             height_m: performer.height_m,
         })
         .collect();
     let mut keyframes = Vec::new();
+    let mut cues = Vec::new();
     let mut positions = Vec::new();
-    for count in sample_counts(document, options.set_index) {
+    let mut previous = vec![None; document.performers.len()];
+    for count in motion_counts(document, options.set_index) {
         let (set_index, local) = document.locate_count(count);
+        let move_counts = document
+            .sets
+            .get(set_index)
+            .map(|set| f32::from(set.counts))
+            .unwrap_or(0.0);
+        let holding = local + 0.001 >= move_counts;
         document.positions_at_count(set_index, local, &mut positions);
         let frame = blender_frame(&document.tempo, f64::from(count), options.fps);
+        if (count - count.round()).abs() < 0.001
+            && cues
+                .last()
+                .is_none_or(|cue: &BlenderCue| cue.frame != frame)
+        {
+            cues.push(BlenderCue {
+                frame,
+                set: (set_index + 1) as u16,
+                count: local.round().max(0.0) as u16,
+            });
+        }
         for (index, point) in positions.iter().enumerate() {
             if !point.x.is_finite() || !point.y.is_finite() {
                 continue;
+            }
+            let facing = match previous.get(index).and_then(|prior| *prior) {
+                Some((px, py)) if !holding => travel_yaw(point.x - px, point.y - py),
+                _ => 0.0,
+            };
+            if let Some(slot) = previous.get_mut(index) {
+                *slot = Some((point.x, point.y));
             }
             keyframes.push(BlenderKeyframe {
                 performer: index,
                 frame,
                 x: point.x,
                 y: point.y,
+                facing,
+                step: (local.floor() as u32 % 2) as u8,
+                holding,
             });
         }
     }
@@ -266,6 +341,10 @@ pub fn build_scene(document: &Document, options: &BlenderOptions) -> BlenderScen
         time_of_day: options.time_of_day,
         camera: options.camera,
         figures: options.figures,
+        quality: options.quality,
+        title_card: options.title_card,
+        cuts: options.cuts,
+        cues,
         follow_section: follow,
         audio_path,
         audio_offset_seconds,
@@ -277,8 +356,15 @@ pub fn build_scene(document: &Document, options: &BlenderOptions) -> BlenderScen
                 drill_core::Unit::Yards => "yd",
             }
             .to_owned(),
+            kind: field_kind(&document.grid).to_owned(),
             major_x: document.grid.horizontal_major_positions(),
             major_y: document.grid.vertical_major_positions(),
+            hashes: document
+                .grid
+                .hashes
+                .iter()
+                .map(|line| line.position)
+                .collect(),
             frames: document
                 .grid
                 .reference_frame_bounds()
@@ -288,6 +374,108 @@ pub fn build_scene(document: &Document, options: &BlenderOptions) -> BlenderScen
         },
         performers,
         keyframes,
+    }
+}
+
+fn motion_counts(document: &Document, set_index: Option<usize>) -> Vec<f32> {
+    let base = sample_counts(document, set_index);
+    let mut counts = Vec::new();
+    for pair in base.windows(2) {
+        counts.push(pair[0]);
+        let (index, _) = document.locate_count(pair[0]);
+        if document
+            .sets
+            .get(index)
+            .is_some_and(set_needs_dense_samples)
+        {
+            counts.push((pair[0] + pair[1]) * 0.5);
+        }
+    }
+    if let Some(last) = base.last() {
+        counts.push(*last);
+    }
+    if counts.is_empty() {
+        counts.push(0.0);
+    }
+    counts
+}
+
+fn set_needs_dense_samples(set: &Set) -> bool {
+    std::iter::once(&set.routes.default)
+        .chain(set.routes.overrides.values())
+        .any(|route| route.easing != Easing::Linear || !matches!(route.shape, RouteShape::Straight))
+}
+
+/// `0` faces the audience (−Y). Moving toward +X is a quarter turn.
+fn travel_yaw(dx: f32, dy: f32) -> f32 {
+    if dx.hypot(dy) < 0.04 {
+        0.0
+    } else {
+        dx.atan2(-dy)
+    }
+}
+
+fn field_kind(grid: &drill_core::GridConfig) -> &'static str {
+    if !grid.reference_frames.is_empty() && grid.unit == drill_core::Unit::Meters {
+        "floor"
+    } else if grid.width >= 100.0 && grid.height >= 70.0 {
+        "pitch"
+    } else if grid.hashes.is_empty() && grid.unit == drill_core::Unit::Yards && grid.width < 100.0 {
+        "indoor"
+    } else if grid.unit == drill_core::Unit::Yards {
+        "football"
+    } else {
+        "floor"
+    }
+}
+
+fn prop_for(name: &str, short: &str, kind: PerformerKind) -> &'static str {
+    let lower_name = name.to_ascii_lowercase();
+    let rifle = name.contains("ライフル")
+        || short.eq_ignore_ascii_case("rifle")
+        || lower_name.contains("rifle");
+    let mallet = ["マレット", "マリンバ", "シロフォン", "木琴"]
+        .iter()
+        .any(|needle| name.contains(needle))
+        || short.eq_ignore_ascii_case("mallet")
+        || lower_name.contains("mallet");
+    let wood = [
+        "フルート",
+        "クラリ",
+        "サックス",
+        "オーボエ",
+        "ファゴット",
+        "木管",
+    ]
+    .iter()
+    .any(|needle| name.contains(needle))
+        || matches!(short, "Fl" | "Cl" | "Sx" | "Ob" | "Fg" | "FL" | "CL")
+        || ["flute", "clar", "sax", "oboe"]
+            .iter()
+            .any(|needle| lower_name.contains(needle));
+    match kind {
+        PerformerKind::Guard => {
+            if rifle {
+                "rifle"
+            } else {
+                "flag"
+            }
+        }
+        PerformerKind::Percussion => {
+            if mallet {
+                "mallet"
+            } else {
+                "drum"
+            }
+        }
+        PerformerKind::Prop => "none",
+        PerformerKind::Wind => {
+            if wood {
+                "woodwind"
+            } else {
+                "brass"
+            }
+        }
     }
 }
 
@@ -377,6 +565,10 @@ mod tests {
         );
         assert_eq!(last.keyframes.len(), 2);
         assert!(last.keyframes.iter().all(|key| key.frame == 121));
+        assert_eq!(scene.field.kind, "floor");
+        assert!(scene.performers.iter().all(|person| person.prop == "brass"));
+        assert!(scene.keyframes.iter().any(|key| key.facing > 1.0));
+        assert!(!scene.cues.is_empty());
     }
 
     #[test]
@@ -396,8 +588,76 @@ mod tests {
         assert!(text.contains("BLENDER_EEVEE"));
         assert!(text.contains("H264"));
         assert!(text.contains("MPEG4"));
+        assert!(text.contains("use_gtao"));
+        assert!(text.contains("shako"));
         let loaded = parse_scene(&fs::read_to_string(&data).unwrap()).unwrap();
         assert_eq!(loaded, scene);
         let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn hold_counts_face_the_audience() {
+        let mut document = two_step_show();
+        document.sets[0].hold = 4;
+        let scene = build_scene(&document, &BlenderOptions::default());
+        assert!(
+            scene
+                .keyframes
+                .iter()
+                .any(|key| key.holding && key.facing == 0.0)
+        );
+        assert!(
+            scene
+                .keyframes
+                .iter()
+                .any(|key| !key.holding && key.facing > 1.0)
+        );
+    }
+
+    #[test]
+    fn field_kind_and_props_follow_the_show() {
+        let mut document = Document::blank(1);
+        document.grid = drill_core::GridConfig::default();
+        let football = build_scene(&document, &BlenderOptions::default());
+        assert_eq!(football.field.kind, "football");
+        assert!(football.field.hashes.len() >= 2);
+        document.grid = drill_core::GridConfig::indoor();
+        assert_eq!(
+            build_scene(&document, &BlenderOptions::default())
+                .field
+                .kind,
+            "indoor"
+        );
+        document.grid = drill_core::GridConfig::soccer();
+        assert_eq!(
+            build_scene(&document, &BlenderOptions::default())
+                .field
+                .kind,
+            "pitch"
+        );
+        document.grid = drill_core::GridConfig::japan_floor();
+        document.sections[0].name = "カラーガード".into();
+        document.performers[0].kind = PerformerKind::Guard;
+        assert_eq!(
+            build_scene(&document, &BlenderOptions::default()).performers[0].prop,
+            "flag"
+        );
+        document.sections[0].name = "ライフル".into();
+        assert_eq!(
+            build_scene(&document, &BlenderOptions::default()).performers[0].prop,
+            "rifle"
+        );
+        document.sections[0].name = "ドラム".into();
+        document.performers[0].kind = PerformerKind::Percussion;
+        assert_eq!(
+            build_scene(&document, &BlenderOptions::default()).performers[0].prop,
+            "drum"
+        );
+        document.sections[0].name = "フルート".into();
+        document.performers[0].kind = PerformerKind::Wind;
+        assert_eq!(
+            build_scene(&document, &BlenderOptions::default()).performers[0].prop,
+            "woodwind"
+        );
     }
 }

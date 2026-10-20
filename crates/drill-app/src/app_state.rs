@@ -306,6 +306,88 @@ fn video_chip(ui: &mut egui::Ui, label: &str, on: bool) -> egui::Response {
     ui.add(button)
 }
 
+#[derive(Clone, Copy)]
+enum CameraGlyph {
+    Front,
+    End,
+    Orbit,
+    Follow,
+}
+
+fn paint_camera_glyph(painter: &egui::Painter, center: Pos2, glyph: CameraGlyph, color: Color32) {
+    let stroke = Stroke::new(1.5, color);
+    let p = |x: f32, y: f32| center + egui::vec2(x, y);
+    match glyph {
+        CameraGlyph::Front => {
+            painter.rect_stroke(
+                egui::Rect::from_center_size(p(0.0, 2.0), egui::vec2(14.0, 8.0)),
+                1.2,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            painter.add(egui::Shape::line(
+                vec![p(-7.0, -2.0), p(0.0, -6.5), p(7.0, -2.0)],
+                stroke,
+            ));
+        }
+        CameraGlyph::End => {
+            painter.line_segment([p(-6.0, 6.0), p(-6.0, -4.0)], stroke);
+            painter.line_segment([p(6.0, 6.0), p(6.0, -4.0)], stroke);
+            painter.line_segment([p(-6.0, -4.0), p(6.0, -4.0)], stroke);
+        }
+        CameraGlyph::Orbit => {
+            painter.circle_stroke(center, 5.2, stroke);
+            painter.add(egui::Shape::line(
+                vec![p(3.2, -4.6), p(7.4, -2.2), p(3.6, -0.4)],
+                stroke,
+            ));
+        }
+        CameraGlyph::Follow => {
+            painter.circle_filled(p(-3.0, -3.2), 2.2, color);
+            painter.line_segment([p(-3.0, -0.8), p(-3.0, 5.0)], stroke);
+            painter.line_segment([p(1.0, 0.4), p(6.2, -2.2)], stroke);
+            painter.circle_stroke(p(6.2, -2.2), 2.1, stroke);
+        }
+    }
+}
+
+fn camera_chip(ui: &mut egui::Ui, label: &str, glyph: CameraGlyph, on: bool) -> bool {
+    let color = if on {
+        Color32::WHITE
+    } else {
+        simple_mode::SIMPLE_BLUE
+    };
+    let galley =
+        ui.painter()
+            .layout_no_wrap(label.to_owned(), egui::FontId::proportional(15.0), color);
+    let width = (galley.size().x + 40.0).max(84.0);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 36.0), Sense::click());
+    if on {
+        ui.painter()
+            .rect_filled(rect, 16.0, simple_mode::SIMPLE_BLUE);
+    } else {
+        ui.painter().rect_filled(rect, 16.0, Color32::WHITE);
+        ui.painter().rect_stroke(
+            rect,
+            16.0,
+            Stroke::new(1.5, simple_mode::SIMPLE_BLUE),
+            egui::StrokeKind::Inside,
+        );
+    }
+    paint_camera_glyph(
+        ui.painter(),
+        Pos2::new(rect.left() + 16.0, rect.center().y),
+        glyph,
+        color,
+    );
+    ui.painter().galley(
+        Pos2::new(rect.left() + 28.0, rect.center().y - galley.size().y * 0.5),
+        galley,
+        color,
+    );
+    response.clicked()
+}
+
 fn solid_export_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
     let width = ui.available_width().clamp(180.0, 460.0);
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 48.0), Sense::click());
@@ -3338,6 +3420,39 @@ impl DrillApp {
                 self.print_state.blender_path = path.display().to_string();
                 self.print_state.remember_blender_path();
             }
+            if ui.button(text(self.locale, Text::BlenderAuto)).clicked()
+                && let Some(path) = print_state::detect_blender()
+            {
+                self.print_state.blender_path = path.display().to_string();
+                self.print_state.remember_blender_path();
+            }
+        });
+        let typed = self.print_state.blender_path.trim();
+        let found = if typed.is_empty() {
+            print_state::detect_blender()
+        } else {
+            print_state::locate_blender(typed)
+        };
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            let (status, status_color) = if found.is_some() {
+                (
+                    text(self.locale, Text::BlenderFound),
+                    Color32::from_rgb(18, 112, 52),
+                )
+            } else {
+                (
+                    text(self.locale, Text::BlenderAbsent),
+                    Color32::from_rgb(168, 42, 32),
+                )
+            };
+            ui.label(egui::RichText::new(status).size(14.0).color(status_color));
+            if found.is_none() {
+                ui.hyperlink_to(
+                    text(self.locale, Text::BlenderInstall),
+                    "https://www.blender.org/download/",
+                );
+            }
         });
     }
 
@@ -3351,26 +3466,34 @@ impl DrillApp {
         );
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
-            for (camera, label) in [
+            for (camera, label, glyph) in [
                 (
                     drill_export::blender::BlenderCamera::PressBox,
                     text(locale, Text::PressBox),
+                    CameraGlyph::Front,
                 ),
                 (
                     drill_export::blender::BlenderCamera::EndZone,
                     text(locale, Text::EndZone),
+                    CameraGlyph::End,
                 ),
                 (
                     drill_export::blender::BlenderCamera::Orbit,
                     text(locale, Text::OrbitCam),
+                    CameraGlyph::Orbit,
                 ),
                 (
                     drill_export::blender::BlenderCamera::Follow,
                     text(locale, Text::FollowCam),
+                    CameraGlyph::Follow,
                 ),
             ] {
-                if video_chip(ui, label, self.print_state.video_options.camera == camera).clicked()
-                {
+                if camera_chip(
+                    ui,
+                    label,
+                    glyph,
+                    self.print_state.video_options.camera == camera,
+                ) {
                     self.print_state.video_options.camera = camera;
                 }
             }
@@ -3393,6 +3516,10 @@ impl DrillApp {
             {
                 self.print_state.video_options.quality =
                     drill_export::blender::RenderQuality::Draft;
+                self.print_state.video_options.width = 1280;
+                self.print_state.video_options.height = 720;
+                self.print_state.video_options.fps = 30;
+                self.print_state.video_options.engine = drill_export::blender::BlenderEngine::Eevee;
             }
             if video_chip(
                 ui,
@@ -3403,7 +3530,39 @@ impl DrillApp {
             .clicked()
             {
                 self.print_state.video_options.quality = drill_export::blender::RenderQuality::Fine;
+                self.print_state.video_options.width = 1920;
+                self.print_state.video_options.height = 1080;
+                self.print_state.video_options.engine = drill_export::blender::BlenderEngine::Eevee;
             }
+            if self.print_state.video_options.engine == drill_export::blender::BlenderEngine::Eevee
+            {
+                ui.label(
+                    egui::RichText::new(text(locale, Text::EeveeName))
+                        .size(14.0)
+                        .color(ink),
+                );
+            }
+            let mut cycles = self.print_state.video_options.engine
+                == drill_export::blender::BlenderEngine::Cycles;
+            if ui
+                .checkbox(&mut cycles, text(locale, Text::CyclesName))
+                .changed()
+            {
+                self.print_state.video_options.engine = if cycles {
+                    drill_export::blender::BlenderEngine::Cycles
+                } else {
+                    drill_export::blender::BlenderEngine::Eevee
+                };
+            }
+        });
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.label(
+                egui::RichText::new(text(locale, Text::TimeWord))
+                    .size(14.0)
+                    .color(ink),
+            );
             if video_chip(
                 ui,
                 text(locale, Text::DayWord),
@@ -3506,6 +3665,7 @@ impl DrillApp {
                 .width(72.0)
                 .selected_text(fps.to_string())
                 .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.print_state.video_options.fps, 24, "24");
                     ui.selectable_value(&mut self.print_state.video_options.fps, 30, "30");
                     ui.selectable_value(&mut self.print_state.video_options.fps, 60, "60");
                 });
@@ -3516,6 +3676,14 @@ impl DrillApp {
             ui.checkbox(
                 &mut self.print_state.video_options.audio,
                 text(locale, Text::SongOn),
+            );
+            ui.checkbox(
+                &mut self.print_state.video_options.title_card,
+                text(locale, Text::TitleCard),
+            );
+            ui.checkbox(
+                &mut self.print_state.video_options.cuts,
+                text(locale, Text::CameraCuts),
             );
             ui.checkbox(
                 &mut self.print_state.open_when_done,

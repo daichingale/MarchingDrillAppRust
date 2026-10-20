@@ -367,14 +367,18 @@ pub(crate) fn save_blender_path(path: &str) {
     let _ = std::fs::write(file, path.trim());
 }
 
+/// A typed path is used only when that file exists. An empty field searches
+/// `PATH` and the usual install locations.
 pub(crate) fn locate_blender(configured: &str) -> Option<PathBuf> {
     let configured = configured.trim();
     if !configured.is_empty() {
         let path = PathBuf::from(configured);
-        if path.is_file() {
-            return Some(path);
-        }
+        return path.is_file().then_some(path);
     }
+    detect_blender()
+}
+
+pub(crate) fn detect_blender() -> Option<PathBuf> {
     if let Some(paths) = std::env::var_os("PATH") {
         for directory in std::env::split_paths(&paths) {
             for name in ["blender", "blender.exe"] {
@@ -604,10 +608,15 @@ mod tests {
 
     #[test]
     fn locate_uses_path_or_a_known_install() {
+        assert!(locate_blender("/no/such/blender").is_none());
         if std::path::Path::new("/usr/bin/blender").is_file() {
             assert!(locate_blender("").is_some());
+            let found = detect_blender().expect("blender is installed");
+            assert_eq!(
+                found.file_name().and_then(|name| name.to_str()),
+                Some("blender")
+            );
         }
-        assert!(locate_blender("/no/such/blender").is_none() || locate_blender("").is_some());
     }
 
     #[test]
