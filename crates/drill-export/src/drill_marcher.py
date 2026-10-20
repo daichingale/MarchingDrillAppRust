@@ -404,12 +404,21 @@ def body_mesh(detailed):
     plume_n = 6 if detailed else 3
 
     def build(bm):
-        # Trousers at the hips, then a tapered jacket, a narrow neck, and shoulders.
-        add_sphere(bm, 0.118, (0.0, 0.0, 0.90), TROUSER, seg, (1.05, 0.78, 0.55))
-        add_cyl(bm, 0.105, 0.40, (0.0, -0.01, 1.16), JACKET, hat_seg, radius_top=0.155)
+        # Jacket hem is an open ring on the hip joint. A capped cone left a
+        # disk between the thighs; the trousers continue below the ring.
+        before = set(bm.faces)
+        add_cyl(bm, 0.100, 0.46, (0.0, -0.01, 1.13), JACKET, hat_seg, radius_top=0.155)
+        hem_z = 0.90
+        caps = [
+            face
+            for face in bm.faces
+            if face not in before and max(vert.co.z for vert in face.verts) < hem_z + 0.004
+        ]
+        if caps:
+            bmesh.ops.delete(bm, geom=caps, context="FACES")
         add_sphere(bm, 0.078, (-0.20, -0.01, 1.34), JACKET, seg, (1.0, 0.85, 0.8))
         add_sphere(bm, 0.078, (0.20, -0.01, 1.34), JACKET, seg, (1.0, 0.85, 0.8))
-        add_cyl(bm, 0.128, 0.04, (0.0, 0.0, 0.98), GOLD, hat_seg)
+        add_cyl(bm, 0.120, 0.014, (0.0, -0.01, 1.01), GOLD, hat_seg)
         add_cyl(bm, 0.055, 0.10, (0.0, 0.0, 1.46), SKIN, 10)
         add_cyl(bm, 0.072, 0.04, (0.0, -0.015, 1.40), JACKET, 10, radius_top=0.055)
         add_cyl(bm, 0.064, 0.016, (0.0, -0.015, 1.422), GOLD, 10)
