@@ -14,16 +14,18 @@ import bpy
 import bmesh
 from mathutils import Euler, Matrix, Vector
 
-# About seven heads tall. Crown sits near 1.70 m; the shako and plume go above that.
-HIP_Z = 0.90
+# About seven heads. Crown of the head near 1.72 m; the shako and plume go above that.
+# Legs are three heads, the torso is longer than the old block, shoulders a little wide.
+HIP_Z = 0.80
 KNEE_Z = 0.46
-ANKLE_Z = 0.02
+ANKLE_Z = 0.08
 THIGH = HIP_Z - KNEE_Z
 SHIN = KNEE_Z - ANKLE_Z
-SHOULDER_Z = 1.36
-SHOULDER_X = 0.19
-UPPER = 0.28
-FORE = 0.25
+SHOULDER_Z = 1.42
+SHOULDER_X = 0.23
+HIP_X = 0.11
+UPPER = 0.30
+FORE = 0.26
 HEAD_Z = 1.58
 
 JACKET = 0
@@ -34,7 +36,8 @@ PLUME = 4
 EYE = 5
 MOUTH = 6
 TROUSER = 7
-SLOT_COUNT = 8
+WHITE = 8
+SLOT_COUNT = 9
 
 # Object-space swings. Negative X reaches toward the audience (-Y).
 # Forward march is an 8-to-5 roll step: upright torso, short stride, heel
@@ -245,6 +248,7 @@ class Materials:
             self.eye,
             self.mouth,
             self.trousers(color),
+            self.white,
         ]
 
 
@@ -383,31 +387,140 @@ def cylinder_mesh(name, radius, depth, segments, origin="center", radius_top=Non
 
 def shoe_mesh(name):
     def build(bm):
-        # Rounded shoe. Origin is the ankle. Toe points toward the audience.
-        add_sphere(bm, 0.048, (0.0, -0.07, -0.012), 0, 10, (0.95, 1.85, 0.42))
-        add_sphere(bm, 0.040, (0.0, 0.02, -0.004), 0, 8, (0.9, 0.75, 0.38))
+        # Marching shoe. Origin is the ankle. Toe points toward the audience.
+        add_sphere(bm, 0.072, (0.0, -0.10, 0.018), 0, 12, (0.95, 2.05, 0.55))
+        add_sphere(bm, 0.058, (0.0, 0.02, 0.034), 0, 10, (0.95, 0.9, 0.5))
 
     return new_mesh(name, build)
 
 
 def mitten_mesh(name):
     def build(bm):
-        add_sphere(bm, 0.036, (0.0, -0.012, 0.0), 0, 8, (1.05, 1.45, 0.62))
-        add_sphere(bm, 0.016, (0.028, -0.01, 0.006), 0, 6, (0.7, 1.1, 0.7))
+        add_sphere(bm, 0.046, (0.0, -0.016, 0.0), 0, 8, (1.05, 1.4, 0.7))
+        add_sphere(bm, 0.020, (0.034, -0.012, 0.006), 0, 6, (0.7, 1.1, 0.7))
 
     return new_mesh(name, build)
 
 
+def _frame(tangent, previous):
+    tangent = Vector(tangent)
+    if tangent.length < 1e-6:
+        tangent = Vector((0.0, 0.0, 1.0))
+    tangent.normalize()
+    if previous is None:
+        side = tangent.cross(Vector((0.0, 0.0, 1.0)))
+        if side.length < 1e-4:
+            side = tangent.cross(Vector((0.0, 1.0, 0.0)))
+    else:
+        side = Vector(previous) - tangent * Vector(previous).dot(tangent)
+        if side.length < 1e-4:
+            side = tangent.cross(Vector((0.0, 0.0, 1.0)))
+    side.normalize()
+    up = tangent.cross(side).normalized()
+    return tangent, side, up
+
+
+def add_flare(bm, start, direction, length, r0, r1, material, segments, rings, power=2.5):
+    """Smooth horn bell. Radius stays narrow, then opens. Wide end is `direction`."""
+    start = Vector(start)
+    tangent, side, up = _frame(direction, None)
+    existing = set(bm.faces)
+    rings_v = []
+    for index in range(rings):
+        t = index / max(1, rings - 1)
+        radius = r0 + (r1 - r0) * (t ** power)
+        if index == rings - 1:
+            radius = r1 * 1.04
+        center = start + tangent * (length * t)
+        ring = []
+        for step in range(segments):
+            angle = math.tau * step / segments
+            point = center + (side * math.cos(angle) + up * math.sin(angle)) * radius
+            ring.append(bm.verts.new(point))
+        rings_v.append(ring)
+    for ring_a, ring_b in zip(rings_v, rings_v[1:]):
+        for step in range(segments):
+            nxt = (step + 1) % segments
+            bm.faces.new((ring_a[step], ring_a[nxt], ring_b[nxt], ring_b[step]))
+    _tag(bm, existing, material)
+
+
+def add_tube_path(bm, points, radius, material, segments, closed=False):
+    """One smooth tube. The frame is carried along the path so the skin does not twist shut."""
+    points = [Vector(point) for point in points]
+    if len(points) < 2:
+        return
+    existing = set(bm.faces)
+    rings = []
+    side = None
+    count = len(points)
+    for index, point in enumerate(points):
+        if closed:
+            tangent = points[(index + 1) % count] - points[(index - 1) % count]
+        elif index == 0:
+            tangent = points[1] - point
+        elif index == count - 1:
+            tangent = point - points[index - 1]
+        else:
+            tangent = points[index + 1] - points[index - 1]
+        tangent, side, up = _frame(tangent, side)
+        ring = []
+        for step in range(segments):
+            angle = math.tau * step / segments
+            ring.append(bm.verts.new(point + (side * math.cos(angle) + up * math.sin(angle)) * radius))
+        rings.append(ring)
+    pairs = list(zip(rings, rings[1:]))
+    if closed:
+        pairs.append((rings[-1], rings[0]))
+    for ring_a, ring_b in pairs:
+        for step in range(segments):
+            nxt = (step + 1) % segments
+            bm.faces.new((ring_a[step], ring_a[nxt], ring_b[nxt], ring_b[step]))
+    _tag(bm, existing, material)
+
+
+def add_plume(bm, material, detailed):
+    """One tapered feather. Wide toward the audience, curving back over the shako."""
+    steps = 16 if detailed else 8
+    sides = 10 if detailed else 6
+    centers = []
+    for index in range(steps):
+        t = index / (steps - 1)
+        y = -0.03 + 0.36 * t * t
+        z = 1.90 + 0.55 * t - 0.14 * t * t
+        width = 0.050 * (1.0 - t) ** 0.65 + 0.006
+        depth = 0.016 * (1.0 - t) + 0.004
+        centers.append((0.0, y, z, width, depth))
+    existing = set(bm.faces)
+    rings = []
+    for x, y, z, width, depth in centers:
+        ring = []
+        for step in range(sides):
+            angle = math.tau * step / sides
+            ring.append(
+                bm.verts.new((x + math.cos(angle) * width, y + math.sin(angle) * depth, z))
+            )
+        rings.append(ring)
+    for ring_a, ring_b in zip(rings, rings[1:]):
+        for step in range(sides):
+            nxt = (step + 1) % sides
+            bm.faces.new((ring_a[step], ring_a[nxt], ring_b[nxt], ring_b[step]))
+    tip = bm.verts.new((0.0, centers[-1][1] + 0.01, centers[-1][2] + 0.03))
+    last = rings[-1]
+    for step in range(sides):
+        bm.faces.new((last[step], last[(step + 1) % sides], tip))
+    _tag(bm, existing, material)
+
+
 def body_mesh(detailed):
     seg = 12 if detailed else 6
-    hat_seg = 12 if detailed else 6
-    plume_n = 6 if detailed else 3
+    hat_seg = 16 if detailed else 8
 
     def build(bm):
-        # Jacket hem is an open ring on the hip joint. A capped cone left a
-        # disk between the thighs; the trousers continue below the ring.
+        # Hem is an open ring above the hips. Hip forms sit under it, out at
+        # each side, so the pelvis shows and nothing bridges the crotch.
         before = set(bm.faces)
-        add_cyl(bm, 0.100, 0.46, (0.0, -0.01, 1.13), JACKET, hat_seg, radius_top=0.155)
+        add_cyl(bm, 0.128, 0.56, (0.0, -0.01, 1.18), JACKET, hat_seg, radius_top=0.185)
         hem_z = 0.90
         caps = [
             face
@@ -416,52 +529,105 @@ def body_mesh(detailed):
         ]
         if caps:
             bmesh.ops.delete(bm, geom=caps, context="FACES")
-        add_sphere(bm, 0.078, (-0.20, -0.01, 1.34), JACKET, seg, (1.0, 0.85, 0.8))
-        add_sphere(bm, 0.078, (0.20, -0.01, 1.34), JACKET, seg, (1.0, 0.85, 0.8))
-        add_cyl(bm, 0.120, 0.014, (0.0, -0.01, 1.01), GOLD, hat_seg)
-        add_cyl(bm, 0.055, 0.10, (0.0, 0.0, 1.46), SKIN, 10)
-        add_cyl(bm, 0.072, 0.04, (0.0, -0.015, 1.40), JACKET, 10, radius_top=0.055)
-        add_cyl(bm, 0.064, 0.016, (0.0, -0.015, 1.422), GOLD, 10)
+        add_sphere(bm, 0.084, (-0.125, 0.0, HIP_Z), TROUSER, seg, (0.92, 0.68, 0.62))
+        add_sphere(bm, 0.084, (0.125, 0.0, HIP_Z), TROUSER, seg, (0.92, 0.68, 0.62))
+        add_sphere(bm, 0.096, (-0.26, -0.02, 1.40), JACKET, seg, (1.05, 0.82, 0.78))
+        add_sphere(bm, 0.096, (0.26, -0.02, 1.40), JACKET, seg, (1.05, 0.82, 0.78))
+        add_cyl(bm, 0.148, 0.016, (0.0, -0.01, 1.02), GOLD, hat_seg)
+        add_cyl(bm, 0.058, 0.10, (0.0, 0.0, 1.48), SKIN, 10)
+        add_cyl(bm, 0.078, 0.045, (0.0, -0.02, 1.44), JACKET, 10, radius_top=0.058)
+        add_cyl(bm, 0.070, 0.016, (0.0, -0.02, 1.458), GOLD, 10)
         if detailed:
-            add_rod(bm, (-0.12, -0.09, 1.34), (0.07, -0.11, 0.99), 0.011, GOLD, 6)
-            add_rod(bm, (0.12, -0.09, 1.34), (-0.07, -0.11, 0.99), 0.011, GOLD, 6)
-            add_sphere(bm, 0.055, (-0.17, -0.02, 1.38), GOLD, 8, (1.25, 0.85, 0.32))
-            add_sphere(bm, 0.055, (0.17, -0.02, 1.38), GOLD, 8, (1.25, 0.85, 0.32))
-            for z in (1.10, 1.18, 1.26, 1.34):
-                add_sphere(bm, 0.012, (0.0, -0.105, z), GOLD, 5)
-        add_sphere(bm, 0.112, (0.0, -0.01, HEAD_Z), SKIN, seg, (0.94, 1.0, 1.08))
-        add_sphere(bm, 0.018, (-0.038, -0.108, 1.598), EYE, 6 if detailed else 5)
-        add_sphere(bm, 0.018, (0.038, -0.108, 1.598), EYE, 6 if detailed else 5)
-        if detailed:
-            add_sphere(bm, 0.016, (0.0, -0.118, 1.575), SKIN, 6, (0.7, 0.85, 0.7))
-            add_sphere(bm, 0.009, (-0.038, -0.122, 1.600), EYE, 5)
-            add_sphere(bm, 0.009, (0.038, -0.122, 1.600), EYE, 5)
-            add_rod(bm, (-0.062, -0.105, 1.625), (-0.016, -0.112, 1.628), 0.005, EYE, 4)
-            add_rod(bm, (0.016, -0.112, 1.628), (0.062, -0.105, 1.625), 0.005, EYE, 4)
-            add_sphere(bm, 0.014, (0.0, -0.120, 1.532), MOUTH, 6, (1.7, 0.4, 0.45))
-        # Shako: cylinder, forward brim, gold band, chin strap.
-        add_cyl(bm, 0.112, 0.15, (0.0, 0.0, 1.80), HAT, hat_seg)
-        add_cyl(bm, 0.118, 0.022, (0.0, 0.0, 1.745), GOLD, hat_seg)
-        brim = add_cyl(bm, 0.150, 0.012, (0.0, -0.04, 1.735), HAT, hat_seg)
+            add_rod(bm, (-0.16, -0.10, 1.40), (0.08, -0.14, 1.00), 0.012, GOLD, 6)
+            add_rod(bm, (0.16, -0.10, 1.40), (-0.08, -0.14, 1.00), 0.012, GOLD, 6)
+            add_sphere(bm, 0.058, (-0.22, -0.03, 1.44), GOLD, 8, (1.3, 0.85, 0.32))
+            add_sphere(bm, 0.058, (0.22, -0.03, 1.44), GOLD, 8, (1.3, 0.85, 0.32))
+            for z in (1.10, 1.20, 1.30, 1.40):
+                add_sphere(bm, 0.013, (0.0, -0.155, z), GOLD, 5)
+        # Head, then a face on the audience side (-Y) so a front camera sees it.
+        add_sphere(bm, 0.125, (0.0, -0.02, HEAD_Z), SKIN, seg, (0.96, 0.98, 1.06))
+        for sign in (-1.0, 1.0):
+            add_sphere(bm, 0.026, (sign * 0.046, -0.152, HEAD_Z + 0.02), WHITE, 8 if detailed else 6)
+            add_sphere(bm, 0.014, (sign * 0.046, -0.172, HEAD_Z + 0.018), EYE, 6 if detailed else 5)
+            add_sphere(bm, 0.012, (sign * 0.046, -0.150, HEAD_Z + 0.055), EYE, 5, (1.7, 0.45, 0.38))
+        add_sphere(bm, 0.018, (0.0, -0.158, HEAD_Z - 0.012), SKIN, 6, (0.72, 0.85, 0.7))
+        add_sphere(bm, 0.016, (0.0, -0.162, HEAD_Z - 0.055), MOUTH, 6, (1.8, 0.38, 0.42))
+        # Shako: cylinder, visor toward the audience, gold band, chin strap.
+        add_cyl(bm, 0.118, 0.16, (0.0, 0.0, 1.82), HAT, hat_seg)
+        add_cyl(bm, 0.124, 0.022, (0.0, 0.0, 1.755), GOLD, hat_seg)
+        brim = add_cyl(bm, 0.155, 0.014, (0.0, -0.05, 1.748), HAT, hat_seg)
         for vert in brim["verts"]:
-            if vert.co.y < -0.04:
-                vert.co.y -= 0.045
+            if vert.co.y < -0.05:
+                vert.co.y -= 0.05
         if detailed:
-            add_rod(bm, (-0.09, -0.01, 1.76), (-0.035, -0.115, 1.50), 0.006, HAT, 5)
-            add_rod(bm, (0.09, -0.01, 1.76), (0.035, -0.115, 1.50), 0.006, HAT, 5)
-            add_rod(bm, (-0.035, -0.115, 1.50), (0.035, -0.115, 1.50), 0.006, HAT, 5)
-        # Feather: a tapered curve, not a stack of beads.
-        knots = []
-        for index in range(plume_n):
-            t = index / max(1, plume_n - 1)
-            y = -0.02 + 0.22 * t + 0.12 * t * t
-            z = 1.90 + 0.40 * t - 0.10 * t * t
-            radius = 0.030 * (1.0 - t) ** 0.8 + 0.004
-            knots.append((0.0, y, z, radius))
-        for start, end in zip(knots, knots[1:]):
-            add_rod(bm, start[:3], end[:3], (start[3] + end[3]) * 0.5, PLUME, 6 if detailed else 4)
+            add_rod(bm, (-0.10, -0.02, 1.78), (-0.04, -0.145, 1.50), 0.007, HAT, 5)
+            add_rod(bm, (0.10, -0.02, 1.78), (0.04, -0.145, 1.50), 0.007, HAT, 5)
+            add_rod(bm, (-0.04, -0.145, 1.50), (0.04, -0.145, 1.50), 0.007, HAT, 5)
+        add_plume(bm, PLUME, detailed)
 
     return new_mesh("marcher-body", build)
+
+
+def trumpet_mesh(detailed):
+    """Valves at the origin. Local -Z is the bell; local +Z reaches the mouthpiece."""
+    seg = 20 if detailed else 10
+
+    def build(bm):
+        add_cyl(bm, 0.012, 0.30, (0.0, 0.0, -0.02), 0, seg)
+        add_cyl(bm, 0.016, 0.035, (0.0, 0.0, 0.125), 0, seg, radius_top=0.009)
+        add_cyl(bm, 0.022, 0.075, (0.0, 0.0, 0.0), 0, seg)
+        for z in (-0.02, 0.0, 0.02):
+            add_rod(bm, (0.0, 0.0, z), (0.0, 0.055, z), 0.007, 0, 8)
+        add_tube_path(
+            bm,
+            (
+                (0.0, 0.0, 0.05),
+                (0.058, 0.01, 0.05),
+                (0.074, 0.01, 0.02),
+                (0.074, 0.01, -0.07),
+                (0.058, 0.01, -0.09),
+                (0.0, 0.0, -0.09),
+            ),
+            0.009,
+            0,
+            10 if detailed else 6,
+        )
+        add_flare(bm, (0.0, 0.0, -0.16), (0.0, 0.0, -1.0), 0.22, 0.013, 0.062, 0, seg, 12, 2.6)
+
+    return new_mesh("trumpet", build)
+
+
+def sousaphone_mesh(detailed):
+    """Ring on the left shoulder, around the torso, bell above the head facing the audience."""
+    steps = 40 if detailed else 20
+    seg = 12 if detailed else 6
+
+    def build(bm):
+        ring = []
+        for index in range(steps):
+            t = math.tau * index / steps
+            ring.append(
+                (
+                    -0.04 - 0.16 * math.cos(t),
+                    0.16 * math.sin(t),
+                    1.18 + 0.30 * math.cos(t),
+                )
+            )
+        add_tube_path(bm, ring, 0.042, 0, seg, closed=True)
+        # Lead from the front of the wrap up to the bell.
+        lead = [
+            (-0.04 - 0.16 * math.cos(-0.45), 0.16 * math.sin(-0.45), 1.18 + 0.30 * math.cos(-0.45)),
+            (-0.08, -0.14, 1.55),
+            (-0.02, -0.22, 1.78),
+            (0.02, -0.30, 1.98),
+        ]
+        add_tube_path(bm, lead, 0.040, 0, seg)
+        add_flare(bm, lead[-1], (0.0, -0.96, 0.15), 0.24, 0.042, 0.16, 0, 28 if detailed else 12, 12, 2.2)
+        # Mouthpiece branch, down the front to the lips.
+        mouth = [(-0.02, -0.16, 1.28), (0.0, -0.18, 1.40), (0.01, -0.16, 1.50)]
+        add_tube_path(bm, mouth, 0.016, 0, seg)
+
+    return new_mesh("sousaphone", build)
 
 
 def flag_mesh(detailed):
@@ -522,6 +688,15 @@ def torus_mesh(major, minor, major_seg, minor_seg):
     return mesh
 
 
+def bell_mesh(name, segments):
+    """Wide end toward local -Z, smooth flare instead of a straight cone."""
+
+    def build(bm):
+        add_flare(bm, (0.0, 0.0, 0.04), (0.0, 0.0, -1.0), 0.18, 0.012, 0.058, 0, segments, 10, 2.4)
+
+    return new_mesh(name, build)
+
+
 def cone_mesh(name, radius_base, radius_tip, depth, segments):
     def build(bm):
         bmesh.ops.create_cone(
@@ -548,18 +723,20 @@ def shared_meshes(detailed):
     # from the joint toward the wrist and the ankle.
     return {
         "body": body_mesh(detailed),
-        "thigh": cylinder_mesh("thigh", 0.048, THIGH, limb_seg, "top", 0.078),
-        "shin": cylinder_mesh("shin", 0.034, SHIN, limb_seg, "top", 0.050),
+        "thigh": cylinder_mesh("thigh", 0.062, THIGH, limb_seg, "top", 0.092),
+        "shin": cylinder_mesh("shin", 0.046, SHIN, limb_seg, "top", 0.066),
         "shoe": shoe_mesh("shoe"),
-        "arm": cylinder_mesh("arm", 0.034, UPPER, limb_seg, "top", 0.050),
-        "fore": cylinder_mesh("fore", 0.026, FORE, limb_seg, "top", 0.036),
+        "arm": cylinder_mesh("arm", 0.046, UPPER, limb_seg, "top", 0.064),
+        "fore": cylinder_mesh("fore", 0.038, FORE, limb_seg, "top", 0.050),
         "glove": mitten_mesh("glove"),
         "flag": flag_mesh(detailed),
-        "sousa": torus_mesh(0.30, 0.055, 14 if detailed else 8, 6 if detailed else 4),
+        "sousa": sousaphone_mesh(detailed),
+        "loop": torus_mesh(0.22, 0.04, 16 if detailed else 8, 6 if detailed else 4),
+        "trumpet": trumpet_mesh(detailed),
         "pipe": cylinder_mesh("pipe", 0.012, 0.42, prop_seg, "top"),
         "pipe_long": cylinder_mesh("pipe-long", 0.011, 0.68, prop_seg, "top"),
         "slim": cylinder_mesh("slim", 0.008, 0.5, prop_seg, "top"),
-        "bell": cone_mesh("bell", 0.062, 0.012, 0.14, prop_seg),
+        "bell": bell_mesh("bell", 18 if detailed else 8),
         "stick": cylinder_mesh("stick", 0.006, 0.34, 5, "top"),
         "pole": cylinder_mesh("pole", 0.012, 1.2, 6, "top"),
         "barrel": cylinder_mesh("barrel", 0.013, 0.72, 6, "top"),
@@ -691,14 +868,14 @@ def arm_targets(prop, gait):
     # Horns: mouthpiece at the lips, bell hand further out, elbows wide.
     # Drums sit at the waist. The flag pole is vertical between both hands.
     table = {
-        "trumpet": {"R": (0.03, -0.16, 1.50), "L": (-0.02, -0.32, 1.48)},
+        "trumpet": {"R": (0.04, -0.22, 1.50), "L": (-0.02, -0.30, 1.48)},
         "mellophone": {"R": (0.02, -0.16, 1.50), "L": (0.10, -0.30, 1.44)},
         "trombone": {"R": (0.02, -0.16, 1.50), "L": (-0.16, -0.34, 1.42)},
         "baritone": {"R": (0.06, -0.18, 1.28), "L": (-0.04, -0.20, 1.36)},
         "clarinet": {"L": (0.02, -0.16, 1.48), "R": (0.03, -0.18, 1.24)},
         "flute": {"R": (0.16, -0.16, 1.50), "L": (-0.10, -0.16, 1.50)},
         "sax": {"R": (0.08, -0.20, 1.16), "L": (0.02, -0.18, 1.40)},
-        "tuba": {"L": (0.0, -0.18, 1.40), "R": (0.14, -0.22, 1.12)},
+        "tuba": {"L": (0.01, -0.18, 1.48), "R": (0.14, -0.20, 1.08)},
         "snare": {"R": (0.14, -0.32, 1.02), "L": (-0.14, -0.32, 1.02)},
         "tenor": {"R": (0.14, -0.32, 1.08), "L": (-0.14, -0.32, 1.08)},
         "bass": {"R": (0.18, -0.36, 1.02), "L": (-0.18, -0.36, 1.02)},
@@ -816,7 +993,12 @@ def attach_props(person_prop, parts, meshes, mats, color, collection, detailed):
         parts["grips"].append(obj)
         return obj
 
-    if prop in ("trumpet", "mellophone", "trombone", "baritone", "clarinet", "flute"):
+    if prop == "trumpet":
+        obj = tube(right, hand_r, mats.brass, meshes["trumpet"])
+        obj["side"] = "R"
+        # Bell opens toward the audience, level with the mouth.
+        obj["bell_dir"] = (0.0, -1.0, 0.02)
+    elif prop in ("mellophone", "trombone", "baritone", "clarinet", "flute"):
         metal = mats.brass
         if prop == "flute":
             metal = mats.silver
@@ -831,13 +1013,9 @@ def attach_props(person_prop, parts, meshes, mats, color, collection, detailed):
         bell_obj = mesh_obj("bell", meshes["bell"], collection)
         paint(bell_obj, mats.silver if prop == "clarinet" else metal)
         end = -0.66 if prop == "trombone" else -0.48 if prop == "flute" else -0.40
-        if prop == "trumpet":
-            bell_obj.scale = (1.8, 1.8, 1.35)
         adopt(bell_obj, obj, (0.0, 0.0, end))
         obj["side"] = "L" if prop == "clarinet" else "R"
         directions = {
-            # Trumpet bell sits on the horizon, straight ahead.
-            "trumpet": (0.0, -1.0, 0.04),
             "mellophone": (0.05, -0.96, 0.12),
             "trombone": (-0.15, -0.95, 0.02),
             "baritone": (0.0, -0.35, 0.90),
@@ -848,20 +1026,12 @@ def attach_props(person_prop, parts, meshes, mats, color, collection, detailed):
     elif prop == "tuba":
         horn = mesh_obj("sousa", meshes["sousa"], collection)
         paint(horn, mats.brass)
-        adopt(horn, spine, (0.0, -0.04, 1.05))
-        neck = mesh_obj("lead", meshes["pipe_long"], collection)
-        paint(neck, mats.brass)
-        adopt(neck, spine, (-0.02, -0.16, 1.48), euler_pointing((0.0, -0.35, 0.94)))
-        bell_obj = mesh_obj("bell", meshes["bell"], collection)
-        bell_obj.scale = (4.8, 4.8, 2.4)
-        paint(bell_obj, mats.brass)
-        # Wide end of the cone is local -Z. Aim it forward and up, clear of the shako.
-        adopt(bell_obj, spine, (0.04, -0.55, 1.98), euler_pointing((0.08, -0.72, 0.68)))
+        adopt(horn, spine, (0.0, 0.0, 0.0))
         mouth = tube(left, hand_l, mats.brass, meshes["slim"])
         mouth["side"] = "L"
-        mouth["bell_dir"] = (0.0, -0.35, 0.55)
+        mouth["bell_dir"] = (0.02, -0.25, 0.55)
     elif prop == "sax":
-        horn = mesh_obj("sax", meshes["sousa"], collection)
+        horn = mesh_obj("sax", meshes["loop"], collection)
         paint(horn, mats.brass)
         horn.scale = (0.42, 0.38, 0.58)
         adopt(horn, spine, (0.07, -0.18, 1.10), (0.35, 0.0, 0.25))
@@ -961,7 +1131,7 @@ def spawn(name, color, prop, height_m, meshes, mats, collection=None, detailed=F
     for side, sign in (("L", -1.0), ("R", 1.0)):
         thigh = mesh_obj(f"{name}.thigh.{side}", meshes["thigh"], collection)
         paint(thigh, trouser)
-        adopt(thigh, spine, (sign * 0.09, 0.0, HIP_Z))
+        adopt(thigh, spine, (sign * HIP_X, 0.0, HIP_Z))
         shin = mesh_obj(f"{name}.shin.{side}", meshes["shin"], collection)
         paint(shin, trouser)
         adopt(shin, thigh, (0.0, 0.0, -THIGH))
@@ -1227,8 +1397,8 @@ def _build_rig(meshes, mats, hide):
             pass
         return bone
 
-    add_bone("spine", (0.0, 0.0, 0.84), (0.0, 0.0, 1.42))
-    add_bone("head", (0.0, 0.0, 1.42), (0.0, 0.0, 1.72), "spine")
+    add_bone("spine", (0.0, 0.0, HIP_Z), (0.0, 0.0, SHOULDER_Z + 0.06))
+    add_bone("head", (0.0, 0.0, SHOULDER_Z + 0.06), (0.0, 0.0, HEAD_Z + 0.18), "spine")
     for side, sign in (("L", -1.0), ("R", 1.0)):
         add_bone(
             f"arm.{side}",
@@ -1242,9 +1412,9 @@ def _build_rig(meshes, mats, hide):
             (sign * SHOULDER_X, 0.0, SHOULDER_Z - UPPER - FORE),
             f"arm.{side}",
         )
-        add_bone(f"thigh.{side}", (sign * 0.09, 0.0, HIP_Z), (sign * 0.09, 0.0, KNEE_Z), "spine")
-        add_bone(f"shin.{side}", (sign * 0.09, 0.0, KNEE_Z), (sign * 0.09, 0.0, ANKLE_Z), f"thigh.{side}")
-        add_bone(f"foot.{side}", (sign * 0.09, 0.0, ANKLE_Z), (sign * 0.09, -0.18, ANKLE_Z - 0.02), f"shin.{side}")
+        add_bone(f"thigh.{side}", (sign * HIP_X, 0.0, HIP_Z), (sign * HIP_X, 0.0, KNEE_Z), "spine")
+        add_bone(f"shin.{side}", (sign * HIP_X, 0.0, KNEE_Z), (sign * HIP_X, 0.0, ANKLE_Z), f"thigh.{side}")
+        add_bone(f"foot.{side}", (sign * HIP_X, 0.0, ANKLE_Z), (sign * HIP_X, -0.16, ANKLE_Z - 0.02), f"shin.{side}")
     bpy.ops.object.mode_set(mode="POSE")
     for pose_bone in rig.pose.bones:
         pose_bone.rotation_mode = "XYZ"
@@ -1365,8 +1535,12 @@ def build_show(scene):
 
 
 def look_level(obj, target):
-    """Aim a camera with zero roll. Local -Z looks at the target, local +Y stays upright."""
-    direction = Vector(target) - obj.location
+    """Aim a camera with zero roll. Local -Z looks at the target, local +Y stays upright.
+
+    Stored as a quaternion so a camera sitting on the audience axis (-Y) does not
+    flip through euler gimbal lock and photograph the back of the head.
+    """
+    direction = Vector(target) - Vector(obj.location)
     if direction.length < 1e-6:
         return
     forward = direction.normalized()
@@ -1378,7 +1552,8 @@ def look_level(obj, target):
     x_axis.normalize()
     y_axis = z_axis.cross(x_axis).normalized()
     rotation = Matrix((x_axis, y_axis, z_axis)).transposed()
-    obj.rotation_euler = rotation.to_euler("XYZ")
+    obj.rotation_mode = "QUATERNION"
+    obj.rotation_quaternion = rotation.to_quaternion()
 
 
 def studio():
