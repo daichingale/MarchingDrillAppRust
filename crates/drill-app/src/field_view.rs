@@ -275,6 +275,12 @@ impl FieldViewport {
         self.content = Rect::from_min_size(Pos2::ZERO, Vec2::ZERO);
     }
 
+    /// The open area in screen space. `widget` is the canvas rectangle.
+    pub(crate) fn content_screen(&self, widget: Rect) -> Rect {
+        self.content_frame(widget.size())
+            .translate(widget.min.to_vec2())
+    }
+
     fn content_frame(&self, canvas: Vec2) -> Rect {
         if self.content.width() > 8.0 && self.content.height() > 8.0 {
             self.content
@@ -437,7 +443,7 @@ impl FieldViewport {
         let fit = (frame.width() / grid.width.max(f32::EPSILON))
             .min(frame.height() / grid.height.max(f32::EPSILON))
             .max(f32::EPSILON);
-        let pad = 1.35;
+        let pad = 1.16;
         let zoom = (frame.width() / (fit * width * pad)).min(frame.height() / (fit * height * pad));
         if !zoom.is_finite() {
             return;

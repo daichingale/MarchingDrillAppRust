@@ -952,10 +952,7 @@ impl super::DrillApp {
             Action::NudgeUpLarge => self.key_nudge(0, NUDGE_LARGE),
             Action::NudgeDownLarge => self.key_nudge(0, -NUDGE_LARGE),
             Action::ToggleGrid => self.key_toggle_grid(),
-            Action::FitField => {
-                let grid = self.document.grid.clone();
-                self.field_viewport.reset(&grid);
-            }
+            Action::FitField => self.fit_whole_floor(),
             Action::ZoomIn => self
                 .field_viewport
                 .set_zoom(self.field_viewport.zoom * 1.25),

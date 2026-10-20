@@ -152,6 +152,46 @@ pub(crate) fn count_in_display(remaining: f32) -> u32 {
 /// unless the director asks to keep them, and draws coarser paths.
 pub(crate) const LIGHT_PLAYBACK_MIN: usize = 48;
 
+/// True when the cast occupies a modest part of the floor, so fitting the
+/// whole canvas leaves a wide empty margin around the formation.
+/// Every set, so the opening zoom keeps the whole show in the window
+/// rather than the picture that happens to be on screen first.
+pub(crate) fn opening_cast_points(document: &drill_core::Document) -> Vec<Point> {
+    let mut points = Vec::new();
+    for set in &document.sets {
+        for point in &set.positions {
+            if point.x.is_finite() && point.y.is_finite() {
+                points.push(*point);
+            }
+        }
+    }
+    points
+}
+
+pub(crate) fn cast_is_clustered(grid: &drill_core::GridConfig, positions: &[Point]) -> bool {
+    let mut min_x = f32::MAX;
+    let mut min_y = f32::MAX;
+    let mut max_x = f32::MIN;
+    let mut max_y = f32::MIN;
+    let mut count = 0_u32;
+    for point in positions {
+        if !point.x.is_finite() || !point.y.is_finite() {
+            continue;
+        }
+        count += 1;
+        min_x = min_x.min(point.x);
+        min_y = min_y.min(point.y);
+        max_x = max_x.max(point.x);
+        max_y = max_y.max(point.y);
+    }
+    if count < 2 || grid.width <= 1.0 || grid.height <= 1.0 {
+        return false;
+    }
+    let width = (max_x - min_x) / grid.width;
+    let height = (max_y - min_y) / grid.height;
+    width < 0.62 && height < 0.62 && width > 0.02 && height > 0.02
+}
+
 pub(crate) fn hide_labels_for_playback(
     playing: bool,
     performers: usize,
@@ -916,6 +956,9 @@ pub(crate) struct DrillApp {
     camera: Camera,
     /// Desktop 2D pan/zoom is session UI, never a document edit.
     field_viewport: field_view::FieldViewport,
+    /// Explicit whole-floor fit. While this is false, a clustered cast is
+    /// framed once on the opening view.
+    hold_whole_field: bool,
     camera_program_preview: bool,
     beats_per_measure: u16,
     current_set: usize,
@@ -1182,6 +1225,7 @@ impl Default for DrillApp {
             workspace_preset: WorkspacePreset::Design,
             camera,
             field_viewport: field_view::FieldViewport::fit(&document.grid),
+            hold_whole_field: false,
             camera_program_preview: true,
             beats_per_measure: 4,
             document,
@@ -2132,6 +2176,7 @@ impl DrillApp {
         self.playback_end = self.document.timeline_counts();
         self.timeline_view = TimelineViewport::fit(self.playback_end);
         self.field_viewport = field_view::FieldViewport::fit(&self.document.grid);
+        self.hold_whole_field = false;
         self.history = History::with_limit(500);
         self.dirty = false;
         self.frame_positions.clear();
@@ -4501,7 +4546,46 @@ impl DrillApp {
         }
     }
 
+    /// Opening view. A cast that only fills part of the floor is framed so
+    /// the people, not the empty rehearsal margin, own the window. An
+    /// explicit whole-field fit (F, double-click) sets `hold_whole_field`.
+    fn maybe_frame_clustered_cast(&mut self, size: Vec2) {
+        if self.hold_whole_field || size.x < 32.0 || size.y < 32.0 {
+            return;
+        }
+        if !self.viewport_is_default_fit() {
+            return;
+        }
+        let points = opening_cast_points(&self.document);
+        if points.len() < 2 {
+            return;
+        }
+        if cast_is_clustered(&self.document.grid, &points) {
+            self.zoom_to_points(size, &points);
+        }
+        self.hold_whole_field = true;
+    }
+
+    fn viewport_is_default_fit(&self) -> bool {
+        let grid = &self.document.grid;
+        let center = self.field_viewport.center;
+        (self.field_viewport.zoom - 1.0).abs() < 0.04
+            && (center.x - grid.width * 0.5).abs() < 0.35
+            && (center.y - grid.height * 0.5).abs() < 0.35
+    }
+
+    fn fit_whole_floor(&mut self) {
+        self.hold_whole_field = true;
+        let grid = self.document.grid.clone();
+        self.field_viewport.reset(&grid);
+    }
+
     fn zoom_to_performers(&mut self, size: Vec2) {
+        let points = self.frame_positions.clone();
+        self.zoom_to_points(size, &points);
+    }
+
+    fn zoom_to_points(&mut self, size: Vec2, points: &[Point]) {
         let mut min = Point {
             x: f32::MAX,
             y: f32::MAX,
@@ -4511,7 +4595,7 @@ impl DrillApp {
             y: f32::MIN,
         };
         let mut any = false;
-        for point in &self.frame_positions {
+        for point in points {
             if !point.x.is_finite() || !point.y.is_finite() {
                 continue;
             }
@@ -5347,6 +5431,7 @@ impl DrillApp {
         self.drag_origin = None;
         self.marquee_origin = None;
         self.field_viewport.reset(&self.document.grid);
+        self.hold_whole_field = false;
         self.playback_start = 0;
         self.playback_end = self.document.timeline_counts();
         self.history = History::with_limit(500);
@@ -6328,6 +6413,48 @@ mod full_mode_tool_tests {
         assert_eq!(trail_sample_count(true, 80), 8);
         assert_eq!(trail_sample_count(false, 80), 24);
         assert_eq!(trail_sample_count(true, 12), 24);
+    }
+
+    #[test]
+    fn a_block_on_the_japan_floor_is_clustered_until_it_fills_the_field() {
+        let grid = drill_core::GridConfig::japan_floor();
+        let step = grid.horizontal_units / f32::from(grid.horizontal_steps.max(1));
+        let gap = step * 4.0;
+        let block: Vec<Point> = (0..80)
+            .map(|index| Point {
+                x: 8.0 + (index % 10) as f32 * gap,
+                y: 6.0 + (index / 10) as f32 * gap,
+            })
+            .collect();
+        assert!(cast_is_clustered(&grid, &block));
+        let spread: Vec<Point> = (0..8)
+            .map(|index| Point {
+                x: index as f32 * 6.0,
+                y: index as f32 * 5.0,
+            })
+            .collect();
+        assert!(!cast_is_clustered(&grid, &spread));
+        assert!(!cast_is_clustered(&grid, &[Point { x: 10.0, y: 10.0 }]));
+    }
+
+    #[test]
+    fn opening_frame_includes_every_set() {
+        let mut doc = drill_core::Document::blank(2);
+        doc.sets[0].positions = vec![Point { x: 8.0, y: 8.0 }, Point { x: 12.0, y: 12.0 }];
+        let mut later = doc.sets[0].clone();
+        later.positions = vec![Point { x: 22.0, y: 8.0 }, Point { x: 30.0, y: 18.0 }];
+        doc.sets.push(later);
+        let points = opening_cast_points(&doc);
+        assert_eq!(points.len(), 4);
+        let mut app = DrillApp::default();
+        app.install_document(doc);
+        app.maybe_frame_clustered_cast(egui::vec2(1000.0, 700.0));
+        assert!(
+            app.field_viewport.center.x > 14.0,
+            "framed only the first set: {}",
+            app.field_viewport.center.x
+        );
+        assert!(app.field_viewport.zoom > 1.2, "{}", app.field_viewport.zoom);
     }
 
     #[test]

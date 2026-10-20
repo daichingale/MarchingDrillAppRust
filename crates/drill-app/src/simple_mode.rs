@@ -3149,7 +3149,7 @@ impl DrillApp {
                     .small_button(i18n::registered(self.locale, "simple-mode.104"))
                     .clicked()
             {
-                self.field_viewport.reset(&self.document.grid);
+                self.fit_whole_floor();
             }
             if self.document.sets.len() > 1 {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -7622,6 +7622,7 @@ impl DrillApp {
             self.simple_toolbar_open(),
             !self.document.sets.is_empty(),
         ));
+        self.maybe_frame_clustered_cast(rect.size());
         let mut block_pointer = false;
         if interactive {
             let over_overlay = self.drag_before.is_none()
@@ -7890,9 +7891,11 @@ impl DrillApp {
         if let Some(pointer) = response.interact_pointer_pos() {
             if response.double_clicked() && nearest.is_none() {
                 if ui.input(|input| input.modifiers.shift) {
+                    self.hold_whole_field = false;
                     self.zoom_to_performers(rect.size());
+                    self.hold_whole_field = true;
                 } else {
-                    self.field_viewport.reset(&self.document.grid);
+                    self.fit_whole_floor();
                 }
             } else if response.clicked() {
                 let additive = ui.input(|input| {
@@ -8028,7 +8031,13 @@ impl DrillApp {
         let Some((point, label)) = simple_floor_mark(&self.document.grid, self.locale) else {
             return;
         };
-        paint_simple_chip(painter, rect, to_screen(point), &label);
+        let dots: Vec<Pos2> = self
+            .frame_positions
+            .iter()
+            .copied()
+            .map(&to_screen)
+            .collect();
+        paint_simple_chip(painter, rect, to_screen(point), &label, &dots);
     }
 
     fn paint_simple_focus_wash(&self, painter: &egui::Painter, to_screen: &impl Fn(Point) -> Pos2) {
@@ -8187,21 +8196,27 @@ impl DrillApp {
     }
 }
 
-fn paint_simple_chip(painter: &egui::Painter, rect: egui::Rect, anchor: Pos2, label: &str) {
+fn paint_simple_chip(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    anchor: Pos2,
+    label: &str,
+    dots: &[Pos2],
+) {
     let galley = painter.layout_no_wrap(
         label.to_owned(),
         egui::FontId::proportional(14.0),
-        SIMPLE_BLUE,
+        Color32::PLACEHOLDER,
     );
     let pad = egui::Vec2::new(10.0, 5.0);
     let size = galley.size() + pad * 2.0;
-    let min = simple_chip_origin(rect, anchor, size);
-    let background = egui::Rect::from_min_size(min, size);
-    if !rect.contains_rect(background) {
+    let Some((min, alpha)) = simple_chip_place(rect, anchor, size, dots) else {
         return;
-    }
-    painter.rect_filled(background, 10.0, Color32::from_white_alpha(235));
-    painter.galley(min + pad, galley, SIMPLE_BLUE);
+    };
+    let background = egui::Rect::from_min_size(min, size);
+    painter.rect_filled(background, 10.0, Color32::from_white_alpha(alpha));
+    let ink = Color32::from_rgba_unmultiplied(20, 96, 200, alpha);
+    painter.galley(min + pad, galley, ink);
 }
 
 /// Eighty people, seven instruments, six sets. Screenshot and round-trip
@@ -8371,15 +8386,38 @@ fn simple_visible_local(canvas: egui::Rect, toolbar_open: bool, has_sets: bool) 
     egui::Rect::from_min_max(min, max)
 }
 
-/// Puts the chip just above the anchor, then slides it into `rect` so the
-/// dock and the window edge cannot cover 左 / 右.
-fn simple_chip_origin(rect: egui::Rect, anchor: Pos2, size: egui::Vec2) -> Pos2 {
-    let mut min = egui::pos2(anchor.x - size.x * 0.5, anchor.y - 18.0 - size.y);
+/// Audience side of a contest mark. Screen y grows toward the front
+/// sideline, so the chip sits under the front rank. A spot that still
+/// covers a dot is walked further down; if the rank fills that margin the
+/// chip fades instead of climbing back onto the dots.
+fn simple_chip_place(
+    rect: egui::Rect,
+    anchor: Pos2,
+    size: egui::Vec2,
+    dots: &[Pos2],
+) -> Option<(Pos2, u8)> {
     let max_x = (rect.right() - size.x).max(rect.left());
-    let max_y = (rect.bottom() - size.y).max(rect.top());
-    min.x = min.x.clamp(rect.left(), max_x);
-    min.y = min.y.clamp(rect.top(), max_y);
-    min
+    let x = (anchor.x - size.x * 0.5).clamp(rect.left(), max_x);
+    let mut y = anchor.y + 8.0;
+    let mut fallback = None;
+    for _ in 0..5 {
+        let min = egui::pos2(x, y);
+        let chip = egui::Rect::from_min_size(min, size);
+        if !rect.contains_rect(chip) {
+            break;
+        }
+        if !chip_covers_dot(chip, dots) {
+            return Some((min, 235));
+        }
+        fallback = Some(min);
+        y += 12.0;
+    }
+    fallback.map(|min| (min, 72))
+}
+
+fn chip_covers_dot(chip: egui::Rect, dots: &[Pos2]) -> bool {
+    let zone = chip.expand(8.0);
+    dots.iter().any(|dot| zone.contains(*dot))
 }
 
 /// Front sideline, centered. Field `y = 0` is the audience side, and the
@@ -12936,6 +12974,31 @@ mod tests {
         app.nav_glide.settle();
         let leaving = outside_contest_indices(&app.document, 1);
         assert!(leaving.contains(&0));
+    }
+
+    #[test]
+    fn distance_chip_sits_under_the_line_and_steps_past_a_dot() {
+        let rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(400.0, 400.0));
+        let anchor = egui::pos2(200.0, 160.0);
+        let size = egui::vec2(48.0, 24.0);
+        let (min, alpha) = simple_chip_place(rect, anchor, size, &[]).expect("room under the line");
+        assert!(min.y > anchor.y, "chip climbed onto the rank: {}", min.y);
+        assert!(alpha > 200);
+        let covering = egui::pos2(anchor.x, anchor.y + 8.0 + size.y * 0.5);
+        let (nudged, clear) = simple_chip_place(rect, anchor, size, &[covering]).expect("nudge");
+        assert!(nudged.y > min.y, "chip stayed on the dot");
+        assert!(clear > 200);
+        let mut packed = Vec::new();
+        let mut y = anchor.y;
+        while y < rect.bottom() {
+            packed.push(egui::pos2(anchor.x, y));
+            y += 6.0;
+        }
+        let (_, faded) = simple_chip_place(rect, anchor, size, &packed).expect("fade in place");
+        assert!(faded < 120);
+        let crowded_bottom =
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(200.0, 190.0));
+        assert!(simple_chip_place(crowded_bottom, egui::pos2(100.0, 180.0), size, &[]).is_none());
     }
 
     #[test]
