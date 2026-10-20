@@ -4,6 +4,7 @@
 #           --seconds 16 --samples 8 --engine eevee|cycles
 #           --camera press_box|end_zone|orbit|follow
 #           --width 1280 --height 720 --fps 24
+#           --heroes DIR --heroes-only
 
 import argparse
 import json
@@ -37,6 +38,8 @@ def parse_args():
     parser.add_argument("--width", type=int, default=0)
     parser.add_argument("--height", type=int, default=0)
     parser.add_argument("--fps", type=int, default=0)
+    parser.add_argument("--heroes", default="")
+    parser.add_argument("--heroes-only", action="store_true")
     return parser.parse_args(args_after_double_dash())
 
 
@@ -482,10 +485,18 @@ def set_interpolation(obj, mode):
 
 
 def build_performers(scene):
+    style = scene.get("figures") or "person"
+    if style != "capsule":
+        folder = script_dir()
+        if folder not in sys.path:
+            sys.path.insert(0, folder)
+        import drill_marcher
+
+        drill_marcher.build_show(scene)
+        return {}
     field = scene["field"]
     templates = build_templates()
     materials = {}
-    style = scene.get("figures") or "person"
     roots = {}
     legs = {}
     for person in scene["performers"]:
@@ -955,6 +966,14 @@ def render_movie_from_stills(path, samples):
 
 def main():
     options = parse_args()
+    if options.heroes_only:
+        folder = script_dir()
+        if folder not in sys.path:
+            sys.path.insert(0, folder)
+        import drill_marcher
+
+        drill_marcher.render_heroes(options.heroes or os.path.join(folder, "heroes"))
+        return
     data_path = options.data or os.path.join(script_dir(), "drill_scene.json")
     scene = load_scene(data_path)
     clear_scene()

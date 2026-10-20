@@ -12,6 +12,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub const SCENE_SCRIPT: &str = include_str!("blender_scene.py");
+pub const MARCHER_SCRIPT: &str = include_str!("drill_marcher.py");
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -158,9 +159,11 @@ pub struct BlenderKeyframe {
     pub y: f32,
     /// Yaw in radians. `0` faces the audience.
     pub facing: f32,
-    /// `0` or `1`, alternating marching step.
+    /// `0` or `1`, alternating marching step. The plant is on the count.
     pub step: u8,
     pub holding: bool,
+    /// `forward`, `back`, `mark`, `attention`, or `horn`.
+    pub gait: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -312,9 +315,15 @@ pub fn build_scene(document: &Document, options: &BlenderOptions) -> BlenderScen
             if !point.x.is_finite() || !point.y.is_finite() {
                 continue;
             }
-            let facing = match previous.get(index).and_then(|prior| *prior) {
-                Some((px, py)) if !holding => travel_yaw(point.x - px, point.y - py),
-                _ => 0.0,
+            let (dx, dy) = match previous.get(index).and_then(|prior| *prior) {
+                Some((px, py)) => (point.x - px, point.y - py),
+                None => (0.0, 0.0),
+            };
+            let gait = march_gait(dx, dy, holding);
+            let facing = if gait == "forward" {
+                travel_yaw(dx, dy)
+            } else {
+                0.0
             };
             if let Some(slot) = previous.get_mut(index) {
                 *slot = Some((point.x, point.y));
@@ -327,6 +336,7 @@ pub fn build_scene(document: &Document, options: &BlenderOptions) -> BlenderScen
                 facing,
                 step: (local.floor() as u32 % 2) as u8,
                 holding,
+                gait: gait.to_owned(),
             });
         }
     }
@@ -406,6 +416,20 @@ fn set_needs_dense_samples(set: &Set) -> bool {
         .any(|route| route.easing != Easing::Linear || !matches!(route.shape, RouteShape::Straight))
 }
 
+/// `forward` faces travel. `back` walks upfield while still facing the audience.
+/// A hold brings the horn up. Standing still is attention.
+fn march_gait(dx: f32, dy: f32, holding: bool) -> &'static str {
+    if holding {
+        "horn"
+    } else if dx.hypot(dy) < 0.04 {
+        "attention"
+    } else if dy > 0.05 && dy.abs() >= dx.abs() {
+        "back"
+    } else {
+        "forward"
+    }
+}
+
 /// `0` faces the audience (−Y). Moving toward +X is a quarter turn.
 fn travel_yaw(dx: f32, dy: f32) -> f32 {
     if dx.hypot(dy) < 0.04 {
@@ -429,48 +453,84 @@ fn field_kind(grid: &drill_core::GridConfig) -> &'static str {
     }
 }
 
-fn prop_for(name: &str, short: &str, kind: PerformerKind) -> &'static str {
+fn prop_hit(name: &str, short: &str, japanese: &[&str], english: &[&str]) -> bool {
     let lower_name = name.to_ascii_lowercase();
-    let rifle = name.contains("ライフル")
-        || short.eq_ignore_ascii_case("rifle")
-        || lower_name.contains("rifle");
-    let mallet = ["マレット", "マリンバ", "シロフォン", "木琴"]
-        .iter()
-        .any(|needle| name.contains(needle))
-        || short.eq_ignore_ascii_case("mallet")
-        || lower_name.contains("mallet");
-    let wood = [
-        "フルート",
-        "クラリ",
-        "サックス",
-        "オーボエ",
-        "ファゴット",
-        "木管",
-    ]
-    .iter()
-    .any(|needle| name.contains(needle))
-        || matches!(short, "Fl" | "Cl" | "Sx" | "Ob" | "Fg" | "FL" | "CL")
-        || ["flute", "clar", "sax", "oboe"]
-            .iter()
-            .any(|needle| lower_name.contains(needle));
+    let lower_short = short.to_ascii_lowercase();
+    japanese.iter().any(|needle| name.contains(needle))
+        || english.iter().any(|needle| {
+            lower_short == *needle
+                || lower_name
+                    .split(|ch: char| !ch.is_ascii_alphanumeric())
+                    .any(|word| word == *needle)
+        })
+}
+
+fn prop_for(name: &str, short: &str, kind: PerformerKind) -> &'static str {
+    if prop_hit(name, short, &["ライフル"], &["rifle"]) {
+        return "rifle";
+    }
+    if prop_hit(
+        name,
+        short,
+        &["マレット", "マリンバ", "シロフォン", "木琴"],
+        &["mallet"],
+    ) {
+        return "mallet";
+    }
+    if prop_hit(name, short, &["スネア"], &["snare"]) {
+        return "snare";
+    }
+    if prop_hit(name, short, &["テナー"], &["tenor"]) {
+        return "tenor";
+    }
+    if prop_hit(name, short, &["大太鼓", "バスドラム"], &["bass"]) {
+        return "bass";
+    }
+    if prop_hit(name, short, &["フルート"], &["flute", "fl"]) {
+        return "flute";
+    }
+    if prop_hit(name, short, &["クラリ"], &["clarinet", "cl"]) {
+        return "clarinet";
+    }
+    if prop_hit(name, short, &["サックス"], &["sax", "sx"]) {
+        return "sax";
+    }
+    if prop_hit(
+        name,
+        short,
+        &["チューバ", "スーザ"],
+        &["tuba", "tu", "sousaphone"],
+    ) {
+        return "tuba";
+    }
+    if prop_hit(
+        name,
+        short,
+        &["ホルン", "メロフォン"],
+        &["horn", "hr", "mellophone"],
+    ) {
+        return "mellophone";
+    }
+    if prop_hit(name, short, &["トロンボーン"], &["trombone", "tb"]) {
+        return "trombone";
+    }
+    if prop_hit(
+        name,
+        short,
+        &["ユーフォ", "バリトン"],
+        &["euphonium", "baritone", "eu"],
+    ) {
+        return "baritone";
+    }
+    if prop_hit(name, short, &["トランペット"], &["trumpet", "tp"]) {
+        return "trumpet";
+    }
     match kind {
-        PerformerKind::Guard => {
-            if rifle {
-                "rifle"
-            } else {
-                "flag"
-            }
-        }
-        PerformerKind::Percussion => {
-            if mallet {
-                "mallet"
-            } else {
-                "drum"
-            }
-        }
+        PerformerKind::Guard => "flag",
+        PerformerKind::Percussion => "drum",
         PerformerKind::Prop => "none",
         PerformerKind::Wind => {
-            if wood {
+            if prop_hit(name, short, &["木管", "オーボエ", "ファゴット"], &["oboe"]) {
                 "woodwind"
             } else {
                 "brass"
@@ -487,12 +547,13 @@ pub fn parse_scene(json: &str) -> Result<BlenderScene, serde_json::Error> {
     serde_json::from_str(json)
 }
 
-/// Writes `drill_scene.py` and `drill_scene.json` into `directory`.
+/// Writes `drill_scene.py`, `drill_marcher.py`, and `drill_scene.json` into `directory`.
 pub fn write_bundle(directory: &Path, scene: &BlenderScene) -> std::io::Result<(PathBuf, PathBuf)> {
     fs::create_dir_all(directory)?;
     let script = directory.join("drill_scene.py");
     let data = directory.join("drill_scene.json");
     fs::write(&script, SCENE_SCRIPT)?;
+    fs::write(directory.join("drill_marcher.py"), MARCHER_SCRIPT)?;
     fs::write(&data, scene_json(scene).map_err(std::io::Error::other)?)?;
     Ok((script, data))
 }
@@ -568,6 +629,18 @@ mod tests {
         assert_eq!(scene.field.kind, "floor");
         assert!(scene.performers.iter().all(|person| person.prop == "brass"));
         assert!(scene.keyframes.iter().any(|key| key.facing > 1.0));
+        assert!(
+            scene
+                .keyframes
+                .iter()
+                .any(|key| key.gait == "forward" && key.facing > 1.0)
+        );
+        assert!(
+            scene
+                .keyframes
+                .iter()
+                .any(|key| key.frame == 1 && key.gait == "attention")
+        );
         assert!(!scene.cues.is_empty());
     }
 
@@ -590,6 +663,16 @@ mod tests {
         assert!(text.contains("MPEG4"));
         assert!(text.contains("use_gtao"));
         assert!(text.contains("shako"));
+        assert!(text.contains("drill_marcher"));
+        assert!(text.contains("heroes-only"));
+        let marcher = fs::read_to_string(directory.join("drill_marcher.py")).unwrap();
+        assert_eq!(marcher, MARCHER_SCRIPT);
+        assert!(marcher.contains("MarcherRig"));
+        assert!(marcher.contains("march.forward"));
+        assert!(marcher.contains("march.back"));
+        assert!(marcher.contains("march.mark"));
+        assert!(marcher.contains("march.attention"));
+        assert!(marcher.contains("march.horn"));
         let loaded = parse_scene(&fs::read_to_string(&data).unwrap()).unwrap();
         assert_eq!(loaded, scene);
         let _ = fs::remove_dir_all(&directory);
@@ -604,7 +687,7 @@ mod tests {
             scene
                 .keyframes
                 .iter()
-                .any(|key| key.holding && key.facing == 0.0)
+                .any(|key| key.holding && key.facing == 0.0 && key.gait == "horn")
         );
         assert!(
             scene
@@ -657,7 +740,68 @@ mod tests {
         document.performers[0].kind = PerformerKind::Wind;
         assert_eq!(
             build_scene(&document, &BlenderOptions::default()).performers[0].prop,
-            "woodwind"
+            "flute"
         );
+        document.sections[0].name = "トランペット".into();
+        assert_eq!(
+            build_scene(&document, &BlenderOptions::default()).performers[0].prop,
+            "trumpet"
+        );
+        document.sections[0].name = "ホルン".into();
+        assert_eq!(
+            build_scene(&document, &BlenderOptions::default()).performers[0].prop,
+            "mellophone"
+        );
+        document.sections[0].name = "トロンボーン".into();
+        assert_eq!(
+            build_scene(&document, &BlenderOptions::default()).performers[0].prop,
+            "trombone"
+        );
+        document.sections[0].name = "ユーフォニアム".into();
+        assert_eq!(
+            build_scene(&document, &BlenderOptions::default()).performers[0].prop,
+            "baritone"
+        );
+        document.sections[0].name = "チューバ".into();
+        assert_eq!(
+            build_scene(&document, &BlenderOptions::default()).performers[0].prop,
+            "tuba"
+        );
+        document.sections[0].name = "サックス".into();
+        assert_eq!(
+            build_scene(&document, &BlenderOptions::default()).performers[0].prop,
+            "sax"
+        );
+        document.sections[0].name = "クラリネット".into();
+        assert_eq!(
+            build_scene(&document, &BlenderOptions::default()).performers[0].prop,
+            "clarinet"
+        );
+        document.sections[0].name = "スネア".into();
+        document.performers[0].kind = PerformerKind::Percussion;
+        assert_eq!(
+            build_scene(&document, &BlenderOptions::default()).performers[0].prop,
+            "snare"
+        );
+        document.sections[0].name = "マレット".into();
+        assert_eq!(
+            build_scene(&document, &BlenderOptions::default()).performers[0].prop,
+            "mallet"
+        );
+    }
+
+    #[test]
+    fn backward_march_faces_the_audience() {
+        let mut document = two_step_show();
+        document.sets[0].positions = vec![Point { x: 2.0, y: 2.0 }, Point { x: 4.0, y: 2.0 }];
+        document.sets[1].positions = vec![Point { x: 2.0, y: 8.0 }, Point { x: 4.0, y: 8.0 }];
+        let scene = build_scene(&document, &BlenderOptions::default());
+        assert!(
+            scene
+                .keyframes
+                .iter()
+                .any(|key| key.gait == "back" && key.facing == 0.0)
+        );
+        assert!(scene.keyframes.iter().all(|key| key.facing == 0.0));
     }
 }
