@@ -2416,23 +2416,46 @@ impl DrillApp {
             .get(index)
             .map(|set| set.name.as_str())
             .unwrap_or("");
-        let (rect, mut response) =
-            ui.allocate_exact_size(egui::Vec2::new(SIMPLE_HIT, SIMPLE_HIT), Sense::click());
+        let counts = self
+            .document
+            .sets
+            .get(index)
+            .map(|set| set.counts)
+            .unwrap_or(0);
+        let move_counts = scene_chip_counts(self.document.sets.len(), index, counts);
+        let (rect, mut response) = ui.allocate_exact_size(
+            egui::Vec2::new(SIMPLE_HIT, SIMPLE_HIT + 16.0),
+            Sense::click(),
+        );
+        let center = egui::pos2(rect.center().x, rect.top() + SIMPLE_HIT * 0.5);
         let radius = if current { 18.0 } else { 11.0 };
         let fill = if current { SIMPLE_BLUE } else { Color32::WHITE };
         let ink = if current { Color32::WHITE } else { SIMPLE_INK };
-        ui.painter().circle_filled(rect.center(), radius, fill);
+        ui.painter().circle_filled(center, radius, fill);
         if !current {
             ui.painter()
-                .circle_stroke(rect.center(), radius, Stroke::new(1.5, SIMPLE_BLUE));
+                .circle_stroke(center, radius, Stroke::new(1.5, SIMPLE_BLUE));
         }
         ui.painter().text(
-            rect.center(),
+            center,
             egui::Align2::CENTER_CENTER,
             (index + 1).to_string(),
             egui::FontId::proportional(if current { 18.0 } else { 13.0 }),
             ink,
         );
+        if let Some(counts) = move_counts {
+            ui.painter().text(
+                egui::pos2(rect.center().x, rect.bottom() - 7.0),
+                egui::Align2::CENTER_CENTER,
+                counts.to_string(),
+                egui::FontId::proportional(12.0),
+                if current {
+                    SIMPLE_BLUE
+                } else {
+                    Color32::from_rgb(70, 78, 92)
+                },
+            );
+        }
         response = response.on_hover_text(simple_chip_caption(stored, index));
         if response.clicked() && !current {
             self.simple_mode.overlap_note = false;
@@ -9462,6 +9485,16 @@ fn simple_transition_seconds(document: &drill_core::Document, set_index: usize) 
 }
 
 /// Plain text of where everyone stands, to paste into a message. Nothing is written.
+/// Counts of the move leaving this picture. The last picture is a pose, so
+/// it has no length to show under the chip.
+fn scene_chip_counts(set_count: usize, index: usize, counts: u16) -> Option<u16> {
+    if index + 1 >= set_count {
+        None
+    } else {
+        Some(counts)
+    }
+}
+
 fn simple_chip_caption(name: &str, index: usize) -> String {
     let number = (index + 1).to_string();
     let custom = simple_scene_name_draft(name);
@@ -12799,6 +12832,14 @@ mod tests {
         );
         doc.sets[0].counts = 160;
         assert_eq!(simple_show_seconds(&doc), Some(80));
+        let show = qa_cast_document();
+        let lengths: Vec<Option<u16>> = (0..show.sets.len())
+            .map(|index| scene_chip_counts(show.sets.len(), index, show.sets[index].counts))
+            .collect();
+        assert_eq!(
+            lengths,
+            vec![Some(16), Some(12), Some(24), Some(8), Some(32), None]
+        );
         assert_eq!(simple_chip_caption("セット 3", 0), "1");
         assert_eq!(simple_chip_caption("サビ", 1), "2 サビ");
         assert_eq!(
