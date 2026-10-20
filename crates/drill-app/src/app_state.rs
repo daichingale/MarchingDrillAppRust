@@ -4242,7 +4242,36 @@ impl DrillApp {
         app.keybindings.load();
         app.apply_qa_simple_fixture();
         app.apply_qa_keys();
+        app.apply_qa_collab();
         app
+    }
+
+    /// Screenshot harness. `DRILLFORGE_QA_COLLAB=wss://host:port|room` opens
+    /// the full field on the demo show and joins that room.
+    fn apply_qa_collab(&mut self) {
+        let Ok(raw) = std::env::var("DRILLFORGE_QA_COLLAB") else {
+            return;
+        };
+        let Some((host, room)) = raw.split_once('|') else {
+            return;
+        };
+        if host.is_empty() || room.is_empty() {
+            return;
+        }
+        self.onboarding.show_welcome = false;
+        self.onboarding.coach_dismissed = true;
+        self.onboarding.welcome_seen = true;
+        self.show_guidance = false;
+        self.set_simple_mode(false);
+        self.simple_mode.return_hint = false;
+        self.full_legacy_chrome = false;
+        self.full_inspector_collapsed = true;
+        self.full_timeline_expanded = false;
+        self.install_document(drill_core::Document::demo(2, 4));
+        self.presence.host_input = host.to_owned();
+        self.presence.room_input = room.to_owned();
+        self.presence.force_display_name("PC");
+        let _ = self.presence.connect();
     }
 
     fn execute_edit(&mut self, edit: Edit, failure: &str) -> bool {

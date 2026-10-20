@@ -6,12 +6,16 @@ use crate::{CoalescedOutbox, RoomEvent, socket_url};
 use std::io::ErrorKind;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::thread::JoinHandle;
 use std::time::Duration;
 use tungstenite::client::IntoClientRequest;
+use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
+
+type RoomSocket = WebSocket<MaybeTlsStream<TcpStream>>;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -133,7 +137,7 @@ impl Worker {
         let mut backoff = BACKOFF_MIN;
         while !self.stopping() {
             self.set_status(ConnectionStatus::Connecting);
-            match dial(&self.url) {
+            match dial_socket(&self.url, POLL_INTERVAL) {
                 Ok(socket) => {
                     backoff = BACKOFF_MIN;
                     self.set_status(ConnectionStatus::Connected);
@@ -151,7 +155,7 @@ impl Worker {
         self.set_status(ConnectionStatus::Disconnected);
     }
 
-    fn serve(&mut self, mut socket: WebSocket<TcpStream>) {
+    fn serve(&mut self, mut socket: RoomSocket) {
         while !self.stopping() {
             if !self.drain_outbound() {
                 break;
@@ -195,7 +199,7 @@ impl Worker {
         self.pending.push(event);
     }
 
-    fn flush_pending(&mut self, socket: &mut WebSocket<TcpStream>) -> bool {
+    fn flush_pending(&mut self, socket: &mut RoomSocket) -> bool {
         let now = std::time::Instant::now();
         while let Some(event) = self.pending.pop_ready(now) {
             let Ok(json) = event.to_json() else {
@@ -252,13 +256,36 @@ fn is_retryable(error: &tungstenite::Error) -> bool {
     )
 }
 
-fn dial(url: &str) -> Result<WebSocket<TcpStream>, String> {
+static EXTRA_ROOTS: OnceLock<Vec<rustls::pki_types::CertificateDer<'static>>> = OnceLock::new();
+
+/// Trust one extra PEM certificate for `wss://`, on top of the public roots.
+///
+/// Used by the loopback TLS test and by `DRILLFORGE_TLS_CA` for a private
+/// relay certificate. Verification stays on: an untrusted certificate is
+/// still rejected. Calling this twice in one process fails.
+pub fn trust_extra_roots(pem: &[u8]) -> Result<(), String> {
+    let certs = parse_certs(pem)?;
+    EXTRA_ROOTS
+        .set(certs)
+        .map_err(|_| "extra roots are already installed".to_owned())
+}
+
+/// Opens one room socket with a connect timeout.
+///
+/// `wss://` is rustls with the public web roots, plus any certificate passed
+/// to [`trust_extra_roots`] or named by `DRILLFORGE_TLS_CA`. `ws://` stays a
+/// plain socket for a school LAN. `tungstenite::connect` is not used because
+/// it has no connect timeout.
+pub fn dial_socket(url: &str, poll_timeout: Duration) -> Result<RoomSocket, String> {
     let request = url
         .into_client_request()
         .map_err(|error| format!("invalid relay address: {error}"))?;
-    let uri = request.uri();
+    let uri = request.uri().clone();
+    let secure = uri.scheme_str() == Some("wss");
     let host = uri.host().ok_or("relay address has no host")?.to_owned();
-    let port = uri.port_u16().unwrap_or(DEFAULT_PORT);
+    let port = uri
+        .port_u16()
+        .unwrap_or(if secure { 443 } else { DEFAULT_PORT });
     let address = (host.as_str(), port)
         .to_socket_addrs()
         .map_err(|error| format!("cannot resolve {host}: {error}"))?
@@ -270,13 +297,61 @@ fn dial(url: &str) -> Result<WebSocket<TcpStream>, String> {
     stream
         .set_read_timeout(Some(HANDSHAKE_TIMEOUT))
         .map_err(|error| error.to_string())?;
-    let (socket, _response) =
-        tungstenite::client(request, stream).map_err(|error| error.to_string())?;
-    socket
-        .get_ref()
-        .set_read_timeout(Some(POLL_INTERVAL))
-        .map_err(|error| error.to_string())?;
+    let connector = if secure {
+        tungstenite::Connector::Rustls(client_config()?)
+    } else {
+        tungstenite::Connector::Plain
+    };
+    let (mut socket, _response) =
+        tungstenite::client_tls_with_config(request, stream, None, Some(connector))
+            .map_err(|error| error.to_string())?;
+    set_read_timeout(socket.get_mut(), poll_timeout)?;
     Ok(socket)
+}
+
+fn client_config() -> Result<Arc<rustls::ClientConfig>, String> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let mut roots = rustls::RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    if let Some(extra) = EXTRA_ROOTS.get() {
+        for cert in extra {
+            let _ = roots.add(cert.clone());
+        }
+    }
+    if let Ok(path) = std::env::var("DRILLFORGE_TLS_CA") {
+        let pem = std::fs::read(&path).map_err(|error| format!("cannot read {path}: {error}"))?;
+        for cert in parse_certs(&pem)? {
+            let _ = roots.add(cert);
+        }
+    }
+    Ok(Arc::new(
+        rustls::ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth(),
+    ))
+}
+
+fn parse_certs(pem: &[u8]) -> Result<Vec<rustls::pki_types::CertificateDer<'static>>, String> {
+    let certs = rustls_pemfile::certs(&mut std::io::Cursor::new(pem))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("certificate: {error}"))?;
+    if certs.is_empty() {
+        return Err("certificate PEM contained no certificate".into());
+    }
+    Ok(certs)
+}
+
+fn set_read_timeout(
+    stream: &mut MaybeTlsStream<TcpStream>,
+    timeout: Duration,
+) -> Result<(), String> {
+    let tcp = match stream {
+        MaybeTlsStream::Plain(tcp) => tcp,
+        MaybeTlsStream::Rustls(tls) => &mut tls.sock,
+        _ => return Err("this relay socket has no TCP timeout".into()),
+    };
+    tcp.set_read_timeout(Some(timeout))
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -291,5 +366,13 @@ mod tests {
             .hello("A", [0, 0, 0]);
         let client = SyncClient::connect("ws://127.0.0.1:9/", "Brass Night", hello);
         assert_eq!(client.url(), "ws://127.0.0.1:9/room/brassnight");
+    }
+
+    #[test]
+    fn a_wss_host_keeps_the_secure_scheme() {
+        let hello = ShowState::from_document(&Document::demo(1, 1), ReplicaId::from_raw(1))
+            .hello("A", [0, 0, 0]);
+        let client = SyncClient::connect("wss://127.0.0.1:9", "Brass Night", hello);
+        assert_eq!(client.url(), "wss://127.0.0.1:9/room/brassnight");
     }
 }

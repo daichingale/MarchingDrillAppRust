@@ -21,13 +21,13 @@
 mod client;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use client::{ConnectionStatus, SyncClient};
+pub use client::{ConnectionStatus, SyncClient, dial_socket, trust_extra_roots};
 
 use drill_core::{Document, Edit, PerformerId, Point, SetCounts, SetId};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, VecDeque};
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 /// How often a coalesced drag is allowed onto the wire.
 ///
@@ -671,19 +671,30 @@ fn move_dot(event: &RoomEvent) -> Option<DotId> {
 
 /// `ws://` or `wss://` URL for `/room/<code>`.
 ///
-/// `secure` picks the scheme. Callers strip a typed scheme first: the desktop
-/// client has no TLS stack, so it always passes `false`. Room codes follow
-/// the same folding as presence.
+/// A typed `wss://` or `https://` host stays on TLS. A typed `ws://` or
+/// `http://` stays plain. A bare host uses `secure`, which a browser sets
+/// from the page. Room codes follow the same folding as presence.
 #[must_use]
 pub fn socket_url(host: &str, room: &str, secure: bool) -> String {
-    let host = host.trim().trim_end_matches('/');
-    let host = host
+    let trimmed = host.trim().trim_end_matches('/');
+    let explicit = if trimmed.starts_with("wss://") || trimmed.starts_with("https://") {
+        Some(true)
+    } else if trimmed.starts_with("ws://") || trimmed.starts_with("http://") {
+        Some(false)
+    } else {
+        None
+    };
+    let host = trimmed
         .strip_prefix("wss://")
-        .or_else(|| host.strip_prefix("ws://"))
-        .or_else(|| host.strip_prefix("https://"))
-        .or_else(|| host.strip_prefix("http://"))
-        .unwrap_or(host);
-    let scheme = if secure { "wss" } else { "ws" };
+        .or_else(|| trimmed.strip_prefix("ws://"))
+        .or_else(|| trimmed.strip_prefix("https://"))
+        .or_else(|| trimmed.strip_prefix("http://"))
+        .unwrap_or(trimmed);
+    let scheme = if explicit.unwrap_or(secure) {
+        "wss"
+    } else {
+        "ws"
+    };
     format!("{scheme}://{host}/room/{}", normalize_room_code(room))
 }
 
@@ -738,6 +749,26 @@ mod tests {
         let alice = ShowState::from_document(&document, ReplicaId::from_raw(1));
         let bob = ShowState::from_document(&document, ReplicaId::from_raw(2));
         (document, alice, bob)
+    }
+
+    #[test]
+    fn a_typed_wss_host_stays_on_tls() {
+        assert_eq!(
+            socket_url("wss://relay.example", "Brass Night", false),
+            "wss://relay.example/room/brassnight"
+        );
+        assert_eq!(
+            socket_url("https://relay.example:443/", "brass", false),
+            "wss://relay.example:443/room/brass"
+        );
+        assert_eq!(
+            socket_url("ws://127.0.0.1:8787", "brass", true),
+            "ws://127.0.0.1:8787/room/brass"
+        );
+        assert_eq!(
+            socket_url("127.0.0.1:8787", "brass", true),
+            "wss://127.0.0.1:8787/room/brass"
+        );
     }
 
     #[test]

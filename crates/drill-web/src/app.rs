@@ -6,10 +6,13 @@ use crate::touch::{
     FieldView, apply_two_finger, chrome_is_compact, dot_radius, hit_radius, pick_performer,
 };
 use drill_core::{Document, Point};
+#[cfg(target_arch = "wasm32")]
+use drill_presence::PresenceMessage;
+use drill_presence::{Presence, UserId};
 use drill_render::{FieldMap, Vec2};
 use drill_sync::{DotId, ReplicaId, RoomEvent, ShowState};
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, Vec2 as EVec2};
-use std::time::Instant;
+use web_time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const INK: Color32 = Color32::from_rgb(32, 36, 44);
 const BLUE: Color32 = Color32::from_rgb(20, 96, 200);
@@ -44,6 +47,12 @@ pub struct PhoneApp {
     view_only: bool,
     editor_limit: u16,
     last_hello: Option<Instant>,
+    peer_name: String,
+    peer_color: [u8; 3],
+    #[cfg(target_arch = "wasm32")]
+    peers: Vec<Presence>,
+    #[cfg(target_arch = "wasm32")]
+    last_presence: Option<Instant>,
     #[cfg(not(target_arch = "wasm32"))]
     relay: Option<drill_sync::SyncClient>,
     #[cfg(target_arch = "wasm32")]
@@ -60,6 +69,8 @@ impl PhoneApp {
     #[must_use]
     pub fn new() -> Self {
         let mut app = Self::from_document(Document::demo(2, 4));
+        #[cfg(target_arch = "wasm32")]
+        apply_page_query(&mut app);
         match std::env::var("DRILLFORGE_WEB_QA").ok().as_deref() {
             Some("split") => app.install_split(),
             Some("phone") => app.selected = Some(0),
@@ -80,6 +91,7 @@ impl PhoneApp {
             .unwrap_or(&[]);
         let view = FieldView::frame_cast(document.grid.width, document.grid.height, positions);
         let show = ShowState::from_document(&document, ReplicaId::from_raw(replica_seed()));
+        let peer_color = drill_presence::palette_color_for(UserId::from_raw(show.replica().get()));
         Self {
             document,
             show,
@@ -101,6 +113,12 @@ impl PhoneApp {
             view_only: false,
             editor_limit: 0,
             last_hello: None,
+            peer_name: "スマホ".into(),
+            peer_color,
+            #[cfg(target_arch = "wasm32")]
+            peers: Vec::new(),
+            #[cfg(target_arch = "wasm32")]
+            last_presence: None,
             relay: None,
         }
     }
@@ -287,6 +305,8 @@ impl PhoneApp {
 
     fn poll_room(&mut self) {
         self.announce_if_due();
+        self.poll_presence();
+        self.publish_presence();
         let mut events = Vec::new();
         if let Some(client) = self.relay.as_mut() {
             while let Some(event) = client.poll() {
@@ -326,13 +346,11 @@ impl PhoneApp {
         }
         let due = self
             .last_hello
-            .is_none_or(|last| last.elapsed() >= std::time::Duration::from_secs(2));
+            .is_none_or(|last| last.elapsed() >= Duration::from_secs(2));
         if !due {
             return;
         }
-        let hello = self
-            .show
-            .hello(word(self.ja, "スマホ", "Phone"), [242, 116, 116]);
+        let hello = self.show.hello(&self.peer_name, self.peer_color);
         self.publish(hello);
         self.last_hello = Some(Instant::now());
     }
@@ -346,10 +364,8 @@ impl PhoneApp {
         }
         self.room = room;
         self.view_only = false;
-        let hello = self
-            .show
-            .hello(word(self.ja, "スマホ", "Phone"), [242, 116, 116]);
-        let secure = page_is_https();
+        let hello = self.show.hello(&self.peer_name, self.peer_color);
+        let secure = page_is_https() || host_is_secure(self.host.trim());
         self.status = drill_sync::socket_url(self.host.trim(), &self.room, secure);
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -397,8 +413,7 @@ impl eframe::App for PhoneApp {
         self.poll_room();
         self.advance();
         if self.playing || self.relay.is_some() {
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(50));
+            ui.ctx().request_repaint_after(Duration::from_millis(50));
         }
 
         let full = ui.max_rect();
@@ -533,7 +548,8 @@ impl PhoneApp {
             self.suppress_drag = true;
             map = field_map(&self.document, rect, self.view);
         }
-        if response.drag_started() && ui.input(|input| input.multi_touch()).is_none() {
+        let tapping = response.clicked() || response.drag_started();
+        if tapping && ui.input(|input| input.multi_touch()).is_none() {
             self.suppress_drag = false;
             let local = response
                 .interact_pointer_pos()
@@ -568,7 +584,20 @@ impl PhoneApp {
             self.selected,
             BLUE,
             None,
+            self.peer_marks(),
         );
+        if self.view_only {
+            let banner = Rect::from_min_size(rect.min, EVec2::new(rect.width(), 48.0));
+            ui.painter()
+                .rect_filled(banner, 0.0, Color32::from_rgb(255, 244, 214));
+            ui.scope_builder(egui::UiBuilder::new().max_rect(banner.shrink(8.0)), |ui| {
+                ui.label(
+                    egui::RichText::new(viewer_message(self.ja, self.editor_limit))
+                        .size(14.0)
+                        .color(INK),
+                );
+            });
+        }
     }
 
     fn split_body(&mut self, ui: &mut egui::Ui, rect: Rect) {
@@ -602,6 +631,7 @@ impl PhoneApp {
                 Some(0),
                 Color32::from_rgb(242, 116, 116),
                 Some("A"),
+                &[],
             );
         }
         if let Some(positions) = right_positions {
@@ -614,6 +644,7 @@ impl PhoneApp {
                 Some(1),
                 Color32::from_rgb(104, 197, 232),
                 Some("B"),
+                &[],
             );
         }
     }
@@ -655,6 +686,7 @@ fn paint_field(
     selected: Option<usize>,
     ring: Color32,
     cursor: Option<&str>,
+    peers: &[Presence],
 ) {
     let painter = ui.painter().with_clip_rect(rect);
     painter.rect_filled(rect, 0.0, GRASS);
@@ -705,6 +737,7 @@ fn paint_field(
             FontId::proportional(10.0),
             Color32::from_rgb(20, 24, 28),
         );
+        paint_peer_marks(&painter, pos, performer.id, peers);
     }
     if let (Some(label), Some(index)) = (cursor, selected)
         && let Some(point) = positions.get(index).copied()
@@ -742,12 +775,132 @@ fn word(ja: bool, ja_text: &'static str, en_text: &'static str) -> &'static str 
     if ja { ja_text } else { en_text }
 }
 
+impl PhoneApp {
+    fn peer_marks(&self) -> &[Presence] {
+        #[cfg(target_arch = "wasm32")]
+        {
+            &self.peers
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            &[]
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn poll_presence(&mut self) {
+        let Some(client) = self.relay.as_mut() else {
+            return;
+        };
+        let mut messages = Vec::new();
+        while let Some(message) = client.poll_presence() {
+            messages.push(message);
+        }
+        for message in messages {
+            match message {
+                PresenceMessage::Update(presence) => {
+                    if let Some(slot) = self
+                        .peers
+                        .iter_mut()
+                        .find(|peer| peer.user_id == presence.user_id)
+                    {
+                        *slot = presence;
+                    } else {
+                        self.peers.push(presence);
+                    }
+                }
+                PresenceMessage::Leave(user) => {
+                    self.peers.retain(|peer| peer.user_id != user);
+                }
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn poll_presence(&mut self) {}
+
+    #[cfg(target_arch = "wasm32")]
+    fn publish_presence(&mut self) {
+        if self.relay.is_none() {
+            return;
+        }
+        let due = self
+            .last_presence
+            .is_none_or(|last| last.elapsed() >= Duration::from_millis(50));
+        if !due {
+            return;
+        }
+        let selected = self.selected.and_then(|index| {
+            self.document
+                .performers
+                .get(index)
+                .map(|performer| performer.id)
+        });
+        let cursor = self
+            .selected
+            .and_then(|index| self.positions_now().get(index).copied());
+        let mut presence = Presence::new(
+            UserId::from_raw(self.show.replica().get()),
+            self.peer_name.clone(),
+            self.peer_color,
+        );
+        presence.current_set = self.current_set;
+        presence.selected_performers = selected.into_iter().collect();
+        presence.cursor = cursor;
+        let Ok(json) = PresenceMessage::Update(presence).to_json() else {
+            return;
+        };
+        if let Some(client) = &self.relay {
+            client.send_text(&json);
+        }
+        self.last_presence = Some(Instant::now());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn publish_presence(&mut self) {}
+}
+
+fn paint_peer_marks(
+    painter: &egui::Painter,
+    pos: Pos2,
+    performer: drill_core::PerformerId,
+    peers: &[Presence],
+) {
+    let mut ring = 0.0;
+    for peer in peers {
+        if !peer.selected_performers.contains(&performer) {
+            continue;
+        }
+        let color = Color32::from_rgb(peer.color[0], peer.color[1], peer.color[2]);
+        painter.circle_stroke(pos, 22.0 + ring, Stroke::new(3.0, color));
+        ring += 4.0;
+        if peer.selected_performers.first() == Some(&performer) {
+            let chip = pos + EVec2::new(-18.0, -18.0);
+            painter.circle_filled(chip, 11.0, color);
+            painter.text(
+                chip,
+                Align2::CENTER_CENTER,
+                peer.initial().to_string(),
+                FontId::proportional(12.0),
+                Color32::from_rgb(20, 24, 28),
+            );
+        }
+        if ring > 12.0 {
+            break;
+        }
+    }
+}
+
 fn viewer_message(ja: bool, limit: u16) -> String {
     if ja {
         format!("この部屋の編集は{limit}人までです。見学で参加しています。")
     } else {
         format!("This room already has {limit} editors. You are watching.")
     }
+}
+
+fn host_is_secure(host: &str) -> bool {
+    host.starts_with("wss://") || host.starts_with("https://")
 }
 
 fn page_is_https() -> bool {
@@ -763,9 +916,86 @@ fn page_is_https() -> bool {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+fn apply_page_query(app: &mut PhoneApp) {
+    let params = page_query();
+    let value = |key: &str| {
+        params
+            .iter()
+            .find(|(name, _)| name == key)
+            .map(|(_, item)| item.clone())
+    };
+    if let Some(host) = value("host") {
+        app.host = host;
+    }
+    if let Some(room) = value("room") {
+        app.room = room;
+    }
+    if let Some(name) = value("name")
+        && !name.trim().is_empty()
+    {
+        app.peer_name = name;
+    }
+    if value("menu").as_deref() == Some("1") {
+        app.more = true;
+    }
+    if value("join").as_deref() == Some("1") && !app.room.trim().is_empty() {
+        app.join_room();
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn page_query() -> Vec<(String, String)> {
+    let search = web_sys::window()
+        .and_then(|window| window.location().search().ok())
+        .unwrap_or_default();
+    let search = search.trim_start_matches('?');
+    if search.is_empty() {
+        return Vec::new();
+    }
+    search
+        .split('&')
+        .map(|pair| {
+            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+            (percent_decode(key), percent_decode(value))
+        })
+        .collect()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn percent_decode(raw: &str) -> String {
+    let mut bytes = Vec::new();
+    let input = raw.as_bytes();
+    let mut index = 0;
+    while index < input.len() {
+        match input[index] {
+            b'+' => {
+                bytes.push(b' ');
+                index += 1;
+            }
+            b'%' if index + 2 < input.len() => {
+                let hex = &raw[index + 1..index + 3];
+                if let Ok(value) = u8::from_str_radix(hex, 16) {
+                    bytes.push(value);
+                    index += 3;
+                } else {
+                    bytes.push(b'%');
+                    index += 1;
+                }
+            }
+            byte => {
+                bytes.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8(bytes)
+        .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned())
+}
+
 fn replica_seed() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_nanos() as u64)
         .unwrap_or(1)
         | 1

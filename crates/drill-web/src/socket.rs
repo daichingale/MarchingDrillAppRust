@@ -1,19 +1,21 @@
 //! Browser socket for the same [`drill_sync::RoomEvent`] values the desktop
 //! sends. The page's WebSocket stack speaks `wss://` when the page is https.
 
+use drill_presence::PresenceMessage;
 use drill_sync::{CoalescedOutbox, RoomEvent};
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
-use std::time::Instant;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
+use web_time::Instant;
 
 const INBOUND_CAP: usize = 512;
 
 pub struct BrowserClient {
     socket: web_sys::WebSocket,
     inbound: Rc<RefCell<VecDeque<RoomEvent>>>,
+    presence: Rc<RefCell<VecDeque<PresenceMessage>>>,
     outbox: RefCell<CoalescedOutbox>,
     open: Rc<Cell<bool>>,
     _on_message: Closure<dyn FnMut(web_sys::MessageEvent)>,
@@ -25,18 +27,27 @@ impl BrowserClient {
         let url = drill_sync::socket_url(host, room, page_is_https(host));
         let socket = web_sys::WebSocket::new(&url).ok()?;
         let inbound = Rc::new(RefCell::new(VecDeque::new()));
+        let presence = Rc::new(RefCell::new(VecDeque::new()));
         let queue = Rc::clone(&inbound);
+        let presence_queue = Rc::clone(&presence);
         let on_message = Closure::wrap(Box::new(move |event: web_sys::MessageEvent| {
             let Some(text) = event.data().as_string() else {
                 return;
             };
-            let Ok(parsed) = RoomEvent::from_json(&text) else {
+            if let Ok(parsed) = RoomEvent::from_json(&text) {
+                let mut queue = queue.borrow_mut();
+                queue.push_back(parsed);
+                while queue.len() > INBOUND_CAP {
+                    queue.pop_front();
+                }
                 return;
-            };
-            let mut queue = queue.borrow_mut();
-            queue.push_back(parsed);
-            while queue.len() > INBOUND_CAP {
-                queue.pop_front();
+            }
+            if let Ok(message) = PresenceMessage::from_json(&text) {
+                let mut queue = presence_queue.borrow_mut();
+                queue.push_back(message);
+                while queue.len() > INBOUND_CAP {
+                    queue.pop_front();
+                }
             }
         }) as Box<dyn FnMut(web_sys::MessageEvent)>);
         socket.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
@@ -51,6 +62,7 @@ impl BrowserClient {
         Some(Self {
             socket,
             inbound,
+            presence,
             outbox: RefCell::new(outbox),
             open,
             _on_message: on_message,
@@ -66,6 +78,18 @@ impl BrowserClient {
     pub fn poll(&mut self) -> Option<RoomEvent> {
         self.flush();
         self.inbound.borrow_mut().pop_front()
+    }
+
+    pub fn poll_presence(&mut self) -> Option<PresenceMessage> {
+        self.flush();
+        self.presence.borrow_mut().pop_front()
+    }
+
+    pub fn send_text(&self, text: &str) {
+        if !self.open.get() || self.socket.ready_state() != web_sys::WebSocket::OPEN {
+            return;
+        }
+        let _ = self.socket.send_with_str(text);
     }
 
     fn flush(&self) {

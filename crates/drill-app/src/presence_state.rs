@@ -196,6 +196,16 @@ impl PresenceState {
         identity.persist();
     }
 
+    /// Sets the in-memory display name without writing the identity file.
+    pub(crate) fn force_display_name(&mut self, name: &str) {
+        let _ = self.identity();
+        if let Some(identity) = self.identity.as_mut() {
+            identity.display_name = name.to_owned();
+        }
+        self.name_input = name.to_owned();
+        self.name_dirty = false;
+    }
+
     /// Joins `room_input` on `host_input`. Returns the normalized room code on
     /// success, or `None` when the code was unusable.
     pub(crate) fn connect(&mut self) -> Option<String> {

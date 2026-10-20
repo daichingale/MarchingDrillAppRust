@@ -5,16 +5,18 @@
 //! with `try_recv` -- the same non-blocking contract as `drill_jobs::Job::poll`.
 //! Nothing here can block, join, or unwind into a frame.
 
-use crate::{Presence, PresenceMessage, room_path};
+use crate::{Presence, PresenceMessage};
 use std::io::ErrorKind;
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::TcpStream;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-use tungstenite::client::IntoClientRequest;
+use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
+
+type RoomSocket = WebSocket<MaybeTlsStream<TcpStream>>;
 
 /// Outbound rate limit, matched to collaborative drags.
 ///
@@ -37,10 +39,6 @@ const POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// which can take minutes. This heartbeat costs 0.2 messages/second per idle
 /// peer and lets receivers expire a silent peer on a human timescale.
 pub const HEARTBEAT: Duration = Duration::from_secs(5);
-
-/// Handshakes are one round trip on a LAN; anything slower is a dead relay.
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 const BACKOFF_MIN: Duration = Duration::from_millis(500);
 const BACKOFF_MAX: Duration = Duration::from_secs(8);
@@ -100,12 +98,7 @@ impl PresenceClient {
     #[must_use]
     pub fn connect(host: &str, room: &str, mut initial: Presence) -> Self {
         initial.sanitize();
-        let host = host.trim().trim_end_matches('/');
-        let host = host
-            .strip_prefix("ws://")
-            .or_else(|| host.strip_prefix("http://"))
-            .unwrap_or(host);
-        let url = format!("ws://{host}{}", room_path(room));
+        let url = drill_sync::socket_url(host, room, false);
 
         let (outgoing, outbound_rx) = mpsc::channel::<Presence>();
         let (inbound_tx, incoming) = mpsc::sync_channel::<PresenceMessage>(MAX_INBOUND_BACKLOG);
@@ -227,7 +220,7 @@ impl Worker {
     }
 
     /// Pumps one connection until it fails or shutdown is requested.
-    fn serve(&mut self, mut socket: WebSocket<TcpStream>) {
+    fn serve(&mut self, mut socket: RoomSocket) {
         let mut last_send = Instant::now() - SEND_INTERVAL;
         while !self.stopping() {
             if !self.drain_outbound() {
@@ -359,39 +352,8 @@ fn is_retryable(error: &tungstenite::Error) -> bool {
     )
 }
 
-/// Opens one connection with bounded timeouts.
-///
-/// `tungstenite::connect` is not used because it offers no connect timeout and
-/// no hook to configure the socket before the handshake; a wrong host would
-/// otherwise park the worker on the OS default for tens of seconds.
-fn dial(url: &str) -> Result<WebSocket<TcpStream>, String> {
-    let request = url
-        .into_client_request()
-        .map_err(|error| format!("invalid relay address: {error}"))?;
-    let uri = request.uri();
-    let host = uri.host().ok_or("relay address has no host")?.to_owned();
-    let port = uri.port_u16().unwrap_or(DEFAULT_PORT);
-
-    let address = (host.as_str(), port)
-        .to_socket_addrs()
-        .map_err(|error| format!("cannot resolve {host}: {error}"))?
-        .next()
-        .ok_or_else(|| format!("cannot resolve {host}"))?;
-
-    let stream = TcpStream::connect_timeout(&address, CONNECT_TIMEOUT)
-        .map_err(|error| format!("cannot reach relay: {error}"))?;
-    let _ = stream.set_nodelay(true);
-    stream
-        .set_read_timeout(Some(HANDSHAKE_TIMEOUT))
-        .map_err(|error| error.to_string())?;
-
-    let (socket, _response) =
-        tungstenite::client(request, stream).map_err(|error| error.to_string())?;
-    socket
-        .get_ref()
-        .set_read_timeout(Some(POLL_INTERVAL))
-        .map_err(|error| error.to_string())?;
-    Ok(socket)
+fn dial(url: &str) -> Result<RoomSocket, String> {
+    drill_sync::dial_socket(url, POLL_INTERVAL)
 }
 
 #[cfg(test)]
@@ -433,6 +395,16 @@ mod tests {
             Presence::new(UserId::from_raw(1), "A".into(), [0, 0, 0]),
         );
         assert_eq!(client.url(), "ws://relay.local:8787/room/drums");
+    }
+
+    #[test]
+    fn a_wss_host_stays_secure() {
+        let client = PresenceClient::connect(
+            "https://relay.example/",
+            "drums",
+            Presence::new(UserId::from_raw(1), "A".into(), [0, 0, 0]),
+        );
+        assert_eq!(client.url(), "wss://relay.example/room/drums");
     }
 
     #[test]

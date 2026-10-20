@@ -5,16 +5,18 @@
 //! decision this process makes: past the cap, a joiner watches. A drop still
 //! announces both a presence `Leave` and a sync `Leave`.
 //!
-//! Plain `ws://`, no accounts. Put a TLS reverse proxy in front of it before
-//! a phone on the public internet can connect. A stranger who can guess the
-//! room code can edit; room codes have to be unguessable.
+//! The listener is plain TCP unless [`serve_tls`] is given a certificate.
+//! Desktop and phone clients speak `wss://` with rustls when the host is
+//! written that way, so a public relay does not have to stay on the LAN.
+//! A stranger who can guess the room code can edit; room codes have to be
+//! unguessable.
 
 mod seats;
 
 use drill_presence::{PresenceMessage, Rooms, UserId, room_code_from_path};
 use drill_sync::{ReplicaId, RoomEvent};
 use seats::Seats;
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -59,6 +61,48 @@ pub fn serve_with_limit(listener: &TcpListener, limit: u16) {
     }
 }
 
+/// Same fanout as [`serve`], with the TCP listener wrapped in rustls.
+///
+/// `cert_pem` and `key_pem` are PEM bytes. The process exits the loop only
+/// when the listener closes. A bad certificate returns before any accept.
+pub fn serve_tls(listener: &TcpListener, cert_pem: &[u8], key_pem: &[u8]) -> Result<(), String> {
+    let config = tls_server_config(cert_pem, key_pem)?;
+    serve_tls_with_limit(listener, config, editor_limit());
+    Ok(())
+}
+
+fn serve_tls_with_limit(listener: &TcpListener, config: Arc<rustls::ServerConfig>, limit: u16) {
+    let rooms = Arc::new(Mutex::new(Rooms::new()));
+    let seats = Arc::new(Mutex::new(Seats::new(limit)));
+    for stream in listener.incoming() {
+        let Ok(stream) = stream else { continue };
+        let rooms = Arc::clone(&rooms);
+        let seats = Arc::clone(&seats);
+        let config = Arc::clone(&config);
+        let _ = std::thread::Builder::new()
+            .name("drill-relay-tls".into())
+            .spawn(move || serve_tls_connection(stream, config, &rooms, &seats));
+    }
+}
+
+fn tls_server_config(cert_pem: &[u8], key_pem: &[u8]) -> Result<Arc<rustls::ServerConfig>, String> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let certs = rustls_pemfile::certs(&mut std::io::Cursor::new(cert_pem))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("certificate: {error}"))?;
+    if certs.is_empty() {
+        return Err("certificate PEM contained no certificate".into());
+    }
+    let key = rustls_pemfile::private_key(&mut std::io::Cursor::new(key_pem))
+        .map_err(|error| format!("private key: {error}"))?
+        .ok_or_else(|| "private key PEM contained no key".to_owned())?;
+    let config = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .map_err(|error| format!("tls: {error}"))?;
+    Ok(Arc::new(config))
+}
+
 fn editor_limit() -> u16 {
     std::env::var("DRILLFORGE_EDITOR_LIMIT")
         .ok()
@@ -73,8 +117,40 @@ pub(crate) fn serve_connection(stream: TcpStream, rooms: &Mutex<Rooms>, seats: &
     if stream.set_read_timeout(Some(POLL_INTERVAL)).is_err() {
         return;
     }
+    let Some((socket, room)) = accept_room(stream) else {
+        return;
+    };
+    run_session(socket, rooms, seats, room);
+}
+
+fn serve_tls_connection(
+    stream: TcpStream,
+    config: Arc<rustls::ServerConfig>,
+    rooms: &Mutex<Rooms>,
+    seats: &Mutex<Seats>,
+) {
+    let _ = stream.set_nodelay(true);
+    if stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .is_err()
+    {
+        return;
+    }
+    let Ok(conn) = rustls::ServerConnection::new(config) else {
+        return;
+    };
+    let tls = rustls::StreamOwned::new(conn, stream);
+    let Some((mut socket, room)) = accept_room(tls) else {
+        return;
+    };
+    let _ = socket.get_mut().sock.set_read_timeout(Some(POLL_INTERVAL));
+    run_session(socket, rooms, seats, room);
+}
+
+#[allow(clippy::result_large_err)]
+fn accept_room<S: Read + Write>(stream: S) -> Option<(WebSocket<S>, String)> {
     let mut room = None;
-    let accepted = tungstenite::accept_hdr(
+    let socket = tungstenite::accept_hdr(
         stream,
         |request: &Request, response: Response| -> Result<Response, ErrorResponse> {
             match room_code_from_path(request.uri().path()) {
@@ -89,10 +165,16 @@ pub(crate) fn serve_connection(stream: TcpStream, rooms: &Mutex<Rooms>, seats: &
             }
         },
     )
-    .ok();
-    let (Some(socket), Some(room)) = (accepted, room) else {
-        return;
-    };
+    .ok()?;
+    Some((socket, room?))
+}
+
+fn run_session<S: Read + Write>(
+    socket: WebSocket<S>,
+    rooms: &Mutex<Rooms>,
+    seats: &Mutex<Seats>,
+    room: String,
+) {
     let conn = NEXT_CONN_ID.fetch_add(1, Ordering::Relaxed);
     let (outbox, inbox) = mpsc::sync_channel::<String>(MAX_OUTBOUND_BACKLOG);
     if let Ok(mut guard) = rooms.lock() {
@@ -124,8 +206,8 @@ struct Identity {
     replica: Option<ReplicaId>,
 }
 
-fn pump(
-    mut socket: WebSocket<TcpStream>,
+fn pump<S: Read + Write>(
+    mut socket: WebSocket<S>,
     inbox: &Receiver<String>,
     rooms: &Mutex<Rooms>,
     seats: &Mutex<Seats>,
@@ -184,7 +266,10 @@ fn send_direct(rooms: &Rooms, room: &str, decision: &seats::Decision) {
     }
 }
 
-fn drain_outbox(socket: &mut WebSocket<TcpStream>, inbox: &Receiver<String>) -> Result<(), ()> {
+fn drain_outbox<S: Read + Write>(
+    socket: &mut WebSocket<S>,
+    inbox: &Receiver<String>,
+) -> Result<(), ()> {
     loop {
         match inbox.try_recv() {
             Ok(payload) => {
