@@ -507,6 +507,7 @@ pub(crate) enum PhoneIcon {
     Book,
     Counts,
     Sheet,
+    Video,
 }
 
 fn simple_choice_button(
@@ -757,6 +758,18 @@ pub(crate) fn paint_phone_icon_at(
             painter.line_segment([p(4.0, -4.0), p(7.0, -4.0)], stroke);
             painter.line_segment([p(-3.0, -1.0), p(3.0, -1.0)], stroke);
             painter.line_segment([p(-3.0, 2.5), p(3.0, 2.5)], stroke);
+        }
+        PhoneIcon::Video => {
+            painter.rect_stroke(
+                egui::Rect::from_center_size(p(-1.0, 1.0), egui::vec2(16.0 * s, 11.0 * s)),
+                1.6 * s,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            painter.circle_stroke(p(-1.0, 1.0), 3.2 * s, stroke);
+            painter.circle_filled(p(-1.0, 1.0), 1.4 * s, color);
+            painter.line_segment([p(-7.0, -4.5), p(-2.5, -4.5)], stroke);
+            painter.line_segment([p(-2.5, -4.5), p(-2.5, -2.2)], stroke);
         }
     }
 }
@@ -1227,6 +1240,13 @@ impl DrillApp {
                 self.print_state.open = true;
                 self.full_inspector_collapsed = true;
             }
+            "cast-video" => {
+                self.set_simple_mode(true);
+                self.navigate_to_set(2);
+                self.nav_glide.settle();
+                self.print_state.open = true;
+                self.print_state.video = true;
+            }
             "cast-play" => {
                 self.navigate_to_set(1);
                 self.nav_glide.settle();
@@ -1255,7 +1275,7 @@ impl DrillApp {
     /// `guide-collapsed`, `guide-song`, `full-selected`, `full-collapsed`,
     /// `full-timeline`, `full-multi`, `full-list`, `full-export`, `cast`,
     /// `cast-full`, `cast-one`, `cast-many`, `cast-roster`, `cast-timeline`,
-    /// `cast-export`, `cast-play`, or `cast-play-mid`.
+    /// `cast-export`, `cast-video`, `cast-play`, or `cast-play-mid`.
     pub(crate) fn apply_qa_simple_fixture(&mut self) {
         let Ok(stage) = std::env::var("DRILLFORGE_QA_SIMPLE") else {
             return;
@@ -10015,6 +10035,31 @@ fn simple_song_seconds(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn write_cast_blender_bundle() {
+        let Ok(dir) = std::env::var("DRILLFORGE_BLENDER_OUT") else {
+            return;
+        };
+        let document = qa_cast_document();
+        let options = drill_export::blender::BlenderOptions {
+            figures: drill_export::blender::FigureStyle::Person,
+            camera: drill_export::blender::BlenderCamera::PressBox,
+            quality: drill_export::blender::RenderQuality::Fine,
+            fps: 24,
+            width: 1280,
+            height: 720,
+            ..drill_export::blender::BlenderOptions::default()
+        };
+        let scene = drill_export::blender::build_scene(&document, &options);
+        let (script, data) =
+            drill_export::blender::write_bundle(std::path::Path::new(&dir), &scene)
+                .expect("bundle");
+        assert!(script.exists());
+        assert!(data.exists());
+        assert_eq!(scene.performers.len(), 80);
+        assert!(scene.keyframes.len() > 80);
+    }
 
     fn empty_simple_app() -> DrillApp {
         let mut app = DrillApp {

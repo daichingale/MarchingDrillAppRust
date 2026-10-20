@@ -287,6 +287,107 @@ fn print_output_card(
     response.clicked()
 }
 
+fn video_chip(ui: &mut egui::Ui, label: &str, on: bool) -> egui::Response {
+    let color = if on {
+        Color32::WHITE
+    } else {
+        simple_mode::SIMPLE_BLUE
+    };
+    let mut button = egui::Button::new(egui::RichText::new(label).size(15.0).color(color))
+        .corner_radius(16.0)
+        .min_size(egui::vec2(64.0, 36.0));
+    if on {
+        button = button.fill(simple_mode::SIMPLE_BLUE);
+    } else {
+        button = button
+            .fill(Color32::WHITE)
+            .stroke(Stroke::new(1.5, simple_mode::SIMPLE_BLUE));
+    }
+    ui.add(button)
+}
+
+#[derive(Clone, Copy)]
+enum CameraGlyph {
+    Front,
+    End,
+    Orbit,
+    Follow,
+}
+
+fn paint_camera_glyph(painter: &egui::Painter, center: Pos2, glyph: CameraGlyph, color: Color32) {
+    let stroke = Stroke::new(1.5, color);
+    let p = |x: f32, y: f32| center + egui::vec2(x, y);
+    match glyph {
+        CameraGlyph::Front => {
+            painter.rect_stroke(
+                egui::Rect::from_center_size(p(0.0, 2.0), egui::vec2(14.0, 8.0)),
+                1.2,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            painter.add(egui::Shape::line(
+                vec![p(-7.0, -2.0), p(0.0, -6.5), p(7.0, -2.0)],
+                stroke,
+            ));
+        }
+        CameraGlyph::End => {
+            painter.line_segment([p(-6.0, 6.0), p(-6.0, -4.0)], stroke);
+            painter.line_segment([p(6.0, 6.0), p(6.0, -4.0)], stroke);
+            painter.line_segment([p(-6.0, -4.0), p(6.0, -4.0)], stroke);
+        }
+        CameraGlyph::Orbit => {
+            painter.circle_stroke(center, 5.2, stroke);
+            painter.add(egui::Shape::line(
+                vec![p(3.2, -4.6), p(7.4, -2.2), p(3.6, -0.4)],
+                stroke,
+            ));
+        }
+        CameraGlyph::Follow => {
+            painter.circle_filled(p(-3.0, -3.2), 2.2, color);
+            painter.line_segment([p(-3.0, -0.8), p(-3.0, 5.0)], stroke);
+            painter.line_segment([p(1.0, 0.4), p(6.2, -2.2)], stroke);
+            painter.circle_stroke(p(6.2, -2.2), 2.1, stroke);
+        }
+    }
+}
+
+fn camera_chip(ui: &mut egui::Ui, label: &str, glyph: CameraGlyph, on: bool) -> bool {
+    let color = if on {
+        Color32::WHITE
+    } else {
+        simple_mode::SIMPLE_BLUE
+    };
+    let galley =
+        ui.painter()
+            .layout_no_wrap(label.to_owned(), egui::FontId::proportional(15.0), color);
+    let width = (galley.size().x + 40.0).max(84.0);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 36.0), Sense::click());
+    if on {
+        ui.painter()
+            .rect_filled(rect, 16.0, simple_mode::SIMPLE_BLUE);
+    } else {
+        ui.painter().rect_filled(rect, 16.0, Color32::WHITE);
+        ui.painter().rect_stroke(
+            rect,
+            16.0,
+            Stroke::new(1.5, simple_mode::SIMPLE_BLUE),
+            egui::StrokeKind::Inside,
+        );
+    }
+    paint_camera_glyph(
+        ui.painter(),
+        Pos2::new(rect.left() + 16.0, rect.center().y),
+        glyph,
+        color,
+    );
+    ui.painter().galley(
+        Pos2::new(rect.left() + 28.0, rect.center().y - galley.size().y * 0.5),
+        galley,
+        color,
+    );
+    response.clicked()
+}
+
 fn solid_export_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
     let width = ui.available_width().clamp(180.0, 460.0);
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 48.0), Sense::click());
@@ -3296,8 +3397,362 @@ impl DrillApp {
         );
     }
 
+    fn blender_path_row(&mut self, ui: &mut egui::Ui) {
+        let ink = Color32::from_rgb(32, 36, 44);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            ui.label(
+                egui::RichText::new(text(self.locale, Text::BlenderApp))
+                    .size(14.0)
+                    .color(ink),
+            );
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut self.print_state.blender_path)
+                    .desired_width(240.0)
+                    .hint_text(text(self.locale, Text::Pick)),
+            );
+            if response.changed() {
+                self.print_state.remember_blender_path();
+            }
+            if ui.button(text(self.locale, Text::Pick)).clicked()
+                && let Some(path) = rfd::FileDialog::new().pick_file()
+            {
+                self.print_state.blender_path = path.display().to_string();
+                self.print_state.remember_blender_path();
+            }
+            if ui.button(text(self.locale, Text::BlenderAuto)).clicked()
+                && let Some(path) = print_state::detect_blender()
+            {
+                self.print_state.blender_path = path.display().to_string();
+                self.print_state.remember_blender_path();
+            }
+        });
+        let typed = self.print_state.blender_path.trim();
+        let found = if typed.is_empty() {
+            print_state::detect_blender()
+        } else {
+            print_state::locate_blender(typed)
+        };
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            let (status, status_color) = if found.is_some() {
+                (
+                    text(self.locale, Text::BlenderFound),
+                    Color32::from_rgb(18, 112, 52),
+                )
+            } else {
+                (
+                    text(self.locale, Text::BlenderAbsent),
+                    Color32::from_rgb(168, 42, 32),
+                )
+            };
+            ui.label(egui::RichText::new(status).size(14.0).color(status_color));
+            if found.is_none() {
+                ui.hyperlink_to(
+                    text(self.locale, Text::BlenderInstall),
+                    "https://www.blender.org/download/",
+                );
+            }
+        });
+    }
+
+    fn show_blender_export(&mut self, ui: &mut egui::Ui) {
+        let ink = Color32::from_rgb(32, 36, 44);
+        let locale = self.locale;
+        ui.label(
+            egui::RichText::new(text(locale, Text::CameraWord))
+                .size(14.0)
+                .color(ink),
+        );
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            for (camera, label, glyph) in [
+                (
+                    drill_export::blender::BlenderCamera::PressBox,
+                    text(locale, Text::PressBox),
+                    CameraGlyph::Front,
+                ),
+                (
+                    drill_export::blender::BlenderCamera::EndZone,
+                    text(locale, Text::EndZone),
+                    CameraGlyph::End,
+                ),
+                (
+                    drill_export::blender::BlenderCamera::Orbit,
+                    text(locale, Text::OrbitCam),
+                    CameraGlyph::Orbit,
+                ),
+                (
+                    drill_export::blender::BlenderCamera::Follow,
+                    text(locale, Text::FollowCam),
+                    CameraGlyph::Follow,
+                ),
+            ] {
+                if camera_chip(
+                    ui,
+                    label,
+                    glyph,
+                    self.print_state.video_options.camera == camera,
+                ) {
+                    self.print_state.video_options.camera = camera;
+                }
+            }
+        });
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.label(
+                egui::RichText::new(text(locale, Text::Quality))
+                    .size(14.0)
+                    .color(ink),
+            );
+            if video_chip(
+                ui,
+                text(locale, Text::Draft),
+                self.print_state.video_options.quality
+                    == drill_export::blender::RenderQuality::Draft,
+            )
+            .clicked()
+            {
+                self.print_state.video_options.quality =
+                    drill_export::blender::RenderQuality::Draft;
+                self.print_state.video_options.width = 1280;
+                self.print_state.video_options.height = 720;
+                self.print_state.video_options.fps = 30;
+                self.print_state.video_options.engine = drill_export::blender::BlenderEngine::Eevee;
+            }
+            if video_chip(
+                ui,
+                text(locale, Text::Fine),
+                self.print_state.video_options.quality
+                    == drill_export::blender::RenderQuality::Fine,
+            )
+            .clicked()
+            {
+                self.print_state.video_options.quality = drill_export::blender::RenderQuality::Fine;
+                self.print_state.video_options.width = 1920;
+                self.print_state.video_options.height = 1080;
+                self.print_state.video_options.engine = drill_export::blender::BlenderEngine::Eevee;
+            }
+            if self.print_state.video_options.engine == drill_export::blender::BlenderEngine::Eevee
+            {
+                ui.label(
+                    egui::RichText::new(text(locale, Text::EeveeName))
+                        .size(14.0)
+                        .color(ink),
+                );
+            }
+            let mut cycles = self.print_state.video_options.engine
+                == drill_export::blender::BlenderEngine::Cycles;
+            if ui
+                .checkbox(&mut cycles, text(locale, Text::CyclesName))
+                .changed()
+            {
+                self.print_state.video_options.engine = if cycles {
+                    drill_export::blender::BlenderEngine::Cycles
+                } else {
+                    drill_export::blender::BlenderEngine::Eevee
+                };
+            }
+        });
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.label(
+                egui::RichText::new(text(locale, Text::TimeWord))
+                    .size(14.0)
+                    .color(ink),
+            );
+            if video_chip(
+                ui,
+                text(locale, Text::DayWord),
+                self.print_state.video_options.time_of_day == drill_export::blender::TimeOfDay::Day,
+            )
+            .clicked()
+            {
+                self.print_state.video_options.time_of_day = drill_export::blender::TimeOfDay::Day;
+            }
+            if video_chip(
+                ui,
+                text(locale, Text::NightWord),
+                self.print_state.video_options.time_of_day
+                    == drill_export::blender::TimeOfDay::Night,
+            )
+            .clicked()
+            {
+                self.print_state.video_options.time_of_day =
+                    drill_export::blender::TimeOfDay::Night;
+            }
+        });
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.label(
+                egui::RichText::new(text(locale, Text::Figures))
+                    .size(14.0)
+                    .color(ink),
+            );
+            if video_chip(
+                ui,
+                text(locale, Text::Capsule),
+                self.print_state.video_options.figures
+                    == drill_export::blender::FigureStyle::Capsule,
+            )
+            .clicked()
+            {
+                self.print_state.video_options.figures =
+                    drill_export::blender::FigureStyle::Capsule;
+            }
+            if video_chip(
+                ui,
+                text(locale, Text::PersonFigure),
+                self.print_state.video_options.figures
+                    == drill_export::blender::FigureStyle::Person,
+            )
+            .clicked()
+            {
+                self.print_state.video_options.figures = drill_export::blender::FigureStyle::Person;
+            }
+        });
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            ui.label(
+                egui::RichText::new(text(locale, Text::Range))
+                    .size(14.0)
+                    .color(ink),
+            );
+            egui::ComboBox::from_id_salt("video-range")
+                .width(128.0)
+                .selected_text(if self.print_state.current_set_only {
+                    text(locale, Text::ThisSet)
+                } else {
+                    text(locale, Text::AllSets)
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut self.print_state.current_set_only,
+                        false,
+                        text(locale, Text::AllSets),
+                    );
+                    ui.selectable_value(
+                        &mut self.print_state.current_set_only,
+                        true,
+                        text(locale, Text::ThisSet),
+                    );
+                });
+            let mut size_choice = if self.print_state.video_options.height >= 1000 {
+                1080
+            } else {
+                720
+            };
+            egui::ComboBox::from_id_salt("video-size")
+                .width(88.0)
+                .selected_text(if size_choice == 1080 { "1080p" } else { "720p" })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut size_choice, 1080, "1080p");
+                    ui.selectable_value(&mut size_choice, 720, "720p");
+                });
+            if size_choice == 1080 {
+                self.print_state.video_options.width = 1920;
+                self.print_state.video_options.height = 1080;
+            } else {
+                self.print_state.video_options.width = 1280;
+                self.print_state.video_options.height = 720;
+            }
+            let fps = self.print_state.video_options.fps;
+            egui::ComboBox::from_id_salt("video-fps")
+                .width(72.0)
+                .selected_text(fps.to_string())
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.print_state.video_options.fps, 24, "24");
+                    ui.selectable_value(&mut self.print_state.video_options.fps, 30, "30");
+                    ui.selectable_value(&mut self.print_state.video_options.fps, 60, "60");
+                });
+        });
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 12.0;
+            ui.checkbox(
+                &mut self.print_state.video_options.audio,
+                text(locale, Text::SongOn),
+            );
+            ui.checkbox(
+                &mut self.print_state.video_options.title_card,
+                text(locale, Text::TitleCard),
+            );
+            ui.checkbox(
+                &mut self.print_state.video_options.cuts,
+                text(locale, Text::CameraCuts),
+            );
+            ui.checkbox(
+                &mut self.print_state.open_when_done,
+                text(locale, Text::OpenWhenDone),
+            );
+        });
+        ui.add_space(6.0);
+        self.blender_path_row(ui);
+        ui.add_space(8.0);
+        let found = print_state::locate_blender(&self.print_state.blender_path).is_some();
+        if let Some(fraction) = self.print_state.video_fraction() {
+            ui.add(egui::ProgressBar::new(fraction.clamp(0.0, 1.0)).show_percentage());
+            if ui.button(text(locale, Text::StopRender)).clicked() {
+                self.print_state.cancel_video();
+            }
+        } else if found {
+            if solid_export_button(ui, text(locale, Text::RenderVideo)).clicked()
+                && let Some(path) = rfd::FileDialog::new()
+                    .set_file_name("drill.mp4")
+                    .add_filter("MP4", &["mp4"])
+                    .save_file()
+            {
+                self.print_state.scope_set = self.current_set;
+                let _ = self
+                    .print_state
+                    .start_video(&self.document, path, self.locale);
+            }
+            if ui.button(text(locale, Text::SaveBundle)).clicked()
+                && let Some(directory) = rfd::FileDialog::new().pick_folder()
+            {
+                self.print_state.scope_set = self.current_set;
+                self.print_state
+                    .save_bundle(&self.document, directory, self.locale);
+            }
+        } else {
+            ui.label(
+                egui::RichText::new(text(locale, Text::BlenderMissing))
+                    .size(14.0)
+                    .color(ink),
+            );
+            ui.add_space(6.0);
+            if solid_export_button(ui, text(locale, Text::SaveBundle)).clicked()
+                && let Some(directory) = rfd::FileDialog::new().pick_folder()
+            {
+                self.print_state.scope_set = self.current_set;
+                self.print_state
+                    .save_bundle(&self.document, directory, self.locale);
+            }
+        }
+        if let Some(path) = self.print_state.video_done.clone()
+            && ui.button(text(locale, Text::OpenVideo)).clicked()
+        {
+            print_state::reveal_path(&path);
+        }
+        if !self.print_state.status.is_empty() {
+            ui.label(
+                egui::RichText::new(&self.print_state.status)
+                    .size(14.0)
+                    .color(ink),
+            );
+        }
+    }
+
     fn show_print_workspace(&mut self, context: &egui::Context) {
         self.print_state.poll(self.locale);
+        self.print_state.poll_video(self.locale);
+        if self.print_state.video_running() {
+            context.request_repaint_after(Duration::from_millis(200));
+        }
         if !self.print_state.open {
             return;
         }
@@ -3346,18 +3801,31 @@ impl DrillApp {
                         ] {
                             if print_output_card(
                                 ui,
-                                self.print_state.kind == kind,
+                                !self.print_state.video && self.print_state.kind == kind,
                                 print_kind_label(self.locale, kind),
                                 print_kind_icon(kind),
                             ) {
                                 self.print_state.kind = kind;
+                                self.print_state.video = false;
                             }
                             ui.add_space(8.0);
+                        }
+                        if print_output_card(
+                            ui,
+                            self.print_state.video,
+                            text(self.locale, Text::Video3d),
+                            simple_mode::PhoneIcon::Video,
+                        ) {
+                            self.print_state.video = true;
                         }
                     });
                     ui.add_space(16.0);
                     ui.vertical(|ui| {
                         ui.set_min_width(420.0);
+                        if self.print_state.video {
+                            self.show_blender_export(ui);
+                            return;
+                        }
                         ui.strong(i18n::registered(self.locale, "app-state.032"));
                         let option_ink = Color32::from_rgb(32, 36, 44);
                         ui.horizontal(|ui| {

@@ -1089,6 +1089,7 @@ impl super::DrillApp {
                 }
             });
         });
+        self.blender_path_row(ui);
         let search_id = ui.make_persistent_id("keybinding-search");
         ui.add(
             egui::TextEdit::singleline(&mut self.keybindings.query)

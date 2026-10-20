@@ -976,6 +976,8 @@ dependencies = [
  "drill-project",
  "drill-render",
  "image",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
