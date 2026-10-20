@@ -1,10 +1,11 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="ja" translate="no" class="notranslate">
   <head>
     <meta charset="utf-8" />
+    <meta name="google" content="notranslate" />
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
     />
     <title>DrillForge</title>
     <style>
@@ -12,8 +13,11 @@
       body {
         margin: 0;
         height: 100%;
-        background: #102818;
+        background: #f4f6f8;
         overflow: hidden;
+        box-sizing: border-box;
+        padding: env(safe-area-inset-top) env(safe-area-inset-right)
+          env(safe-area-inset-bottom) env(safe-area-inset-left);
       }
       canvas {
         width: 100%;

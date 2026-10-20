@@ -23,7 +23,9 @@ mod client;
 #[cfg(not(target_arch = "wasm32"))]
 pub use client::{ConnectionStatus, SyncClient, dial_socket, trust_extra_roots};
 
-use drill_core::{Document, Edit, PerformerId, Point, SetCounts, SetId};
+use drill_core::{
+    Document, Edit, PerformerId, Point, RouteTable, Set, SetAnnotation, SetCounts, SetId,
+};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, VecDeque};
@@ -280,11 +282,51 @@ impl ShowState {
         }
     }
 
-    /// Writes winning dots and counts into `document`.
+    /// Writes winning dots, set names, and counts into `document`.
     ///
-    /// The desktop app applies [`Edit`] values instead, so undo still works
-    /// there. The phone surface has no history stack and calls this directly.
+    /// A set that exists only in the snapshot is created, so an added set
+    /// reaches a peer who opened the file before that set existed. A fact
+    /// with `present == false` removes that set. The desktop still prefers
+    /// [`Edit`] values for its own undo stack. Remote events on the phone
+    /// land here.
     pub fn write_document(&self, document: &mut Document) {
+        document.sets.retain(|set| {
+            self.sets
+                .get(&set.id.get())
+                .is_none_or(|entry| entry.value.present)
+        });
+        for (set_id, entry) in &self.sets {
+            if !entry.value.present || document.sets.iter().any(|set| set.id.get() == *set_id) {
+                continue;
+            }
+            let Some(id) = SetId::new(*set_id) else {
+                continue;
+            };
+            let positions = document
+                .performers
+                .iter()
+                .map(|performer| {
+                    self.dots
+                        .get(&DotId {
+                            set_id: *set_id,
+                            performer_id: performer.id.get(),
+                        })
+                        .map(|dot| dot.value)
+                        .unwrap_or(Point { x: 0.0, y: 0.0 })
+                })
+                .collect();
+            document.sets.push(Set {
+                id,
+                name: entry.value.name.clone(),
+                annotation: SetAnnotation::default(),
+                counts: entry.value.counts,
+                hold: 0,
+                routes: RouteTable::default(),
+                shape: None,
+                generated_by: None,
+                positions,
+            });
+        }
         for (dot, entry) in &self.dots {
             let Some(index) = document
                 .performers
@@ -307,10 +349,13 @@ impl ShowState {
             }
         }
         for (set_id, entry) in &self.sets {
-            if let Some(set) = document.sets.iter_mut().find(|set| set.id.get() == *set_id)
-                && set.counts != entry.value.counts
-            {
-                set.counts = entry.value.counts;
+            if let Some(set) = document.sets.iter_mut().find(|set| set.id.get() == *set_id) {
+                if set.counts != entry.value.counts {
+                    set.counts = entry.value.counts;
+                }
+                if set.name != entry.value.name {
+                    set.name.clone_from(&entry.value.name);
+                }
             }
         }
     }
@@ -946,6 +991,43 @@ mod tests {
     fn presence_frames_are_not_sync_events() {
         assert!(RoomEvent::from_json(r#"{"leave":9}"#).is_err());
         assert!(RoomEvent::from_json(r#"{"update":{"user_id":1}}"#).is_err());
+    }
+
+    #[test]
+    fn a_new_set_fact_appears_on_the_other_document() {
+        let document = Document::demo(1, 2);
+        let mut alice = ShowState::from_document(&document, ReplicaId::from_raw(1));
+        let created = alice.set_meta(
+            9,
+            SetFact {
+                name: "next".into(),
+                counts: 8,
+                present: true,
+            },
+        );
+        let moved = alice
+            .move_dot(
+                DotId {
+                    set_id: 9,
+                    performer_id: 1,
+                },
+                Point { x: 3.0, y: 4.0 },
+            )
+            .expect("finite");
+        let mut bob = ShowState::from_document(&document, ReplicaId::from_raw(2));
+        assert!(bob.apply(&created));
+        assert!(bob.apply(&moved));
+        let mut document = document;
+        bob.write_document(&mut document);
+        let set = document
+            .sets
+            .iter()
+            .find(|set| set.id.get() == 9)
+            .expect("created set");
+        assert_eq!(set.name, "next");
+        assert_eq!(set.counts, 8);
+        assert_eq!(set.positions[0], Point { x: 3.0, y: 4.0 });
+        assert_eq!(set.positions.len(), document.performers.len());
     }
 
     #[test]

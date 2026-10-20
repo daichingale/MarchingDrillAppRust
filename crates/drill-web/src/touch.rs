@@ -73,13 +73,6 @@ pub fn hit_radius(compact: bool) -> f32 {
     if compact { 44.0 } else { 22.0 }
 }
 
-/// Visual dot radius. Larger than the desktop cross so it reads on a phone,
-/// still smaller than the hit target so neighbors stay separable.
-#[must_use]
-pub fn dot_radius(compact: bool) -> f32 {
-    if compact { 16.0 } else { 11.0 }
-}
-
 /// Pinch zoom about the current field center, plus a two-finger pan.
 ///
 /// `translation` is in screen pixels, y down. `scale` is the field's current
@@ -149,7 +142,6 @@ mod tests {
         assert!(!chrome_is_compact(844.0));
         assert!(hit_radius(true) >= 44.0);
         assert!(hit_radius(false) < hit_radius(true));
-        assert!(dot_radius(true) > dot_radius(false));
     }
 
     #[test]
