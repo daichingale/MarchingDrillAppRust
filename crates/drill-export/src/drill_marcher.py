@@ -14,16 +14,17 @@ import bpy
 import bmesh
 from mathutils import Euler, Matrix, Vector
 
-HIP_Z = 0.92
-KNEE_Z = 0.50
-ANKLE_Z = 0.07
+# About seven heads tall. Crown sits near 1.70 m; the shako and plume go above that.
+HIP_Z = 0.90
+KNEE_Z = 0.46
+ANKLE_Z = 0.02
 THIGH = HIP_Z - KNEE_Z
 SHIN = KNEE_Z - ANKLE_Z
 SHOULDER_Z = 1.36
-SHOULDER_X = 0.21
+SHOULDER_X = 0.19
 UPPER = 0.28
-FORE = 0.26
-HEAD_Z = 1.56
+FORE = 0.25
+HEAD_Z = 1.58
 
 JACKET = 0
 SKIN = 1
@@ -36,101 +37,104 @@ TROUSER = 7
 SLOT_COUNT = 8
 
 # Object-space swings. Negative X reaches toward the audience (-Y).
+# Forward march is an 8-to-5 roll step: upright torso, short stride, heel
+# down and toe up in front, the back knee nearly straight. Mark time lifts
+# the knee and keeps the toe on the ground.
 FORWARD_PLANT = {
-    "thigh.L": (-0.36, 0.0, 0.03),
-    "shin.L": (0.08, 0.0, 0.0),
-    "foot.L": (0.02, 0.0, 0.0),
-    "thigh.R": (0.28, 0.0, -0.03),
-    "shin.R": (0.62, 0.0, 0.0),
-    "foot.R": (0.72, 0.0, 0.0),
-    "arm.L": (0.62, 0.0, 0.22),
-    "forearm.L": (0.28, 0.0, 0.0),
-    "arm.R": (-0.72, 0.0, -0.18),
-    "forearm.R": (0.18, 0.0, 0.0),
-    "spine": (-0.07, 0.0, 0.03),
-    "head": (0.04, 0.0, -0.02),
+    "thigh.L": (-0.28, 0.0, 0.02),
+    "shin.L": (0.04, 0.0, 0.0),
+    "foot.L": (-0.42, 0.0, 0.0),
+    "thigh.R": (0.20, 0.0, -0.02),
+    "shin.R": (0.16, 0.0, 0.0),
+    "foot.R": (0.12, 0.0, 0.0),
+    "arm.L": (0.32, 0.0, 0.10),
+    "forearm.L": (0.22, 0.0, 0.0),
+    "arm.R": (-0.36, 0.0, -0.10),
+    "forearm.R": (0.20, 0.0, 0.0),
+    "spine": (-0.02, 0.0, 0.0),
+    "head": (0.02, 0.0, 0.0),
 }
 FORWARD_PASS = {
-    "thigh.L": (0.04, 0.0, 0.02),
-    "shin.L": (0.12, 0.0, 0.0),
-    "foot.L": (0.18, 0.0, 0.0),
-    "thigh.R": (-0.22, 0.0, -0.02),
-    "shin.R": (1.05, 0.0, 0.0),
-    "foot.R": (-0.30, 0.0, 0.0),
-    "arm.L": (0.12, 0.0, 0.16),
-    "forearm.L": (0.22, 0.0, 0.0),
-    "arm.R": (-0.18, 0.0, -0.14),
-    "forearm.R": (0.2, 0.0, 0.0),
-    "spine": (-0.04, 0.0, 0.0),
+    "thigh.L": (0.04, 0.0, 0.01),
+    "shin.L": (0.06, 0.0, 0.0),
+    "foot.L": (0.08, 0.0, 0.0),
+    "thigh.R": (-0.12, 0.0, -0.01),
+    "shin.R": (0.38, 0.0, 0.0),
+    "foot.R": (-0.15, 0.0, 0.0),
+    "arm.L": (0.08, 0.0, 0.08),
+    "forearm.L": (0.16, 0.0, 0.0),
+    "arm.R": (-0.10, 0.0, -0.08),
+    "forearm.R": (0.16, 0.0, 0.0),
+    "spine": (-0.02, 0.0, 0.0),
     "head": (0.02, 0.0, 0.0),
 }
 BACK_PLANT = {
-    "thigh.L": (0.42, 0.0, 0.03),
-    "shin.L": (0.18, 0.0, 0.0),
-    "foot.L": (0.48, 0.0, 0.0),
-    "thigh.R": (-0.22, 0.0, -0.02),
-    "shin.R": (0.34, 0.0, 0.0),
-    "foot.R": (-0.12, 0.0, 0.0),
-    "arm.L": (-0.28, 0.0, 0.18),
-    "forearm.L": (0.2, 0.0, 0.0),
-    "arm.R": (0.34, 0.0, -0.16),
+    "thigh.L": (0.26, 0.0, 0.02),
+    "shin.L": (0.10, 0.0, 0.0),
+    "foot.L": (0.40, 0.0, 0.0),
+    "thigh.R": (-0.16, 0.0, -0.02),
+    "shin.R": (0.08, 0.0, 0.0),
+    "foot.R": (-0.20, 0.0, 0.0),
+    "arm.L": (-0.22, 0.0, 0.10),
+    "forearm.L": (0.16, 0.0, 0.0),
+    "arm.R": (0.24, 0.0, -0.10),
     "forearm.R": (0.16, 0.0, 0.0),
-    "spine": (0.04, 0.0, 0.0),
-    "head": (-0.02, 0.0, 0.0),
+    "spine": (0.0, 0.0, 0.0),
+    "head": (0.0, 0.0, 0.0),
 }
 BACK_PASS = {
-    "thigh.L": (0.06, 0.0, 0.02),
-    "shin.L": (0.16, 0.0, 0.0),
-    "foot.L": (0.12, 0.0, 0.0),
-    "thigh.R": (0.28, 0.0, -0.02),
-    "shin.R": (0.85, 0.0, 0.0),
-    "foot.R": (-0.2, 0.0, 0.0),
-    "arm.L": (-0.08, 0.0, 0.14),
-    "forearm.L": (0.16, 0.0, 0.0),
-    "arm.R": (0.1, 0.0, -0.12),
-    "forearm.R": (0.14, 0.0, 0.0),
-    "spine": (0.02, 0.0, 0.0),
+    "thigh.L": (0.04, 0.0, 0.01),
+    "shin.L": (0.08, 0.0, 0.0),
+    "foot.L": (0.06, 0.0, 0.0),
+    "thigh.R": (0.14, 0.0, -0.01),
+    "shin.R": (0.32, 0.0, 0.0),
+    "foot.R": (0.2, 0.0, 0.0),
+    "arm.L": (-0.06, 0.0, 0.08),
+    "forearm.L": (0.12, 0.0, 0.0),
+    "arm.R": (0.08, 0.0, -0.08),
+    "forearm.R": (0.12, 0.0, 0.0),
+    "spine": (0.0, 0.0, 0.0),
     "head": (0.0, 0.0, 0.0),
 }
 MARK_PLANT = {
-    "thigh.L": (0.02, 0.0, 0.02),
-    "shin.L": (0.06, 0.0, 0.0),
+    "thigh.L": (0.0, 0.0, 0.02),
+    "shin.L": (0.04, 0.0, 0.0),
     "foot.L": (0.0, 0.0, 0.0),
-    "thigh.R": (0.02, 0.0, -0.02),
-    "shin.R": (0.06, 0.0, 0.0),
+    "thigh.R": (0.0, 0.0, -0.02),
+    "shin.R": (0.04, 0.0, 0.0),
     "foot.R": (0.0, 0.0, 0.0),
-    "arm.L": (0.08, 0.0, 0.16),
-    "forearm.L": (0.12, 0.0, 0.0),
-    "arm.R": (0.08, 0.0, -0.16),
-    "forearm.R": (0.12, 0.0, 0.0),
-    "spine": (-0.02, 0.0, 0.0),
+    "arm.L": (0.06, 0.0, 0.12),
+    "forearm.L": (0.10, 0.0, 0.0),
+    "arm.R": (0.06, 0.0, -0.12),
+    "forearm.R": (0.10, 0.0, 0.0),
+    "spine": (0.0, 0.0, 0.0),
     "head": (0.0, 0.0, 0.0),
 }
 MARK_PASS = {
-    "thigh.L": (-0.95, 0.0, 0.04),
-    "shin.L": (1.35, 0.0, 0.0),
-    "foot.L": (-0.4, 0.0, 0.0),
-    "thigh.R": (0.04, 0.0, -0.02),
-    "shin.R": (0.08, 0.0, 0.0),
+    "thigh.L": (-0.48, 0.0, 0.02),
+    "shin.L": (0.92, 0.0, 0.0),
+    "foot.L": (0.72, 0.0, 0.0),
+    "thigh.R": (0.0, 0.0, -0.02),
+    "shin.R": (0.04, 0.0, 0.0),
     "foot.R": (0.0, 0.0, 0.0),
-    "arm.L": (0.35, 0.0, 0.18),
-    "forearm.L": (0.2, 0.0, 0.0),
-    "arm.R": (-0.15, 0.0, -0.14),
-    "forearm.R": (0.12, 0.0, 0.0),
-    "spine": (-0.03, 0.0, 0.0),
+    "arm.L": (0.16, 0.0, 0.12),
+    "forearm.L": (0.14, 0.0, 0.0),
+    "arm.R": (-0.08, 0.0, -0.10),
+    "forearm.R": (0.10, 0.0, 0.0),
+    "spine": (0.0, 0.0, 0.0),
     "head": (0.0, 0.0, 0.0),
 }
 ATTENTION = {
-    "thigh.L": (0.02, 0.0, 0.03),
-    "shin.L": (0.05, 0.0, 0.0),
+    "thigh.L": (0.0, 0.0, 0.02),
+    "shin.L": (0.02, 0.0, 0.0),
     "foot.L": (0.0, 0.0, 0.0),
-    "thigh.R": (0.02, 0.0, -0.03),
-    "shin.R": (0.05, 0.0, 0.0),
+    "thigh.R": (0.0, 0.0, -0.02),
+    "shin.R": (0.02, 0.0, 0.0),
     "foot.R": (0.0, 0.0, 0.0),
-    "arm.L": (0.08, 0.0, 0.2),
-    "forearm.L": (0.18, 0.0, 0.0),
-    "arm.R": (0.08, 0.0, -0.2),
-    "forearm.R": (0.18, 0.0, 0.0),
+    "arm.L": (0.04, 0.0, 0.14),
+    "forearm.L": (0.08, 0.0, 0.0),
+    "arm.R": (0.04, 0.0, -0.14),
+    "forearm.R": (0.08, 0.0, 0.0),
     "spine": (0.0, 0.0, 0.0),
     "head": (0.0, 0.0, 0.0),
 }
@@ -287,26 +291,33 @@ def add_box(bm, size, center, material):
     _tag(bm, existing, material)
 
 
-def add_sphere(bm, radius, center, material, segments):
+def add_sphere(bm, radius, center, material, segments, scale=None):
     existing = set(bm.faces)
-    bmesh.ops.create_uvsphere(
+    geom = bmesh.ops.create_uvsphere(
         bm,
         u_segments=segments,
         v_segments=max(4, segments // 2),
         radius=radius,
         matrix=Matrix.Translation(center),
     )
+    if scale is not None:
+        sx, sy, sz = scale
+        cx, cy, cz = center
+        for vert in geom["verts"]:
+            vert.co.x = cx + (vert.co.x - cx) * sx
+            vert.co.y = cy + (vert.co.y - cy) * sy
+            vert.co.z = cz + (vert.co.z - cz) * sz
     _tag(bm, existing, material)
 
 
-def add_cyl(bm, radius, depth, center, material, segments, shift_z=0.0):
+def add_cyl(bm, radius, depth, center, material, segments, shift_z=0.0, radius_top=None):
     existing = set(bm.faces)
     geom = bmesh.ops.create_cone(
         bm,
         cap_ends=True,
         segments=segments,
         radius1=radius,
-        radius2=radius,
+        radius2=radius if radius_top is None else radius_top,
         depth=depth,
         matrix=Matrix.Translation((center[0], center[1], center[2] + shift_z)),
     )
@@ -314,23 +325,53 @@ def add_cyl(bm, radius, depth, center, material, segments, shift_z=0.0):
     return geom
 
 
+def add_rod(bm, start, end, radius, material, segments):
+    start = Vector(start)
+    end = Vector(end)
+    direction = end - start
+    length = direction.length
+    if length < 1e-4:
+        return
+    mid = (start + end) * 0.5
+    quat = Vector((0.0, 0.0, 1.0)).rotation_difference(direction.normalized())
+    matrix = Matrix.Translation(mid) @ quat.to_matrix().to_4x4()
+    existing = set(bm.faces)
+    bmesh.ops.create_cone(
+        bm,
+        cap_ends=True,
+        segments=segments,
+        radius1=radius,
+        radius2=radius,
+        depth=length,
+        matrix=matrix,
+    )
+    _tag(bm, existing, material)
+
+
 def new_mesh(name, builder):
     mesh = bpy.data.meshes.new(name)
     bm = bmesh.new()
     builder(bm)
+    bmesh.ops.recalc_face_normals(bm, faces=list(bm.faces))
+    for face in bm.faces:
+        face.smooth = True
     bm.to_mesh(mesh)
     bm.free()
+    if mesh.polygons:
+        mesh.polygons.foreach_set("use_smooth", [True] * len(mesh.polygons))
     return mesh
 
 
-def cylinder_mesh(name, radius, depth, segments, origin="center"):
+def cylinder_mesh(name, radius, depth, segments, origin="center", radius_top=None):
+    top = radius if radius_top is None else radius_top
+
     def build(bm):
         geom = bmesh.ops.create_cone(
             bm,
             cap_ends=True,
             segments=segments,
             radius1=radius,
-            radius2=radius,
+            radius2=top,
             depth=depth,
         )
         if origin == "top":
@@ -342,46 +383,74 @@ def cylinder_mesh(name, radius, depth, segments, origin="center"):
 
 def shoe_mesh(name):
     def build(bm):
-        # Heel at the ankle, sole a little below it, toe toward the audience.
-        add_box(bm, (0.09, 0.26, 0.08), (0.0, -0.10, -0.015), 0)
+        # Rounded shoe. Origin is the ankle. Toe points toward the audience.
+        add_sphere(bm, 0.048, (0.0, -0.07, -0.012), 0, 10, (0.95, 1.85, 0.42))
+        add_sphere(bm, 0.040, (0.0, 0.02, -0.004), 0, 8, (0.9, 0.75, 0.38))
+
+    return new_mesh(name, build)
+
+
+def mitten_mesh(name):
+    def build(bm):
+        add_sphere(bm, 0.036, (0.0, -0.012, 0.0), 0, 8, (1.05, 1.45, 0.62))
+        add_sphere(bm, 0.016, (0.028, -0.01, 0.006), 0, 6, (0.7, 1.1, 0.7))
 
     return new_mesh(name, build)
 
 
 def body_mesh(detailed):
-    seg = 16 if detailed else 8
-    plume_n = 6 if detailed else 4
+    seg = 12 if detailed else 6
+    hat_seg = 12 if detailed else 6
+    plume_n = 6 if detailed else 3
 
     def build(bm):
-        add_box(bm, (0.40, 0.22, 0.50), (0.0, 0.0, 1.16), JACKET)
-        add_box(bm, (0.42, 0.24, 0.045), (0.0, 0.0, 0.96), GOLD)
-        add_box(bm, (0.30, 0.20, 0.05), (0.0, -0.02, 1.38), GOLD)
-        add_box(bm, (0.045, 0.23, 0.42), (0.0, -0.02, 1.16), GOLD)
-        add_box(bm, (0.32, 0.20, 0.16), (0.0, 0.0, 0.84), TROUSER)
-        add_box(bm, (0.10, 0.08, 0.035), (-0.16, -0.02, 1.40), GOLD)
-        add_box(bm, (0.10, 0.08, 0.035), (0.16, -0.02, 1.40), GOLD)
-        add_cyl(bm, 0.055, 0.08, (0.0, 0.0, 1.44), SKIN, 8)
-        add_sphere(bm, 0.115, (0.0, -0.01, HEAD_Z), SKIN, seg)
-        add_sphere(bm, 0.016, (-0.038, -0.10, 1.575), EYE, 6)
-        add_sphere(bm, 0.016, (0.038, -0.10, 1.575), EYE, 6)
-        add_box(bm, (0.055, 0.012, 0.012), (-0.038, -0.112, 1.60), EYE)
-        add_box(bm, (0.055, 0.012, 0.012), (0.038, -0.112, 1.60), EYE)
+        # Trousers at the hips, then a tapered jacket, a narrow neck, and shoulders.
+        add_sphere(bm, 0.118, (0.0, 0.0, 0.90), TROUSER, seg, (1.05, 0.78, 0.55))
+        add_cyl(bm, 0.105, 0.40, (0.0, -0.01, 1.16), JACKET, hat_seg, radius_top=0.155)
+        add_sphere(bm, 0.078, (-0.20, -0.01, 1.34), JACKET, seg, (1.0, 0.85, 0.8))
+        add_sphere(bm, 0.078, (0.20, -0.01, 1.34), JACKET, seg, (1.0, 0.85, 0.8))
+        add_cyl(bm, 0.128, 0.04, (0.0, 0.0, 0.98), GOLD, hat_seg)
+        add_cyl(bm, 0.055, 0.10, (0.0, 0.0, 1.46), SKIN, 10)
+        add_cyl(bm, 0.072, 0.04, (0.0, -0.015, 1.40), JACKET, 10, radius_top=0.055)
+        add_cyl(bm, 0.064, 0.016, (0.0, -0.015, 1.422), GOLD, 10)
         if detailed:
-            add_box(bm, (0.045, 0.012, 0.012), (0.0, -0.108, 1.52), MOUTH)
-        add_cyl(bm, 0.128, 0.15, (0.0, 0.0, 1.76), HAT, 10 if detailed else 8)
-        add_box(bm, (0.20, 0.09, 0.018), (0.0, -0.10, 1.70), HAT)
-        add_cyl(bm, 0.132, 0.028, (0.0, 0.0, 1.70), GOLD, 10 if detailed else 8)
+            add_rod(bm, (-0.12, -0.09, 1.34), (0.07, -0.11, 0.99), 0.011, GOLD, 6)
+            add_rod(bm, (0.12, -0.09, 1.34), (-0.07, -0.11, 0.99), 0.011, GOLD, 6)
+            add_sphere(bm, 0.055, (-0.17, -0.02, 1.38), GOLD, 8, (1.25, 0.85, 0.32))
+            add_sphere(bm, 0.055, (0.17, -0.02, 1.38), GOLD, 8, (1.25, 0.85, 0.32))
+            for z in (1.10, 1.18, 1.26, 1.34):
+                add_sphere(bm, 0.012, (0.0, -0.105, z), GOLD, 5)
+        add_sphere(bm, 0.112, (0.0, -0.01, HEAD_Z), SKIN, seg, (0.94, 1.0, 1.08))
+        add_sphere(bm, 0.018, (-0.038, -0.108, 1.598), EYE, 6 if detailed else 5)
+        add_sphere(bm, 0.018, (0.038, -0.108, 1.598), EYE, 6 if detailed else 5)
+        if detailed:
+            add_sphere(bm, 0.016, (0.0, -0.118, 1.575), SKIN, 6, (0.7, 0.85, 0.7))
+            add_sphere(bm, 0.009, (-0.038, -0.122, 1.600), EYE, 5)
+            add_sphere(bm, 0.009, (0.038, -0.122, 1.600), EYE, 5)
+            add_rod(bm, (-0.062, -0.105, 1.625), (-0.016, -0.112, 1.628), 0.005, EYE, 4)
+            add_rod(bm, (0.016, -0.112, 1.628), (0.062, -0.105, 1.625), 0.005, EYE, 4)
+            add_sphere(bm, 0.014, (0.0, -0.120, 1.532), MOUTH, 6, (1.7, 0.4, 0.45))
+        # Shako: cylinder, forward brim, gold band, chin strap.
+        add_cyl(bm, 0.112, 0.15, (0.0, 0.0, 1.80), HAT, hat_seg)
+        add_cyl(bm, 0.118, 0.022, (0.0, 0.0, 1.745), GOLD, hat_seg)
+        brim = add_cyl(bm, 0.150, 0.012, (0.0, -0.04, 1.735), HAT, hat_seg)
+        for vert in brim["verts"]:
+            if vert.co.y < -0.04:
+                vert.co.y -= 0.045
+        if detailed:
+            add_rod(bm, (-0.09, -0.01, 1.76), (-0.035, -0.115, 1.50), 0.006, HAT, 5)
+            add_rod(bm, (0.09, -0.01, 1.76), (0.035, -0.115, 1.50), 0.006, HAT, 5)
+            add_rod(bm, (-0.035, -0.115, 1.50), (0.035, -0.115, 1.50), 0.006, HAT, 5)
+        # Feather: a tapered curve, not a stack of beads.
+        knots = []
         for index in range(plume_n):
             t = index / max(1, plume_n - 1)
-            add_sphere(
-                bm,
-                0.038 * (1.0 - t * 0.65),
-                (0.0, 0.02 + t * 0.11, 1.86 + t * 0.24),
-                PLUME,
-                6,
-            )
-        for index, z in enumerate((1.08, 1.18, 1.28)):
-            add_sphere(bm, 0.012, (0.0, -0.125, z), GOLD, 5)
+            y = -0.02 + 0.22 * t + 0.12 * t * t
+            z = 1.90 + 0.40 * t - 0.10 * t * t
+            radius = 0.030 * (1.0 - t) ** 0.8 + 0.004
+            knots.append((0.0, y, z, radius))
+        for start, end in zip(knots, knots[1:]):
+            add_rod(bm, start[:3], end[:3], (start[3] + end[3]) * 0.5, PLUME, 6 if detailed else 4)
 
     return new_mesh("marcher-body", build)
 
@@ -399,7 +468,8 @@ def flag_mesh(detailed):
             for i in range(nx):
                 u = i / (nx - 1)
                 wave = math.sin(u * math.pi * 1.6) * (0.04 + 0.05 * v)
-                verts.append((wave, u * width, v * height))
+                # Height runs along -Z so it follows a pole aimed upward. Width flies to the side.
+                verts.append((u * width, wave, -v * height))
         for vert in verts:
             bm.verts.new(vert)
         bm.verts.ensure_lookup_table()
@@ -462,19 +532,19 @@ def unit_cube():
 
 
 def shared_meshes(detailed):
-    limb_seg = 10 if detailed else 6
+    limb_seg = 8 if detailed else 5
     prop_seg = 10 if detailed else 6
     # Every person reuses these datablocks (linked duplicates). Only the
-    # object transforms and the object-linked materials differ.
+    # object transforms and the object-linked materials differ. Limbs taper
+    # from the joint toward the wrist and the ankle.
     return {
         "body": body_mesh(detailed),
-        "thigh": cylinder_mesh("thigh", 0.075, THIGH, limb_seg, "top"),
-        "shin": cylinder_mesh("shin", 0.055, SHIN, limb_seg, "top"),
+        "thigh": cylinder_mesh("thigh", 0.048, THIGH, limb_seg, "top", 0.078),
+        "shin": cylinder_mesh("shin", 0.034, SHIN, limb_seg, "top", 0.050),
         "shoe": shoe_mesh("shoe"),
-        "arm": cylinder_mesh("arm", 0.055, UPPER, limb_seg, "top"),
-        "fore": cylinder_mesh("fore", 0.045, FORE, limb_seg, "top"),
-        "glove": cylinder_mesh("glove", 0.04, 0.07, 6, "center"),
-        "shadow": cylinder_mesh("shadow", 0.2, 0.012, 8, "center"),
+        "arm": cylinder_mesh("arm", 0.034, UPPER, limb_seg, "top", 0.050),
+        "fore": cylinder_mesh("fore", 0.026, FORE, limb_seg, "top", 0.036),
+        "glove": mitten_mesh("glove"),
         "flag": flag_mesh(detailed),
         "sousa": torus_mesh(0.30, 0.055, 14 if detailed else 8, 6 if detailed else 4),
         "pipe": cylinder_mesh("pipe", 0.012, 0.42, prop_seg, "top"),
@@ -581,13 +651,15 @@ def shoulder(side):
     return (side * SHOULDER_X, 0.0, SHOULDER_Z)
 
 
-def solve_arms(targets):
+def solve_arms(targets, pole_xyz):
     """targets: dict with optional 'L' and 'R' world points."""
     pose = {}
+    px, py, pz = pole_xyz
     for side_name, sign in (("L", -1.0), ("R", 1.0)):
         if side_name not in targets:
             continue
-        pole = (sign * 1.1, -0.45, 0.15)
+        # Poles sit out to the side so the elbows leave the ribs.
+        pole = (sign * px, py, pz)
         arm_euler, fore_euler = solve_two_bone(
             shoulder(sign), targets[side_name], pole, UPPER, FORE
         )
@@ -607,23 +679,44 @@ def arm_targets(prop, gait):
         aimed = False
     if not aimed:
         return None
+    # Horns: mouthpiece at the lips, bell hand further out, elbows wide.
+    # Drums sit at the waist. The flag pole is vertical between both hands.
     table = {
-        "trumpet": {"R": (0.06, -0.16, 1.49), "L": (0.18, -0.15, 1.46)},
-        "mellophone": {"R": (0.02, -0.18, 1.50), "L": (0.14, -0.20, 1.42)},
-        "trombone": {"R": (0.04, -0.16, 1.50), "L": (-0.22, -0.20, 1.40)},
-        "baritone": {"R": (0.08, -0.20, 1.22), "L": (-0.06, -0.20, 1.28)},
-        "clarinet": {"R": (0.05, -0.16, 1.30), "L": (0.04, -0.15, 1.50)},
-        "flute": {"R": (0.08, -0.15, 1.50), "L": (0.28, -0.15, 1.50)},
-        "sax": {"R": (0.10, -0.22, 1.18), "L": (0.02, -0.20, 1.36)},
-        "tuba": {"R": (0.10, -0.22, 1.20), "L": (0.02, -0.18, 1.40)},
-        "snare": {"R": (0.10, -0.24, 1.08), "L": (-0.10, -0.24, 1.08)},
-        "tenor": {"R": (0.14, -0.26, 1.10), "L": (-0.14, -0.26, 1.10)},
-        "bass": {"R": (0.16, -0.28, 1.12), "L": (-0.16, -0.28, 1.12)},
-        "mallet": {"R": (0.16, -0.34, 1.05), "L": (-0.16, -0.34, 1.05)},
-        "flag": {"R": (0.16, -0.10, 1.78), "L": (0.10, -0.12, 1.42)},
-        "rifle": {"R": (0.06, -0.24, 1.28), "L": (-0.18, -0.22, 1.08)},
+        "trumpet": {"R": (0.03, -0.16, 1.50), "L": (-0.02, -0.32, 1.48)},
+        "mellophone": {"R": (0.02, -0.16, 1.50), "L": (0.10, -0.30, 1.44)},
+        "trombone": {"R": (0.02, -0.16, 1.50), "L": (-0.16, -0.34, 1.42)},
+        "baritone": {"R": (0.06, -0.18, 1.28), "L": (-0.04, -0.20, 1.36)},
+        "clarinet": {"L": (0.02, -0.16, 1.48), "R": (0.03, -0.18, 1.24)},
+        "flute": {"R": (0.16, -0.16, 1.50), "L": (-0.10, -0.16, 1.50)},
+        "sax": {"R": (0.08, -0.20, 1.16), "L": (0.02, -0.18, 1.40)},
+        "tuba": {"L": (0.0, -0.18, 1.40), "R": (0.14, -0.22, 1.12)},
+        "snare": {"R": (0.14, -0.32, 1.02), "L": (-0.14, -0.32, 1.02)},
+        "tenor": {"R": (0.14, -0.32, 1.08), "L": (-0.14, -0.32, 1.08)},
+        "bass": {"R": (0.18, -0.36, 1.02), "L": (-0.18, -0.36, 1.02)},
+        "mallet": {"R": (0.16, -0.40, 1.08), "L": (-0.16, -0.40, 1.08)},
+        "flag": {"L": (0.08, -0.14, 1.12), "R": (0.08, -0.12, 1.52)},
+        "rifle": {"R": (0.04, -0.22, 1.22), "L": (-0.12, -0.20, 1.08)},
     }
     return table.get(prop)
+
+
+# Elbow pole, in character space. X is mirrored per arm.
+POLES = {
+    "trumpet": (0.34, -0.06, 1.40),
+    "mellophone": (0.32, -0.08, 1.38),
+    "trombone": (0.38, -0.12, 1.30),
+    "baritone": (0.30, -0.14, 1.22),
+    "clarinet": (0.26, -0.10, 1.34),
+    "flute": (0.22, -0.04, 1.48),
+    "sax": (0.28, -0.14, 1.22),
+    "tuba": (0.32, -0.10, 1.22),
+    "snare": (0.20, -0.18, 1.10),
+    "tenor": (0.22, -0.20, 1.08),
+    "bass": (0.26, -0.22, 1.02),
+    "mallet": (0.24, -0.24, 1.10),
+    "flag": (0.16, -0.06, 1.36),
+    "rifle": (0.20, -0.14, 1.18),
+}
 
 
 _ARM_CACHE = {}
@@ -633,9 +726,10 @@ def aimed_arms(prop, gait):
     targets = arm_targets(prop, gait)
     if not targets:
         return None
-    key = (prop, gait, tuple(sorted((name, tuple(point)) for name, point in targets.items())))
+    pole = POLES.get(prop, (0.30, -0.12, 1.25))
+    key = (prop, gait, pole, tuple(sorted((name, tuple(point)) for name, point in targets.items())))
     if key not in _ARM_CACHE:
-        _ARM_CACHE[key] = solve_arms(targets)
+        _ARM_CACHE[key] = solve_arms(targets, pole)
     return _ARM_CACHE[key]
 
 
@@ -728,25 +822,32 @@ def attach_props(person_prop, parts, meshes, mats, color, collection, detailed):
         bell_obj = mesh_obj("bell", meshes["bell"], collection)
         paint(bell_obj, mats.silver if prop == "clarinet" else metal)
         end = -0.66 if prop == "trombone" else -0.48 if prop == "flute" else -0.40
+        if prop == "trumpet":
+            bell_obj.scale = (1.8, 1.8, 1.35)
         adopt(bell_obj, obj, (0.0, 0.0, end))
         obj["side"] = "L" if prop == "clarinet" else "R"
         directions = {
-            "trumpet": (0.85, -0.15, 0.08),
-            "mellophone": (0.15, -0.9, 0.2),
-            "trombone": (-0.72, -0.45, 0.05),
-            "baritone": (0.05, -0.25, 0.85),
-            "clarinet": (0.04, -0.25, -0.9),
-            "flute": (0.95, -0.05, 0.02),
+            # Trumpet bell sits on the horizon, straight ahead.
+            "trumpet": (0.0, -1.0, 0.04),
+            "mellophone": (0.05, -0.96, 0.12),
+            "trombone": (-0.15, -0.95, 0.02),
+            "baritone": (0.0, -0.35, 0.90),
+            "clarinet": (0.0, -0.12, -1.0),
+            "flute": (1.0, -0.08, 0.02),
         }
         obj["bell_dir"] = directions[prop]
     elif prop == "tuba":
         horn = mesh_obj("sousa", meshes["sousa"], collection)
         paint(horn, mats.brass)
-        adopt(horn, spine, (0.0, 0.0, 1.18))
+        adopt(horn, spine, (0.0, -0.04, 1.05))
+        neck = mesh_obj("lead", meshes["pipe_long"], collection)
+        paint(neck, mats.brass)
+        adopt(neck, spine, (-0.02, -0.16, 1.48), euler_pointing((0.0, -0.35, 0.94)))
         bell_obj = mesh_obj("bell", meshes["bell"], collection)
-        bell_obj.scale = (2.4, 2.4, 2.2)
+        bell_obj.scale = (4.8, 4.8, 2.4)
         paint(bell_obj, mats.brass)
-        adopt(bell_obj, spine, (0.02, -0.34, 1.50), (math.radians(78), 0.0, 0.15))
+        # Wide end of the cone is local -Z. Aim it forward and up, clear of the shako.
+        adopt(bell_obj, spine, (0.04, -0.55, 1.98), euler_pointing((0.08, -0.72, 0.68)))
         mouth = tube(left, hand_l, mats.brass, meshes["slim"])
         mouth["side"] = "L"
         mouth["bell_dir"] = (0.0, -0.35, 0.55)
@@ -778,16 +879,17 @@ def attach_props(person_prop, parts, meshes, mats, color, collection, detailed):
             mallet["side"] = side
             mallet["bell_dir"] = (0.0, -0.35, -0.85)
     elif prop == "flag":
-        pole = tube(right, hand_r, mats.white, meshes["pole"])
+        # Lower hand holds the pole. -Z aims up, so the cloth hangs above both hands.
+        pole = tube(left, hand_l, mats.white, meshes["pole"])
         cloth = mesh_obj("flag", meshes["flag"], collection)
         paint(cloth, mats.cloth(color))
-        adopt(cloth, pole, (0.02, 0.0, -1.05))
+        adopt(cloth, pole, (0.015, 0.0, -0.42))
         stripe = mesh_obj("stripe", meshes["cube"], collection)
-        stripe.scale = (0.03, 0.04, 0.46)
+        stripe.scale = (0.04, 0.02, 0.46)
         paint(stripe, mats.gold)
-        adopt(stripe, cloth, (0.0, 0.04, 0.23))
-        pole["side"] = "R"
-        pole["bell_dir"] = (0.05, -0.12, 1.0)
+        adopt(stripe, cloth, (0.05, 0.0, -0.23))
+        pole["side"] = "L"
+        pole["bell_dir"] = (0.0, -0.04, 1.0)
         parts["flap"] = cloth
     elif prop == "rifle":
         barrel = tube(right, hand_r, mats.black, meshes["barrel"])
@@ -804,7 +906,7 @@ def build_drums(prop, spine, right, left, hand_r, hand_l, meshes, mats, collecti
     if prop == "snare":
         drum = mesh_obj("snare", meshes["snare"], collection)
         paint(drum, mats.white)
-        adopt(drum, spine, (0.0, -0.2, 1.02), (math.radians(90), 0.0, 0.0))
+        adopt(drum, spine, (0.0, -0.28, 0.86), (math.radians(90), 0.0, 0.0))
         rim = mesh_obj("rim", meshes["rim"], collection)
         paint(rim, mats.silver)
         adopt(rim, drum, (0.0, 0.0, 0.05))
@@ -823,7 +925,7 @@ def build_drums(prop, spine, right, left, hand_r, hand_l, meshes, mats, collecti
     else:
         drum = mesh_obj("bass", meshes["bassdrum"], collection)
         paint(drum, mats.white)
-        adopt(drum, spine, (0.0, -0.24, 0.92), (0.0, math.radians(90), 0.0))
+        adopt(drum, spine, (0.0, -0.32, 0.78), (0.0, math.radians(90), 0.0))
     for side in (-0.08, 0.08):
         band = mesh_obj("strap", meshes["cube"], collection)
         band.scale = (0.03, 0.025, 0.42)
@@ -832,7 +934,7 @@ def build_drums(prop, spine, right, left, hand_r, hand_l, meshes, mats, collecti
     for side, parent, hand in (("R", right, hand_r), ("L", left, hand_l)):
         rod = add_tube(parent, meshes["stick"], hand, (0.0, 0.0, 0.0), mats.wood, collection)
         rod["side"] = side
-        rod["bell_dir"] = (0.0, -0.55, -0.7)
+        rod["bell_dir"] = (0.05 if side == "R" else -0.05, -0.15, -1.0)
         parts["grips"].append(rod)
 
 
@@ -865,15 +967,12 @@ def spawn(name, color, prop, height_m, meshes, mats, collection=None, detailed=F
         adopt(fore, arm, (0.0, 0.0, -UPPER))
         glove = mesh_obj(f"{name}.glove.{side}", meshes["glove"], collection)
         paint(glove, mats.glove)
-        adopt(glove, fore, (0.0, -0.01, -FORE + 0.02))
+        adopt(glove, fore, (0.0, -0.015, -FORE))
         parts[f"thigh.{side}"] = thigh
         parts[f"shin.{side}"] = shin
         parts[f"foot.{side}"] = foot
         parts[f"arm.{side}"] = arm
         parts[f"forearm.{side}"] = fore
-    shadow = mesh_obj(f"{name}.shadow", meshes["shadow"], collection)
-    paint(shadow, mats.shadow)
-    adopt(shadow, root, (0.0, 0.0, 0.02))
     if prop and prop != "none":
         attach_props(prop, parts, meshes, mats, color, collection, detailed)
     parts.setdefault("grips", [])
@@ -1256,11 +1355,21 @@ def build_show(scene):
     return people
 
 
-def look_at(obj, target):
+def look_level(obj, target):
+    """Aim a camera with zero roll. Local -Z looks at the target, local +Y stays upright."""
     direction = Vector(target) - obj.location
-    if direction.length < 1e-4:
+    if direction.length < 1e-6:
         return
-    obj.rotation_euler = direction.to_track_quat("-Z", "Z").to_euler()
+    forward = direction.normalized()
+    z_axis = -forward
+    up = Vector((0.0, 0.0, 1.0))
+    x_axis = up.cross(z_axis)
+    if x_axis.length < 1e-5:
+        x_axis = Vector((1.0, 0.0, 0.0))
+    x_axis.normalize()
+    y_axis = z_axis.cross(x_axis).normalized()
+    rotation = Matrix((x_axis, y_axis, z_axis)).transposed()
+    obj.rotation_euler = rotation.to_euler("XYZ")
 
 
 def studio():
@@ -1269,38 +1378,42 @@ def studio():
     world.use_nodes = True
     background = world.node_tree.nodes.get("Background")
     if background:
-        background.inputs["Color"].default_value = (0.58, 0.64, 0.70, 1.0)
-        background.inputs["Strength"].default_value = 0.65
-    ground = mesh_obj("studio-ground", new_mesh("ground", lambda bm: add_box(bm, (8, 8, 0.04), (0, 0, -0.02), 0)))
-    paint(ground, shade((214, 216, 218), 0.8, 0.0, "cyc"))
+        background.inputs["Color"].default_value = (0.73, 0.74, 0.75, 1.0)
+        background.inputs["Strength"].default_value = 0.55
+    ground = mesh_obj("studio-ground", new_mesh("ground", lambda bm: add_box(bm, (10, 10, 0.04), (0, 0, -0.02), 0)))
+    paint(ground, shade((206, 208, 210), 0.85, 0.0, "cyc"))
+    wall = mesh_obj("studio-wall", new_mesh("wall", lambda bm: add_box(bm, (8, 0.06, 4.2), (0, 0, 0), 0)))
+    wall.location = (0.0, 2.6, 2.0)
+    paint(wall, shade((188, 190, 192), 0.9, 0.0, "cyc-wall"))
     sun_data = bpy.data.lights.new("studio-sun", "SUN")
-    sun_data.energy = 3.2
-    sun_data.angle = math.radians(6.0)
+    sun_data.energy = 3.4
+    sun_data.angle = math.radians(8.0)
     sun = bpy.data.objects.new("studio-sun", sun_data)
     link(sun)
-    sun.rotation_euler = (math.radians(48), math.radians(-18), math.radians(24))
+    sun.rotation_euler = (math.radians(38), math.radians(-12), math.radians(18))
     fill_data = bpy.data.lights.new("studio-fill", "AREA")
-    fill_data.energy = 180
+    fill_data.energy = 220
     fill_data.size = 3.0
     fill = bpy.data.objects.new("studio-fill", fill_data)
-    fill.location = (-1.6, -2.2, 2.2)
+    fill.location = (-1.4, -2.4, 1.8)
     link(fill)
-    look_at(fill, (0.0, 0.0, 1.1))
+    look_level(fill, (0.0, 0.0, 1.1))
     rim_data = bpy.data.lights.new("studio-rim", "AREA")
-    rim_data.energy = 80
+    rim_data.energy = 70
     rim_data.size = 1.5
     rim = bpy.data.objects.new("studio-rim", rim_data)
-    rim.location = (0.4, 1.8, 2.0)
+    rim.location = (0.2, 2.0, 2.2)
     link(rim)
-    look_at(rim, (0.0, 0.0, 1.3))
+    look_level(rim, (0.0, 0.0, 1.3))
     camera_data = bpy.data.cameras.new("hero-cam")
-    camera_data.lens = 50
+    camera_data.lens = 42
     camera_data.clip_start = 0.02
     camera_data.clip_end = 40
     camera = bpy.data.objects.new("hero-cam", camera_data)
-    camera.location = (1.15, -2.45, 1.18)
+    # Three-quarter front, level horizon, full body including plume and tuba bell.
+    camera.location = (1.25, -4.05, 1.08)
     link(camera)
-    look_at(camera, (0.0, 0.02, 1.02))
+    look_level(camera, (0.0, 0.02, 0.98))
     bpy.context.scene.camera = camera
     blend = bpy.context.scene
     blend.render.resolution_percentage = 100
@@ -1388,8 +1501,8 @@ def render_heroes(directory):
         parts = spawn("fig", color, prop, 1.75, meshes, mats, detailed=True)
         pose = hero_pose(prop)
         apply_pose(parts, pose, {"order": False})
-        # A three-quarter stance so the face and the instrument both read.
-        parts["root"].rotation_euler = (0.0, 0.0, -0.45)
+        # Face the audience. The camera sits off to one side for the 3/4 view.
+        parts["root"].rotation_euler = (0.0, 0.0, 0.0)
         bpy.context.scene.frame_set(1)
         path = os.path.join(directory, prop)
         print(f"hero still {prop}", flush=True)

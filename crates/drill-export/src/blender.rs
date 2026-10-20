@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 
 pub const SCENE_SCRIPT: &str = include_str!("blender_scene.py");
 pub const MARCHER_SCRIPT: &str = include_str!("drill_marcher.py");
+const NOTO_SANS_JP: &[u8] = include_bytes!("../../../assets/NotoSansJP.ttf");
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -554,6 +555,7 @@ pub fn write_bundle(directory: &Path, scene: &BlenderScene) -> std::io::Result<(
     let data = directory.join("drill_scene.json");
     fs::write(&script, SCENE_SCRIPT)?;
     fs::write(directory.join("drill_marcher.py"), MARCHER_SCRIPT)?;
+    fs::write(directory.join("NotoSansJP.ttf"), NOTO_SANS_JP)?;
     fs::write(&data, scene_json(scene).map_err(std::io::Error::other)?)?;
     Ok((script, data))
 }
@@ -665,6 +667,13 @@ mod tests {
         assert!(text.contains("shako"));
         assert!(text.contains("drill_marcher"));
         assert!(text.contains("heroes-only"));
+        assert!(text.contains("NotoSansJP"));
+        assert!(
+            fs::metadata(directory.join("NotoSansJP.ttf"))
+                .unwrap()
+                .len()
+                > 1000
+        );
         let marcher = fs::read_to_string(directory.join("drill_marcher.py")).unwrap();
         assert_eq!(marcher, MARCHER_SCRIPT);
         assert!(marcher.contains("MarcherRig"));

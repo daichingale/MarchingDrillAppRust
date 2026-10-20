@@ -119,18 +119,22 @@ def sky(night):
     out = nodes.new("ShaderNodeOutputWorld")
     bg = nodes.new("ShaderNodeBackground")
     coord = nodes.new("ShaderNodeTexCoord")
+    mapping = nodes.new("ShaderNodeMapping")
+    # Generated X is not "up". Turn the gradient so it runs from horizon to zenith.
+    mapping.inputs["Rotation"].default_value = (0.0, math.radians(90), 0.0)
     grad = nodes.new("ShaderNodeTexGradient")
-    grad.gradient_type = "SPHERICAL"
+    grad.gradient_type = "LINEAR"
     ramp = nodes.new("ShaderNodeValToRGB")
     if night:
-        ramp.color_ramp.elements[0].color = (0.01, 0.015, 0.04, 1.0)
-        ramp.color_ramp.elements[1].color = (0.0, 0.0, 0.01, 1.0)
-        bg.inputs["Strength"].default_value = 0.35
+        ramp.color_ramp.elements[0].color = (0.02, 0.03, 0.07, 1.0)
+        ramp.color_ramp.elements[1].color = (0.0, 0.0, 0.015, 1.0)
+        bg.inputs["Strength"].default_value = 0.22
     else:
-        ramp.color_ramp.elements[0].color = (0.40, 0.58, 0.86, 1.0)
-        ramp.color_ramp.elements[1].color = (0.78, 0.84, 0.90, 1.0)
-        bg.inputs["Strength"].default_value = 0.42
-    links.new(coord.outputs["Generated"], grad.inputs["Vector"])
+        ramp.color_ramp.elements[0].color = (0.16, 0.32, 0.62, 1.0)
+        ramp.color_ramp.elements[1].color = (0.45, 0.58, 0.74, 1.0)
+        bg.inputs["Strength"].default_value = 0.32
+    links.new(coord.outputs["Generated"], mapping.inputs["Vector"])
+    links.new(mapping.outputs["Vector"], grad.inputs["Vector"])
     links.new(grad.outputs["Fac"], ramp.inputs["Fac"])
     links.new(ramp.outputs["Color"], bg.inputs["Color"])
     links.new(bg.outputs["Background"], out.inputs["Surface"])
@@ -223,17 +227,29 @@ def add_line(name, field, x, y, sx, sy, material, z=0.03):
     return obj
 
 
-def yard_label(field, x, text, material):
+def yard_label(field, x, text, material, y=None):
     curve = bpy.data.curves.new("yard", "FONT")
     curve.body = text
-    curve.size = 0.9
+    curve.size = 2.4
     curve.align_x = "CENTER"
     curve.align_y = "CENTER"
-    curve.extrude = 0.01
+    curve.extrude = 0.02
+    curve.resolution_u = 6
+    font = ui_font()
+    if font is not None:
+        curve.font = font
+    height = float(field["height"])
+    near = 3.2 if y is None else float(y)
+    plate = mesh_object(
+        f"num-plate-{text}-{x:.0f}",
+        box_mesh(1.5, 0.08, 1.7),
+        to_world(field, x, near - 0.15, 0.95),
+    )
+    paint(plate, shade((18, 28, 22), 0.8, "num-plate"))
     obj = bpy.data.objects.new(f"num-{text}-{x:.0f}", curve)
-    # Numbers read from the audience, sitting just inside the near sideline.
-    obj.location = to_world(field, x, 2.2, 0.05)
-    obj.rotation_euler = (0.0, 0.0, 0.0)
+    # Tilt the digits up so the press box can read them. +Z faces the audience.
+    obj.location = to_world(field, x, near, 0.95)
+    obj.rotation_euler = (math.radians(68), 0.0, 0.0)
     link(obj)
     paint(obj, material)
     return obj
@@ -275,7 +291,7 @@ def build_field(scene):
             yards = min(float(x), width - float(x))
             number = int(round(yards))
             if number >= 10 and number % 10 == 0 and number <= 50:
-                yard_label(field, x, str(number), white)
+                yard_label(field, x, str(number), white, height * 0.18)
         dash = box_mesh(0.12, 0.55, 0.02)
         for y in field.get("hashes", []):
             step = 1.0 if field.get("unit") == "yd" else 5.0
@@ -307,40 +323,98 @@ def build_field(scene):
                 ("e", (max_x, cy), (0.12, span_y)),
             ):
                 add_line(f"frame-{index}-{edge}", field, center[0], center[1], scale[0], scale[1], gold if index == 0 else white)
+        grid_ink = shade((244, 246, 236), 0.4, "grid")
         for x in field.get("major_x", []):
-            meters = int(round(float(x)))
-            if meters % 5 == 0:
-                yard_label(field, x, str(abs(meters)), shade((28, 32, 36), 0.45, "ink"))
+            add_line(f"major-{x:.1f}", field, x, height * 0.5, 0.07, height * 0.92, grid_ink)
+        # The major grid is snapped to the step, so it is not on the tens.
+        # Paint 10, 20, 30… where the press box can read them.
+        for meters in range(10, int(width), 10):
+            add_line(
+                f"yardline-{meters}",
+                field,
+                float(meters),
+                height * 0.5,
+                0.16,
+                height * 0.88,
+                grid_ink,
+                0.045,
+            )
+            yard_label(field, float(meters), str(meters), grid_ink, height * 0.32)
     build_stands(field, kind)
 
 
 def build_stands(field, kind):
     width = float(field["width"])
     height = float(field["height"])
-    seat = shade((92, 98, 108), 0.7, "seat")
+    span = width * 0.7
+    riser_mat = shade((58, 62, 70), 0.75, "riser")
+    seat_mat = shade((96, 104, 118), 0.65, "seat")
+    rail_mat = shade((214, 216, 210), 0.35, "rail")
     glass = shade((150, 186, 214), 0.15, "glass")
-    # Stepped bleachers along both sidelines, outside the border.
-    for side, y in (("south", -6.5), ("north", height + 6.5)):
-        for row in range(5):
-            depth = 1.3
-            rise = 0.55
+    frame = shade((48, 52, 58), 0.5, "booth")
+    # Seat row on top of each riser, plus a front rail, on both sidelines.
+    for side, y_edge, outward in (("south", -5.2, -1.0), ("north", height + 5.2, 1.0)):
+        for row in range(6):
+            depth = 1.15
+            rise = 0.42
+            y = y_edge + outward * (0.6 + row * 1.25)
+            z = 0.28 + row * rise
             block = mesh_object(
                 f"stand-{side}-{row}",
-                box_mesh(width * 0.72, depth, rise),
-                to_world(field, width * 0.5, y + (1.4 if y < 0 else -1.4) * row, 0.4 + row * rise),
+                box_mesh(span, depth, rise),
+                to_world(field, width * 0.5, y, z),
             )
-            paint(block, seat)
-    booth = mesh_object(
+            paint(block, riser_mat)
+            pad = mesh_object(
+                f"seat-{side}-{row}",
+                box_mesh(span * 0.98, 0.42, 0.08),
+                to_world(field, width * 0.5, y + outward * 0.22, z + rise * 0.5 + 0.02),
+            )
+            paint(pad, seat_mat)
+        rail_y = y_edge + outward * 0.15
+        rail = mesh_object(
+            f"rail-{side}",
+            box_mesh(span, 0.06, 0.08),
+            to_world(field, width * 0.5, rail_y, 1.05),
+        )
+        paint(rail, rail_mat)
+        posts = max(4, int(span / 8.0))
+        for index in range(posts):
+            x = width * 0.5 - span * 0.5 + (index + 0.5) * span / posts
+            post = mesh_object(
+                f"post-{side}-{index}",
+                box_mesh(0.06, 0.06, 1.05),
+                to_world(field, x, rail_y, 0.55),
+            )
+            paint(post, rail_mat)
+    # Press box: deck, mullions, glass, roof, and a front rail. Not one slab.
+    deck_y = -8.6
+    deck = mesh_object("press-deck", box_mesh(12.0, 4.0, 0.35), to_world(field, width * 0.5, deck_y, 3.5))
+    paint(deck, frame)
+    roof = mesh_object("press-roof", box_mesh(13.0, 4.6, 0.22), to_world(field, width * 0.5, deck_y, 6.15))
+    paint(roof, frame)
+    glass_pane = mesh_object(
         "press-box",
-        box_mesh(8.0, 3.2, 2.4),
-        to_world(field, width * 0.5, -9.5, 4.6),
+        box_mesh(10.4, 0.12, 2.2),
+        to_world(field, width * 0.5, deck_y - 1.7, 4.85),
     )
-    paint(booth, glass)
+    paint(glass_pane, glass)
+    for index, x_off in enumerate((-4.6, -2.3, 0.0, 2.3, 4.6)):
+        mullion = mesh_object(
+            f"press-mullion-{index}",
+            box_mesh(0.12, 0.16, 2.3),
+            to_world(field, width * 0.5 + x_off, deck_y - 1.7, 4.85),
+        )
+        paint(mullion, frame)
+    booth_rail = mesh_object(
+        "press-rail",
+        box_mesh(11.2, 0.06, 0.08),
+        to_world(field, width * 0.5, deck_y - 1.95, 4.05),
+    )
+    paint(booth_rail, rail_mat)
     if kind != "football":
         return
-    # A low rail between the track and the field.
-    rail = shade((210, 210, 206), 0.4, "rail")
-    add_line("rail", field, width * 0.5, -1.2, width, 0.08, rail, 0.4)
+    add_line("rail", field, width * 0.5, -1.2, width, 0.08, rail_mat, 0.4)
 
 
 def parent(child, parent_obj):
@@ -444,9 +518,6 @@ def build_figure(person, templates, style, materials):
         parent(leg, root)
         legs.append(leg)
     add_prop(root, person.get("prop") or "brass", templates, color, height)
-    shadow = mesh_object("shadow", templates["shadow"], (0.0, 0.0, 0.02))
-    paint(shadow, shade((16, 24, 16), 0.95, "contact"))
-    parent(shadow, root)
     return root, legs
 
 
@@ -643,6 +714,43 @@ def clear_named(prefix):
             bpy.data.objects.remove(obj, do_unlink=True)
 
 
+def build_towers(field, night):
+    """Four corner towers. The lamp banks glow only at night; the steel is always there."""
+    width = float(field["width"])
+    height = float(field["height"])
+    corners = (
+        (-8.0, -8.0),
+        (width + 8.0, -8.0),
+        (-8.0, height + 8.0),
+        (width + 8.0, height + 8.0),
+    )
+    steel = shade((54, 58, 64), 0.45, "tower")
+    lamp = shade((255, 214, 150) if night else (90, 92, 96), 0.3, "lamp")
+    if night:
+        lamp_node = lamp.node_tree.nodes.get("Principled BSDF")
+        if lamp_node is not None:
+            if "Emission Color" in lamp_node.inputs:
+                lamp_node.inputs["Emission Color"].default_value = (1.0, 0.86, 0.62, 1.0)
+            if "Emission Strength" in lamp_node.inputs:
+                lamp_node.inputs["Emission Strength"].default_value = 6.0
+    pole_mesh = cylinder_mesh(0.16, 16.0, 8)
+    head_mesh = box_mesh(1.8, 0.7, 0.28)
+    brace_mesh = box_mesh(0.08, 0.08, 4.2)
+    for index, (x, y) in enumerate(corners):
+        pole = mesh_object(f"lite-pole-{index}", pole_mesh, to_world(field, x, y, 8.0))
+        paint(pole, steel)
+        head = mesh_object(f"lite-head-{index}", head_mesh, to_world(field, x, y, 16.2))
+        paint(head, lamp)
+        for side, dx in enumerate((-0.55, 0.55)):
+            brace = mesh_object(
+                f"lite-brace-{index}-{side}",
+                brace_mesh,
+                to_world(field, x + dx, y, 6.5),
+            )
+            brace.rotation_euler = (0.0, math.radians(8 if dx > 0 else -8), 0.0)
+            paint(brace, steel)
+
+
 def build_lights(scene):
     clear_named("lite-")
     field = scene["field"]
@@ -650,6 +758,7 @@ def build_lights(scene):
     height = float(field["height"])
     night = (scene.get("time_of_day") or "day") == "night"
     sky(night)
+    build_towers(field, night)
     if night:
         corners = (
             (-8.0, -8.0),
@@ -657,20 +766,7 @@ def build_lights(scene):
             (-8.0, height + 8.0),
             (width + 8.0, height + 8.0),
         )
-        pole_mesh = cylinder_mesh(0.22, 16.0, 6)
-        head_mesh = box_mesh(1.6, 0.55, 0.35)
-        lamp = shade((255, 214, 150), 0.3, "lamp")
-        lamp_node = lamp.node_tree.nodes.get("Principled BSDF")
-        if lamp_node is not None:
-            if "Emission Color" in lamp_node.inputs:
-                lamp_node.inputs["Emission Color"].default_value = (1.0, 0.86, 0.62, 1.0)
-            if "Emission Strength" in lamp_node.inputs:
-                lamp_node.inputs["Emission Strength"].default_value = 8.0
         for index, (x, y) in enumerate(corners):
-            pole = mesh_object(f"lite-pole-{index}", pole_mesh, to_world(field, x, y, 8.0))
-            paint(pole, shade((40, 42, 48), 0.6, "tower"))
-            head = mesh_object(f"lite-head-{index}", head_mesh, to_world(field, x, y, 16.3))
-            paint(head, lamp)
             # Sit the spot just inside the pole, clear of the mesh, aimed at the field.
             inward_x = width * 0.5 + (x - width * 0.5) * 0.92
             inward_y = height * 0.5 + (y - height * 0.5) * 0.92
@@ -700,7 +796,7 @@ def build_lights(scene):
         link(obj)
         obj.rotation_euler = (math.radians(52), math.radians(8), math.radians(28))
         fill = bpy.data.lights.new("lite-fill", "AREA")
-        fill.energy = 60
+        fill.energy = 140
         fill.color = (0.75, 0.84, 1.0)
         fill.size = 12.0
         fill_obj = bpy.data.objects.new("lite-fill", fill)
@@ -748,6 +844,7 @@ def apply_engine(scene_data, samples):
         if hasattr(eevee, "bloom_intensity"):
             eevee.bloom_intensity = 0.08
     if hasattr(eevee, "use_soft_shadows"):
+        # Soft shadows on the fine pass. Draft keeps a hard sun shadow so 80 people stay near 2s/frame.
         eevee.use_soft_shadows = fine
     if hasattr(eevee, "shadow_cube_size"):
         eevee.shadow_cube_size = "1024" if fine else "512"
@@ -793,23 +890,43 @@ def configure_render(scene_data, options):
     return start
 
 
-def stick_to_camera(obj, camera, location):
+def stick_to_camera(obj, camera, location, rotation=(0.0, 0.0, 0.0)):
     obj.parent = camera
     obj.location = location
-    obj.rotation_euler = (0.0, 0.0, 0.0)
+    obj.rotation_euler = rotation
+
+
+_UI_FONT = None
+_UI_FONT_READY = False
 
 
 def ui_font():
-    for path in (
-        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
-        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+    """Japanese-capable face. The bundle ships Noto Sans JP; system CJK is the fallback."""
+    global _UI_FONT, _UI_FONT_READY
+    if _UI_FONT_READY:
+        return _UI_FONT
+    _UI_FONT_READY = True
+    folder = script_dir()
+    candidates = [
+        os.path.join(folder, "NotoSansJP.ttf"),
+        os.path.normpath(os.path.join(folder, "..", "..", "..", "assets", "NotoSansJP.ttf")),
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-    ):
-        if os.path.isfile(path):
-            try:
-                return bpy.data.fonts.load(path)
-            except RuntimeError:
-                continue
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJKjp-Regular.otf",
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+    ]
+    for path in candidates:
+        if not os.path.isfile(path):
+            continue
+        try:
+            font = bpy.data.fonts.load(path)
+            print(f"ui font {path}", flush=True)
+            _UI_FONT = font
+            return font
+        except RuntimeError as exc:
+            print(f"ui font skipped {path}: {exc}", flush=True)
+    print("ui font missing; title may show boxes", flush=True)
     return None
 
 
@@ -817,7 +934,9 @@ def add_overlay(scene, camera):
     if not scene.get("title_card", True):
         return
     font = ui_font()
-    plate = mesh_object("title-plate", box_mesh(2.0, 0.42, 0.02), (0.0, 0.0, 0.0))
+    # Text already faces the lens: it sits on the camera's -Z and its front is +Z.
+    facing = (0.0, 0.0, 0.0)
+    plate = mesh_object("title-plate", box_mesh(2.4, 0.46, 0.02), (0.0, 0.0, 0.0))
     stick_to_camera(plate, camera, (0.0, 0.58, -1.9))
     paint(plate, shade((16, 20, 26), 0.8, "plate"))
     title = bpy.data.curves.new("title-card", "FONT")
@@ -826,25 +945,27 @@ def add_overlay(scene, camera):
     title.align_x = "CENTER"
     title.align_y = "CENTER"
     title.extrude = 0.004
+    title.resolution_u = 8
     if font is not None:
         title.font = font
     card = bpy.data.objects.new("title-card", title)
-    stick_to_camera(card, camera, (0.0, 0.58, -1.82))
+    stick_to_camera(card, camera, (0.0, 0.58, -1.82), facing)
     link(card)
     paint(card, shade((248, 244, 230), 0.4, "card-ink"))
-    burn_plate = mesh_object("burn-plate", box_mesh(1.8, 0.18, 0.02), (0.0, 0.0, 0.0))
+    burn_plate = mesh_object("burn-plate", box_mesh(2.2, 0.20, 0.02), (0.0, 0.0, 0.0))
     stick_to_camera(burn_plate, camera, (0.0, -0.58, -1.9))
     paint(burn_plate, shade((16, 20, 26), 0.8, "burn-plate"))
     burn = bpy.data.curves.new("burn-in", "FONT")
     burn.body = ""
-    burn.size = 0.08
+    burn.size = 0.07
     burn.align_x = "CENTER"
     burn.align_y = "CENTER"
     burn.extrude = 0.003
+    burn.resolution_u = 8
     if font is not None:
         burn.font = font
     label = bpy.data.objects.new("burn-in", burn)
-    stick_to_camera(label, camera, (0.0, -0.58, -1.82))
+    stick_to_camera(label, camera, (0.0, -0.58, -1.82), facing)
     link(label)
     paint(label, shade((248, 244, 230), 0.4, "burn-ink"))
     cues = sorted(scene.get("cues") or [], key=lambda item: int(item["frame"]))
@@ -866,7 +987,7 @@ def add_overlay(scene, camera):
                 chosen = cue
             else:
                 break
-        obj.data.body = f"{show_name}   {chosen.get('set', 1)}   {chosen.get('count', 0)}"
+        obj.data.body = f"{show_name}    {chosen.get('set', 1)}    {chosen.get('count', 0)}"
 
     bpy.app.handlers.frame_change_pre.append(on_frame)
     on_frame(bpy.context.scene)
