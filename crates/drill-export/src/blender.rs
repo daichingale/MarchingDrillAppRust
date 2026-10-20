@@ -587,6 +587,34 @@ mod tests {
     }
 
     #[test]
+    fn a_tempo_change_and_the_audio_offset_move_the_same_hit() {
+        let mut tempo = TempoMap::constant(120.0);
+        // 16 counts at 120 bpm is 8 seconds. At 24 fps that is frame 1 + 192.
+        assert_eq!(blender_frame(&tempo, 16.0, 24), 1 + 192);
+        tempo.set(8.0, 60.0);
+        // The first 8 counts stay at 120 (4s). The next 8 are at 60 (8s).
+        assert_eq!(blender_frame(&tempo, 16.0, 24), 1 + 288);
+        let mut document = two_step_show();
+        document.tempo = tempo;
+        document.audio = Some(drill_core::audio::AudioTrack {
+            path: "show.wav".into(),
+            duration_seconds: 30.0,
+            offset_seconds: 1.25,
+            ..drill_core::audio::AudioTrack::default()
+        });
+        let scene = build_scene(&document, &BlenderOptions::default());
+        assert!((scene.audio_offset_seconds - 1.25).abs() < 1e-4);
+        assert_eq!(scene.audio_path.as_deref(), Some("show.wav"));
+        let hit = scene
+            .keyframes
+            .iter()
+            .map(|key| key.frame)
+            .max()
+            .unwrap_or(1);
+        assert_eq!(hit, blender_frame(&document.tempo, 8.0, scene.fps));
+    }
+
+    #[test]
     fn scene_json_round_trips_and_keyframes_span_the_move() {
         let scene = build_scene(&two_step_show(), &BlenderOptions::default());
         let parsed = parse_scene(&scene_json(&scene).unwrap()).unwrap();

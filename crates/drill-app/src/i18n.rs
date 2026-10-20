@@ -148,6 +148,10 @@ pub enum Text {
     BlenderAuto,
     EeveeName,
     CyclesName,
+    Metronome,
+    MetronomeHint,
+    SuggestTempo,
+    SuggestTempoHint,
 }
 
 impl Text {
@@ -155,7 +159,7 @@ impl Text {
     /// the catalog completeness test fail during review rather than leaking a
     /// fallback string into a release build.
     #[cfg(test)]
-    pub const ALL: [Self; 99] = [
+    pub const ALL: [Self; 103] = [
         Self::File,
         Self::Edit,
         Self::Playback,
@@ -255,6 +259,10 @@ impl Text {
         Self::BlenderAuto,
         Self::EeveeName,
         Self::CyclesName,
+        Self::Metronome,
+        Self::MetronomeHint,
+        Self::SuggestTempo,
+        Self::SuggestTempoHint,
     ];
 }
 
@@ -463,6 +471,14 @@ pub fn text(locale: Locale, key: Text) -> &'static str {
         (Locale::En, Text::EeveeName) => "Eevee",
         (Locale::Ja, Text::CyclesName) => "Cycles",
         (Locale::En, Text::CyclesName) => "Cycles",
+        (Locale::Ja, Text::Metronome) => "♩ クリック",
+        (Locale::En, Text::Metronome) => "♩ Click",
+        (Locale::Ja, Text::MetronomeHint) => "カウントに合わせてクリックを鳴らす",
+        (Locale::En, Text::MetronomeHint) => "Click on each count",
+        (Locale::Ja, Text::SuggestTempo) => "♪ テンポ",
+        (Locale::En, Text::SuggestTempo) => "♪ Tempo",
+        (Locale::Ja, Text::SuggestTempoHint) => "曲から読んだテンポを、このカウントから使う",
+        (Locale::En, Text::SuggestTempoHint) => "Use the tempo heard in the song, from this count",
     }
 }
 

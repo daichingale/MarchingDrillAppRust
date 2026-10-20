@@ -226,6 +226,20 @@ impl ClickSchedule {
         out.events.sort_by_key(|event| event.timeline);
     }
 
+    /// Move every click by `samples` on the file/output timeline.
+    ///
+    /// The schedule is built in show time (count 0 at sample 0). A positive
+    /// audio offset means count 0 is later in the file, so the clicks move
+    /// with it and land on the same beats as the picture.
+    pub fn shift_samples(&mut self, samples: i64) {
+        if samples == 0 {
+            return;
+        }
+        for event in &mut self.events {
+            event.timeline = event.timeline.saturating_add(samples);
+        }
+    }
+
     #[must_use]
     pub fn lower_bound(&self, from: i64) -> usize {
         self.events.partition_point(|event| event.timeline < from)
@@ -389,6 +403,28 @@ mod tests {
                 .events()
                 .windows(2)
                 .all(|pair| pair[0].timeline <= pair[1].timeline)
+        );
+    }
+
+    #[test]
+    fn an_audio_offset_slides_clicks_onto_the_file_timeline() {
+        let tempo = TempoMap::constant(120.0);
+        let settings = ClickSettings {
+            enabled: true,
+            mode: ClickMode::Always,
+            count_in: CountIn::Two,
+            ..ClickSettings::default()
+        };
+        let mut schedule = ClickSchedule::build(&tempo, 0.0, 4.0, &settings, 48_000);
+        let before = schedule.events()[0].timeline;
+        // Count 0 is 1.5 seconds into the file.
+        schedule.shift_samples(72_000);
+        assert_eq!(schedule.events()[0].timeline, before + 72_000);
+        assert!(
+            schedule
+                .events()
+                .iter()
+                .any(|event| event.timeline == 72_000)
         );
     }
 

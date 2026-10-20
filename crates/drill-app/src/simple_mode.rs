@@ -1275,7 +1275,8 @@ impl DrillApp {
     /// `guide-collapsed`, `guide-song`, `full-selected`, `full-collapsed`,
     /// `full-timeline`, `full-multi`, `full-list`, `full-export`, `cast`,
     /// `cast-full`, `cast-one`, `cast-many`, `cast-roster`, `cast-timeline`,
-    /// `cast-export`, `cast-video`, `cast-play`, or `cast-play-mid`.
+    /// `cast-export`, `cast-video`, `cast-play`, `cast-play-mid`, `full-music`,
+    /// `full-music-applied`, or `song-panel`.
     pub(crate) fn apply_qa_simple_fixture(&mut self) {
         let Ok(stage) = std::env::var("DRILLFORGE_QA_SIMPLE") else {
             return;
@@ -1334,6 +1335,20 @@ impl DrillApp {
             self.full_timeline_expanded = true;
             self.full_inspector_collapsed = true;
             self.clear_selection();
+        }
+        if stage == "full-music" || stage == "full-music-applied" {
+            self.install_music_show(stage == "full-music-applied");
+            self.full_timeline_expanded = true;
+            self.full_inspector_collapsed = true;
+            self.clear_selection();
+            self.nav_glide.settle();
+        }
+        if stage == "song-panel" {
+            self.install_music_show(false);
+            self.set_simple_mode(true);
+            self.show_guidance = false;
+            self.onboarding.coach_dismissed = true;
+            self.simple_mode.hint_closed = true;
         }
         if stage == "full-multi" {
             self.replace_selection([0, 1].into_iter().collect());
@@ -5763,9 +5778,10 @@ impl DrillApp {
             } else if let Some(rect) = self.simple_overlay_toolbar_toggle(&ctx, field, &mut block) {
                 toolbar_top = rect.top();
             }
-            self.simple_overlay_song(&ctx, field, toolbar_top, &mut block);
             let sets_anchor = toolbar_top - 8.0;
             let sets_rect = self.simple_overlay_sets(&ctx, field, sets_anchor, &mut block);
+            let song_anchor = sets_rect.map(|rect| rect.top()).unwrap_or(toolbar_top);
+            self.simple_overlay_song(&ctx, field, song_anchor, &mut block);
             self.simple_overlay_front_labels(&ctx, field, sets_anchor, sets_rect, &mut block);
         }
         self.simple_mode.overlay_block = block;
@@ -6503,7 +6519,7 @@ impl DrillApp {
             .sense(Sense::click())
             .show(ctx, |ui| {
                 egui::Frame::new()
-                    .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 230))
+                    .fill(Color32::WHITE)
                     .stroke(Stroke::new(1.0, super::app_theme::HAIRLINE))
                     .corner_radius(22.0)
                     .inner_margin(egui::Margin::symmetric(10, 6))
@@ -6561,6 +6577,30 @@ impl DrillApp {
             let _ = downbeat;
             if downbeat_click {
                 self.simple_mark_downbeat();
+            }
+            if let Some(bpm) = self.audio_state.bpm_guess() {
+                let tempo_label = format!("♪ {}", bpm.round() as i32);
+                let tempo_tip = text(self.locale, Text::SuggestTempoHint);
+                let (tempo_tile, tempo_click) = self.simple_pictogram_tile(
+                    ui,
+                    PictogramTile {
+                        icon: PhoneIcon::Note,
+                        label: &tempo_label,
+                        tip: tempo_tip,
+                        width: 108.0,
+                        enabled: true,
+                        active: false,
+                        pulse: false,
+                        filled: false,
+                        compact: false,
+                        time,
+                        lock_width: false,
+                    },
+                );
+                let _ = tempo_tile;
+                if tempo_click {
+                    self.apply_song_tempo(bpm);
+                }
             }
             let earlier_label = i18n::registered(self.locale, "simple-mode.344");
             let earlier_tip = self.key_tip(

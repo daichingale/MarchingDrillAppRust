@@ -653,6 +653,11 @@ impl DrillApp {
                     &self.document.tempo,
                     f64::from(self.document.timeline_counts()),
                     &self.click_settings,
+                    self.document
+                        .audio
+                        .as_ref()
+                        .map(|track| f64::from(track.offset_seconds))
+                        .unwrap_or(0.0),
                 );
                 ui.small(format!("クリック予定 {events} events"));
                 ui.small(super::i18n::registered(self.locale, "inspector-media.045"));

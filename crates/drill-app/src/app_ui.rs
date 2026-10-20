@@ -225,6 +225,27 @@ impl eframe::App for DrillApp {
         if let Some(track) = &self.document.audio {
             self.audio_state.set_mix(track.gain_linear(), track.muted);
         }
+        let file_origin = self
+            .document
+            .audio
+            .as_ref()
+            .map(|track| f64::from(track.offset_seconds))
+            .unwrap_or(0.0);
+        self.audio_state.configure_click(
+            &self.document.tempo,
+            f64::from(self.document.timeline_counts()),
+            &self.click_settings,
+            file_origin,
+        );
+        if self.click_settings.enabled && self.document.audio.is_none() {
+            self.audio_state.open_click_carrier();
+        }
+        let show_seconds = self.document.tempo.seconds_at(
+            self.document
+                .global_count(self.current_set, self.count_position),
+        );
+        self.audio_state
+            .poll_click_carrier(self.playing, show_seconds);
         if self.dirty && self.last_autosave.elapsed().as_secs() >= 30 {
             self.project_state
                 .autosave(&self.document, self.current_path.as_deref());
@@ -244,6 +265,10 @@ impl eframe::App for DrillApp {
                     &self.document.tempo,
                     seconds,
                 ))
+            } else if self.click_settings.enabled {
+                self.audio_state
+                    .clock_seconds()
+                    .map(|seconds| self.document.tempo.count_at(seconds))
             } else {
                 None
             };
@@ -1443,6 +1468,7 @@ impl eframe::App for DrillApp {
                     // The NOW line glides with the field, so a set jump moves one playhead
                     // across two views rather than teleporting each of them separately.
                     let (playhead_set, playhead_count) = self.render_playhead();
+                    let wave = self.timeline_wave(ui.available_width());
                     let timeline_change = draw_count_track(
                         ui,
                         &self.document,
@@ -1453,6 +1479,7 @@ impl eframe::App for DrillApp {
                         &mut self.timeline_view,
                         self.locale,
                         self.presence.set_marks(),
+                        &wave,
                     );
                     if let Some((start, end)) = timeline_change.range {
                         self.playback_start = start;
@@ -3256,6 +3283,7 @@ impl DrillApp {
     pub(crate) fn show_timeline_playback_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             self.timeline_transport_controls(ui);
+            self.show_music_sync_controls(ui);
             self.timeline_tempo_controls(ui);
             self.timeline_option_controls(ui);
         });
@@ -3292,13 +3320,71 @@ impl DrillApp {
         self.show_playback_speed_presets(ui);
     }
 
-    fn timeline_tempo_controls(&mut self, ui: &mut egui::Ui) {
+    /// Live tempo, the song's suggested BPM, and the count click. These stay
+    /// on the timeline row itself so a closed playback section cannot hide them.
+    pub(crate) fn show_music_sync_controls(&mut self, ui: &mut egui::Ui) {
         let live_bpm = super::playhead_bpm(&self.document, self.current_set, self.count_position)
             .round() as i32;
         ui.label(
-            super::i18n::registered(self.locale, "full-mode.034")
-                .replace("{0}", &live_bpm.to_string()),
+            egui::RichText::new(
+                super::i18n::registered(self.locale, "full-mode.034")
+                    .replace("{0}", &live_bpm.to_string()),
+            )
+            .size(16.0)
+            .color(Color32::from_rgb(20, 24, 32)),
         );
+        let guessed = self.audio_state.bpm_guess();
+        let suggest = match guessed {
+            Some(bpm) => format!("♪ {}", bpm.round() as i32),
+            None => text(self.locale, Text::SuggestTempo).to_owned(),
+        };
+        if ui
+            .add_enabled(
+                guessed.is_some(),
+                egui::Button::new(
+                    egui::RichText::new(suggest)
+                        .size(16.0)
+                        .color(Color32::WHITE),
+                )
+                .fill(Color32::from_rgb(20, 96, 200)),
+            )
+            .on_hover_text(text(self.locale, Text::SuggestTempoHint))
+            .clicked()
+            && let Some(bpm) = guessed
+        {
+            self.apply_song_tempo(bpm);
+        }
+        let click_on = self.click_settings.enabled;
+        let click_ink = if click_on {
+            Color32::WHITE
+        } else {
+            Color32::from_rgb(20, 36, 84)
+        };
+        let click_fill = if click_on {
+            Color32::from_rgb(20, 96, 200)
+        } else {
+            Color32::from_rgb(255, 214, 102)
+        };
+        if ui
+            .add(
+                egui::Button::new(
+                    egui::RichText::new(text(self.locale, Text::Metronome))
+                        .size(16.0)
+                        .color(click_ink),
+                )
+                .fill(click_fill),
+            )
+            .on_hover_text(text(self.locale, Text::MetronomeHint))
+            .clicked()
+        {
+            self.click_settings.enabled = !self.click_settings.enabled;
+            if !self.click_settings.enabled && self.document.audio.is_none() {
+                self.audio_state.clear();
+            }
+        }
+    }
+
+    fn timeline_tempo_controls(&mut self, ui: &mut egui::Ui) {
         let scene_bpm = self.scene_opening_bpm();
         ui.label(
             super::i18n::registered(self.locale, "full-mode.075")
