@@ -60,6 +60,9 @@ pub(crate) struct CollabState {
     name: String,
     color: [u8; 3],
     last_hello: Option<Instant>,
+    view_only: bool,
+    editor_limit: u16,
+    role_changed: Option<bool>,
     #[cfg(test)]
     live_for_test: bool,
 }
@@ -71,6 +74,20 @@ impl CollabState {
 
     pub(crate) fn set_applying(&mut self, applying: bool) {
         self.applying = applying;
+    }
+
+    pub(crate) fn is_view_only(&self) -> bool {
+        self.view_only
+    }
+
+    pub(crate) fn editor_limit(&self) -> u16 {
+        self.editor_limit
+    }
+
+    /// `Some(true)` when this install just became an editor, `Some(false)`
+    /// when it was asked to watch.
+    pub(crate) fn take_role_change(&mut self) -> Option<bool> {
+        self.role_changed.take()
     }
 
     pub(crate) fn is_live(&self) -> bool {
@@ -163,6 +180,9 @@ impl CollabState {
                 vec![RoomEvent::Op { from, op }]
             }
         };
+        if self.view_only {
+            return;
+        }
         if let Some(client) = &self.client {
             for event in events {
                 client.publish(event);
@@ -182,6 +202,11 @@ impl CollabState {
                 events.push(event);
             }
         }
+        for event in &events {
+            if let RoomEvent::Seat { editor, limit, .. } = event {
+                self.note_seat(*editor, *limit);
+            }
+        }
         if let Some(show) = self.show.as_mut() {
             for event in &events {
                 show.ingest(event);
@@ -193,11 +218,22 @@ impl CollabState {
             .unwrap_or_default()
     }
 
+    fn note_seat(&mut self, editor: bool, limit: u16) {
+        self.editor_limit = limit;
+        if editor && self.view_only {
+            self.view_only = false;
+            self.role_changed = Some(true);
+        } else if !editor && !self.view_only {
+            self.view_only = true;
+            self.role_changed = Some(false);
+        }
+    }
+
     fn announce_if_due(&mut self) {
         let due = self
             .last_hello
             .is_none_or(|last| last.elapsed() >= Duration::from_secs(2));
-        if !due || self.client.is_none() {
+        if !due || self.client.is_none() || self.view_only {
             return;
         }
         let Some(show) = self.show.as_ref() else {

@@ -9,8 +9,9 @@
 //! This crate is that state. Each performer dot and each set's counts carry a
 //! [Lamport stamp](Stamp). A higher stamp replaces a lower one. Equal stamps
 //! break the tie by replica id, so two peers who apply the same pair of
-//! operations in opposite orders still land on one show. The relay that moves
-//! the bytes does not interpret them.
+//! operations in opposite orders still land on one show. Phone and desktop
+//! send the same [`RoomEvent`] JSON. The relay assigns editor seats; it does
+//! not merge the show.
 //!
 //! `yrs` and Automerge are the wrong weight here: they are not in the offline
 //! crate cache, they pull a large wasm build, and a drill only conflicts per
@@ -25,7 +26,15 @@ pub use client::{ConnectionStatus, SyncClient};
 use drill_core::{Document, Edit, PerformerId, Point, SetCounts, SetId};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
+use std::time::{Duration, Instant};
+
+/// How often a coalesced drag is allowed onto the wire.
+///
+/// A finger can move every frame. One dot only needs about 20 updates a
+/// second to look continuous, and the frames in between collapse to the
+/// latest point.
+pub const DRAG_INTERVAL: Duration = Duration::from_millis(50);
 
 /// One install's identity for the life of a room.
 ///
@@ -313,7 +322,7 @@ impl ShowState {
                 let _ = self.apply(op);
             }
             RoomEvent::Hello { state, .. } => self.merge(state),
-            RoomEvent::Leave { .. } => {}
+            RoomEvent::Leave { .. } | RoomEvent::Seat { .. } => {}
         }
     }
 
@@ -463,13 +472,26 @@ pub enum RoomEvent {
     Leave {
         from: ReplicaId,
     },
+    /// The relay telling one connection whether it may edit.
+    ///
+    /// `editor` is false when the room is already full. That peer still
+    /// receives everyone else's operations and must not publish its own.
+    Seat {
+        replica: ReplicaId,
+        editor: bool,
+        editors: u16,
+        limit: u16,
+    },
 }
 
 impl RoomEvent {
     #[must_use]
     pub fn replica(&self) -> ReplicaId {
         match self {
-            Self::Op { from, .. } | Self::Hello { from, .. } | Self::Leave { from } => *from,
+            Self::Op { from, .. }
+            | Self::Hello { from, .. }
+            | Self::Leave { from }
+            | Self::Seat { replica: from, .. } => *from,
         }
     }
 
@@ -560,6 +582,126 @@ impl<'de> Deserialize<'de> for ShowState {
             let _ = show.insert_set(set.set_id, set.fact, set.stamp);
         }
         Ok(show)
+    }
+}
+
+/// Outbound room frames with drags collapsed to the latest point.
+///
+/// The desktop socket and the browser socket both use this, so a phone and a
+/// PC publish the same shape at the same rate.
+#[derive(Default)]
+pub struct CoalescedOutbox {
+    ready: VecDeque<RoomEvent>,
+    held_moves: Vec<RoomEvent>,
+    last_move: Option<Instant>,
+}
+
+const OUTBOX_CAP: usize = 512;
+
+impl CoalescedOutbox {
+    pub fn push(&mut self, event: RoomEvent) {
+        if let Some(dot) = move_dot(&event) {
+            if let Some(slot) = self
+                .ready
+                .iter_mut()
+                .find(|queued| move_dot(queued) == Some(dot))
+            {
+                *slot = event;
+                return;
+            }
+            if let Some(slot) = self
+                .held_moves
+                .iter_mut()
+                .find(|queued| move_dot(queued) == Some(dot))
+            {
+                *slot = event;
+                return;
+            }
+            self.held_moves.push(event);
+            return;
+        }
+        if matches!(event, RoomEvent::Hello { .. }) {
+            self.ready
+                .retain(|queued| !matches!(queued, RoomEvent::Hello { .. }));
+        }
+        self.ready.push_back(event);
+        while self.ready.len() > OUTBOX_CAP {
+            self.ready.pop_front();
+        }
+    }
+
+    /// Puts a frame back when the socket refused it.
+    pub fn unsend(&mut self, event: RoomEvent) {
+        self.ready.push_front(event);
+    }
+
+    /// Next frame that may be written now. Moves wait for [`DRAG_INTERVAL`].
+    pub fn pop_ready(&mut self, now: Instant) -> Option<RoomEvent> {
+        self.release_moves(now);
+        self.ready.pop_front()
+    }
+
+    fn release_moves(&mut self, now: Instant) {
+        if self.held_moves.is_empty() {
+            return;
+        }
+        let due = self
+            .last_move
+            .is_none_or(|sent| now.duration_since(sent) >= DRAG_INTERVAL);
+        if !due {
+            return;
+        }
+        self.ready.extend(self.held_moves.drain(..));
+        self.last_move = Some(now);
+        while self.ready.len() > OUTBOX_CAP {
+            self.ready.pop_front();
+        }
+    }
+}
+
+fn move_dot(event: &RoomEvent) -> Option<DotId> {
+    match event {
+        RoomEvent::Op {
+            op: SyncOp::MoveDot { dot, .. },
+            ..
+        } => Some(*dot),
+        _ => None,
+    }
+}
+
+/// `ws://` or `wss://` URL for `/room/<code>`.
+///
+/// `secure` picks the scheme. Callers strip a typed scheme first: the desktop
+/// client has no TLS stack, so it always passes `false`. Room codes follow
+/// the same folding as presence.
+#[must_use]
+pub fn socket_url(host: &str, room: &str, secure: bool) -> String {
+    let host = host.trim().trim_end_matches('/');
+    let host = host
+        .strip_prefix("wss://")
+        .or_else(|| host.strip_prefix("ws://"))
+        .or_else(|| host.strip_prefix("https://"))
+        .or_else(|| host.strip_prefix("http://"))
+        .unwrap_or(host);
+    let scheme = if secure { "wss" } else { "ws" };
+    format!("{scheme}://{host}/room/{}", normalize_room_code(room))
+}
+
+#[must_use]
+pub fn normalize_room_code(room: &str) -> String {
+    let code: String = room
+        .trim()
+        .chars()
+        .filter(|character| {
+            character.is_ascii_alphanumeric() || *character == '-' || *character == '_'
+        })
+        .take(32)
+        .map(|character| character.to_ascii_lowercase())
+        .collect();
+    if code.is_empty() {
+        "room".to_owned()
+    } else {
+        code
     }
 }
 
@@ -786,5 +928,70 @@ mod tests {
             panic!("hello");
         };
         assert_eq!(name, "指揮者");
+    }
+
+    #[test]
+    fn drags_of_one_dot_collapse_to_the_latest_point_per_interval() {
+        let (_document, mut alice, _) = pair();
+        let dot = dot(1, 1);
+        let mut outbox = CoalescedOutbox::default();
+        for step in 0..8 {
+            let op = alice
+                .move_dot(
+                    dot,
+                    Point {
+                        x: step as f32,
+                        y: 1.0,
+                    },
+                )
+                .expect("finite");
+            outbox.push(RoomEvent::Op {
+                from: alice.replica(),
+                op,
+            });
+        }
+        let now = Instant::now();
+        let RoomEvent::Op {
+            op: SyncOp::MoveDot { point, .. },
+            ..
+        } = outbox.pop_ready(now).expect("one drag")
+        else {
+            panic!("move");
+        };
+        assert_eq!(point, Point { x: 7.0, y: 1.0 });
+        assert!(outbox.pop_ready(now).is_none());
+        let op = alice
+            .move_dot(dot, Point { x: 9.0, y: 4.0 })
+            .expect("finite");
+        outbox.push(RoomEvent::Op {
+            from: alice.replica(),
+            op,
+        });
+        assert!(outbox.pop_ready(now).is_none());
+        let later = now + DRAG_INTERVAL;
+        let RoomEvent::Op {
+            op: SyncOp::MoveDot { point, .. },
+            ..
+        } = outbox.pop_ready(later).expect("next interval")
+        else {
+            panic!("move");
+        };
+        assert_eq!(point, Point { x: 9.0, y: 4.0 });
+    }
+
+    #[test]
+    fn phone_and_desktop_encode_the_same_drag() {
+        let (_document, mut alice, _) = pair();
+        let op = alice
+            .move_dot(dot(1, 1), Point { x: 3.0, y: 4.0 })
+            .expect("finite");
+        let event = RoomEvent::Op {
+            from: alice.replica(),
+            op,
+        };
+        let json = event.to_json().expect("json");
+        assert_eq!(RoomEvent::from_json(&json).expect("parse"), event);
+        assert!(json.contains("\"kind\":\"op\""));
+        assert!(json.contains("\"op\":\"move_dot\""));
     }
 }

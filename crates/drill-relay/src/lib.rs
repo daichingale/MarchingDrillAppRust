@@ -1,16 +1,19 @@
 //! One fanout for a rehearsal room.
 //!
 //! Presence cursors and collaborative edits are different JSON shapes, and
-//! each client drops what it does not understand. This process does not parse
-//! far enough to care which is which, except to remember who connected so a
-//! drop can announce both a presence `Leave` and a sync `Leave`.
+//! each client drops what it does not understand. Editor seats are the one
+//! decision this process makes: past the cap, a joiner watches. A drop still
+//! announces both a presence `Leave` and a sync `Leave`.
 //!
 //! Plain `ws://`, no accounts. Put a TLS reverse proxy in front of it before
 //! a phone on the public internet can connect. A stranger who can guess the
 //! room code can edit; room codes have to be unguessable.
 
+mod seats;
+
 use drill_presence::{PresenceMessage, Rooms, UserId, room_code_from_path};
 use drill_sync::{ReplicaId, RoomEvent};
+use seats::Seats;
 use std::io::ErrorKind;
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -22,6 +25,15 @@ use tungstenite::{Message, WebSocket};
 
 pub const DEFAULT_BIND: &str = "0.0.0.0:8787";
 
+/// Editors who may drag at once.
+///
+/// Load sweep on an 80-performer, 10-set show, drags and presence coalesced
+/// at 20Hz: end-to-end p95 stayed near 100ms through 20 editors (relay CPU
+/// about 16%, RSS 45MB) and jumped to about 480ms at 30 (CPU about 29%,
+/// RSS 97MB). 20 is the largest measured count that still feels live.
+/// Further people join as viewers and do not publish drags.
+pub const EDITOR_LIMIT: u16 = 20;
+
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const MAX_OUTBOUND_BACKLOG: usize = 256;
 
@@ -29,18 +41,34 @@ static NEXT_CONN_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Accepts forever. The binary and the loopback tests both call this.
 pub fn serve(listener: &TcpListener) {
+    serve_with_limit(listener, editor_limit());
+}
+
+/// Same fanout as [`serve`], with an explicit editor cap. The load test uses
+/// this so a measurement of 30 drags is not cut off by the rehearsal cap.
+pub fn serve_with_limit(listener: &TcpListener, limit: u16) {
     let rooms = Arc::new(Mutex::new(Rooms::new()));
+    let seats = Arc::new(Mutex::new(Seats::new(limit)));
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
         let rooms = Arc::clone(&rooms);
+        let seats = Arc::clone(&seats);
         let _ = std::thread::Builder::new()
             .name("drill-relay-conn".into())
-            .spawn(move || serve_connection(stream, &rooms));
+            .spawn(move || serve_connection(stream, &rooms, &seats));
     }
 }
 
+fn editor_limit() -> u16 {
+    std::env::var("DRILLFORGE_EDITOR_LIMIT")
+        .ok()
+        .and_then(|raw| raw.parse().ok())
+        .filter(|limit| (1..=64).contains(limit))
+        .unwrap_or(EDITOR_LIMIT)
+}
+
 #[allow(clippy::result_large_err)]
-pub fn serve_connection(stream: TcpStream, rooms: &Mutex<Rooms>) {
+pub(crate) fn serve_connection(stream: TcpStream, rooms: &Mutex<Rooms>, seats: &Mutex<Seats>) {
     let _ = stream.set_nodelay(true);
     if stream.set_read_timeout(Some(POLL_INTERVAL)).is_err() {
         return;
@@ -70,7 +98,11 @@ pub fn serve_connection(stream: TcpStream, rooms: &Mutex<Rooms>) {
     if let Ok(mut guard) = rooms.lock() {
         guard.join(&room, conn, outbox);
     }
-    let identity = pump(socket, &inbox, rooms, &room, conn);
+    let identity = pump(socket, &inbox, rooms, seats, &room, conn);
+    let promoted = seats
+        .lock()
+        .map(|mut guard| guard.disconnect(&room, conn))
+        .unwrap_or_default();
     if let Ok(mut guard) = rooms.lock() {
         guard.leave(&room, conn);
         if let Some(user) = identity.user
@@ -83,6 +115,7 @@ pub fn serve_connection(stream: TcpStream, rooms: &Mutex<Rooms>) {
         {
             guard.broadcast(&room, conn, &json);
         }
+        send_direct(&guard, &room, &promoted);
     }
 }
 
@@ -95,6 +128,7 @@ fn pump(
     mut socket: WebSocket<TcpStream>,
     inbox: &Receiver<String>,
     rooms: &Mutex<Rooms>,
+    seats: &Mutex<Seats>,
     room: &str,
     conn: u64,
 ) -> Identity {
@@ -107,9 +141,24 @@ fn pump(
             Ok(Message::Text(text)) => {
                 if let Ok(message) = PresenceMessage::from_json(text.as_str()) {
                     identity.user = Some(message.user_id());
+                    if let Ok(guard) = rooms.lock() {
+                        guard.broadcast(room, conn, text.as_str());
+                    }
+                    continue;
                 }
                 if let Ok(event) = RoomEvent::from_json(text.as_str()) {
                     identity.replica = Some(event.replica());
+                    let decision = seats
+                        .lock()
+                        .map(|mut guard| guard.observe(room, conn, &event))
+                        .unwrap_or_default();
+                    if let Ok(guard) = rooms.lock() {
+                        if decision.relay {
+                            guard.broadcast(room, conn, text.as_str());
+                        }
+                        send_direct(&guard, room, &decision);
+                    }
+                    continue;
                 }
                 if let Ok(guard) = rooms.lock() {
                     guard.broadcast(room, conn, text.as_str());
@@ -124,6 +173,15 @@ fn pump(
     let _ = socket.close(None);
     let _ = socket.flush();
     identity
+}
+
+fn send_direct(rooms: &Rooms, room: &str, decision: &seats::Decision) {
+    for notice in &decision.direct {
+        let Ok(json) = notice.event.to_json() else {
+            continue;
+        };
+        rooms.send_to(room, notice.conn, &json);
+    }
 }
 
 fn drain_outbox(socket: &mut WebSocket<TcpStream>, inbox: &Receiver<String>) -> Result<(), ()> {

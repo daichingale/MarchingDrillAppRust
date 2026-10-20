@@ -16,15 +16,12 @@ use std::time::{Duration, Instant};
 use tungstenite::client::IntoClientRequest;
 use tungstenite::{Message, WebSocket};
 
-/// Outbound rate limit.
+/// Outbound rate limit, matched to collaborative drags.
 ///
-/// Selection and cursor can change on every frame (~16ms at 60fps); forwarding
-/// that raw would put 60 frames/second on the wire per peer to convey
-/// information a human reads as continuous well below that rate. 200ms caps a
-/// peer at 5 updates/second while staying under the ~250ms mark where a remote
-/// cursor starts to feel like a slideshow rather than a live pointer. Updates
-/// are coalesced rather than queued, so a burst collapses to its final state.
-const SEND_INTERVAL: Duration = Duration::from_millis(200);
+/// Selection and cursor can change on every frame (~16ms at 60fps). 50ms
+/// keeps a peer at 20 updates/second. The worker keeps only the newest
+/// viewport, so a burst collapses to its final state.
+const SEND_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Socket read timeout, which doubles as the worker's loop period: it bounds
 /// how long a pending outbound update waits and how quickly shutdown is

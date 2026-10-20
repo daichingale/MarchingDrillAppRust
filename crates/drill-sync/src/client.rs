@@ -2,8 +2,7 @@
 //! `try_recv`. Wasm builds omit this module: a browser has no threads, and
 //! the same [`crate::RoomEvent`] values are what a `WebSocket` would carry.
 
-use crate::{RoomEvent, SyncOp};
-use std::collections::VecDeque;
+use crate::{CoalescedOutbox, RoomEvent, socket_url};
 use std::io::ErrorKind;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::Arc;
@@ -20,7 +19,6 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const BACKOFF_MIN: Duration = Duration::from_millis(400);
 const BACKOFF_MAX: Duration = Duration::from_secs(8);
 const MAX_INBOUND: usize = 256;
-const MAX_PENDING: usize = 512;
 const DEFAULT_PORT: u16 = 8787;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -64,7 +62,7 @@ impl SyncClient {
     /// peer who is already in the room needs, because the relay keeps no log.
     #[must_use]
     pub fn connect(host: &str, room: &str, hello: RoomEvent) -> Self {
-        let url = ws_url(host, room);
+        let url = socket_url(host, room, false);
         let (outgoing, outbound) = mpsc::channel();
         let (inbound_tx, incoming) = mpsc::sync_channel(MAX_INBOUND);
         let status = Arc::new(AtomicU8::new(ConnectionStatus::Connecting.code()));
@@ -76,7 +74,7 @@ impl SyncClient {
             inbound: inbound_tx,
             status: Arc::clone(&status),
             shutdown: Arc::clone(&shutdown),
-            pending: VecDeque::new(),
+            pending: CoalescedOutbox::default(),
         };
         let handle = std::thread::Builder::new()
             .name("drill-sync-client".into())
@@ -127,7 +125,7 @@ struct Worker {
     inbound: SyncSender<RoomEvent>,
     status: Arc<AtomicU8>,
     shutdown: Arc<AtomicBool>,
-    pending: VecDeque<RoomEvent>,
+    pending: CoalescedOutbox,
 }
 
 impl Worker {
@@ -194,46 +192,18 @@ impl Worker {
     }
 
     fn enqueue(&mut self, event: RoomEvent) {
-        match &event {
-            RoomEvent::Hello { .. } => {
-                self.pending
-                    .retain(|queued| !matches!(queued, RoomEvent::Hello { .. }));
-            }
-            RoomEvent::Op {
-                op: SyncOp::MoveDot { dot, .. },
-                ..
-            } => {
-                if let Some(index) = self.pending.iter().position(|queued| match queued {
-                    RoomEvent::Op {
-                        op: SyncOp::MoveDot { dot: existing, .. },
-                        ..
-                    } => existing == dot,
-                    _ => false,
-                }) {
-                    self.pending[index] = event;
-                    return;
-                }
-            }
-            RoomEvent::Op { .. } | RoomEvent::Leave { .. } => {}
-        }
-        self.pending.push_back(event);
-        while self.pending.len() > MAX_PENDING {
-            self.pending.pop_front();
-        }
+        self.pending.push(event);
     }
 
     fn flush_pending(&mut self, socket: &mut WebSocket<TcpStream>) -> bool {
-        while let Some(event) = self.pending.pop_front() {
+        let now = std::time::Instant::now();
+        while let Some(event) = self.pending.pop_ready(now) {
             let Ok(json) = event.to_json() else {
                 continue;
             };
             if let Err(error) = socket.send(Message::text(json)) {
-                if !is_retryable(&error) {
-                    self.pending.push_front(event);
-                    return false;
-                }
-                self.pending.push_front(event);
-                return true;
+                self.pending.unsend(event);
+                return is_retryable(&error);
             }
         }
         true
@@ -280,33 +250,6 @@ fn is_retryable(error: &tungstenite::Error) -> bool {
                 ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
             )
     )
-}
-
-fn ws_url(host: &str, room: &str) -> String {
-    let host = host.trim().trim_end_matches('/');
-    let host = host
-        .strip_prefix("ws://")
-        .or_else(|| host.strip_prefix("http://"))
-        .or_else(|| host.strip_prefix("wss://"))
-        .unwrap_or(host);
-    format!("ws://{host}/room/{}", normalize_room(room))
-}
-
-fn normalize_room(room: &str) -> String {
-    let code: String = room
-        .trim()
-        .chars()
-        .filter(|character| {
-            character.is_ascii_alphanumeric() || *character == '-' || *character == '_'
-        })
-        .take(32)
-        .map(|character| character.to_ascii_lowercase())
-        .collect();
-    if code.is_empty() {
-        "room".to_owned()
-    } else {
-        code
-    }
 }
 
 fn dial(url: &str) -> Result<WebSocket<TcpStream>, String> {

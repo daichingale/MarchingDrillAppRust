@@ -4246,6 +4246,10 @@ impl DrillApp {
     }
 
     fn execute_edit(&mut self, edit: Edit, failure: &str) -> bool {
+        if self.collab.is_view_only() && !self.collab.is_applying() {
+            self.status = self.viewer_status();
+            return false;
+        }
         let echo = if self.collab.is_applying() {
             None
         } else {
@@ -4279,6 +4283,15 @@ impl DrillApp {
             let _ = self.execute_edit(edit, "");
         }
         self.collab.set_applying(false);
+    }
+
+    fn viewer_status(&self) -> String {
+        i18n::registered(self.locale, "collab.001")
+            .replace("{0}", &self.collab.editor_limit().to_string())
+    }
+
+    fn editor_grant_status(&self) -> String {
+        i18n::registered(self.locale, "collab.002").into()
     }
 
     fn show_subset_snapshot_workspace(&mut self, context: &egui::Context) {

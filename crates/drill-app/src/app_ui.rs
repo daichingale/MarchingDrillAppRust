@@ -30,6 +30,13 @@ impl eframe::App for DrillApp {
             self.collab.on_signal(&signal, &self.document);
         }
         self.apply_remote_sync();
+        if let Some(editing) = self.collab.take_role_change() {
+            self.status = if editing {
+                self.editor_grant_status()
+            } else {
+                self.viewer_status()
+            };
+        }
         if self.collab.is_live() {
             self.view_mode = ViewMode::Field2D;
             self.camera_program_preview = false;

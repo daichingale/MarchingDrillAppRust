@@ -41,8 +41,13 @@ pub struct PhoneApp {
     status: String,
     split: Option<SplitDemo>,
     applying: bool,
+    view_only: bool,
+    editor_limit: u16,
+    last_hello: Option<Instant>,
     #[cfg(not(target_arch = "wasm32"))]
     relay: Option<drill_sync::SyncClient>,
+    #[cfg(target_arch = "wasm32")]
+    relay: Option<crate::socket::BrowserClient>,
 }
 
 impl Default for PhoneApp {
@@ -93,7 +98,9 @@ impl PhoneApp {
             status: String::new(),
             split: None,
             applying: false,
-            #[cfg(not(target_arch = "wasm32"))]
+            view_only: false,
+            editor_limit: 0,
+            last_hello: None,
             relay: None,
         }
     }
@@ -218,7 +225,15 @@ impl PhoneApp {
     }
 
     fn place_selected(&mut self, index: usize, point: Point) {
-        if self.applying || self.playing || !point.x.is_finite() || !point.y.is_finite() {
+        if self.view_only
+            || self.applying
+            || self.playing
+            || !point.x.is_finite()
+            || !point.y.is_finite()
+        {
+            if self.view_only {
+                self.status = viewer_message(self.ja, self.editor_limit);
+            }
             return;
         }
         let Some(set_id) = self
@@ -262,35 +277,64 @@ impl PhoneApp {
     }
 
     fn publish(&self, event: RoomEvent) {
-        #[cfg(not(target_arch = "wasm32"))]
+        if self.view_only && matches!(event, RoomEvent::Op { .. } | RoomEvent::Hello { .. }) {
+            return;
+        }
         if let Some(client) = &self.relay {
             client.publish(event);
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            let _ = event;
         }
     }
 
     fn poll_room(&mut self) {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let mut events = Vec::new();
-            if let Some(client) = self.relay.as_mut() {
-                while let Some(event) = client.poll() {
-                    events.push(event);
-                }
+        self.announce_if_due();
+        let mut events = Vec::new();
+        if let Some(client) = self.relay.as_mut() {
+            while let Some(event) = client.poll() {
+                events.push(event);
             }
-            if events.is_empty() {
-                return;
-            }
-            self.applying = true;
-            for event in events {
-                self.show.ingest(&event);
-            }
-            self.show.write_document(&mut self.document);
-            self.applying = false;
         }
+        if events.is_empty() {
+            return;
+        }
+        for event in &events {
+            if let RoomEvent::Seat { editor, limit, .. } = event {
+                self.note_seat(*editor, *limit);
+            }
+        }
+        self.applying = true;
+        for event in &events {
+            self.show.ingest(event);
+        }
+        self.show.write_document(&mut self.document);
+        self.applying = false;
+    }
+
+    fn note_seat(&mut self, editor: bool, limit: u16) {
+        self.editor_limit = limit;
+        if editor && self.view_only {
+            self.view_only = false;
+            self.status = word(self.ja, "編集できるようになりました。", "You can edit now.").into();
+        } else if !editor && !self.view_only {
+            self.view_only = true;
+            self.status = viewer_message(self.ja, limit);
+        }
+    }
+
+    fn announce_if_due(&mut self) {
+        if self.view_only || self.relay.is_none() {
+            return;
+        }
+        let due = self
+            .last_hello
+            .is_none_or(|last| last.elapsed() >= std::time::Duration::from_secs(2));
+        if !due {
+            return;
+        }
+        let hello = self
+            .show
+            .hello(word(self.ja, "スマホ", "Phone"), [242, 116, 116]);
+        self.publish(hello);
+        self.last_hello = Some(Instant::now());
     }
 
     fn join_room(&mut self) {
@@ -301,22 +345,33 @@ impl PhoneApp {
             return;
         }
         self.room = room;
+        self.view_only = false;
+        let hello = self
+            .show
+            .hello(word(self.ja, "スマホ", "Phone"), [242, 116, 116]);
+        let secure = page_is_https();
+        self.status = drill_sync::socket_url(self.host.trim(), &self.room, secure);
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let hello = self
-                .show
-                .hello(word(self.ja, "スマホ", "Phone"), [242, 116, 116]);
             self.relay = Some(drill_sync::SyncClient::connect(
                 self.host.trim(),
                 &self.room,
                 hello,
             ));
-            self.status = format!("ws://{}/room/{}", self.host.trim(), self.room);
         }
         #[cfg(target_arch = "wasm32")]
         {
-            self.status = format!("ws://{}/room/{}", self.host.trim(), self.room);
+            self.relay = crate::socket::BrowserClient::connect(self.host.trim(), &self.room, hello);
+            if self.relay.is_none() {
+                self.status = word(
+                    self.ja,
+                    "リレーに接続できません",
+                    "Could not open the room socket",
+                )
+                .into();
+            }
         }
+        self.last_hello = Some(Instant::now());
     }
 
     fn step_set(&mut self, delta: isize) {
@@ -341,13 +396,9 @@ impl eframe::App for PhoneApp {
         self.take_drops(ui.ctx());
         self.poll_room();
         self.advance();
-        if self.playing {
-            ui.ctx().request_repaint();
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        if self.relay.is_some() {
+        if self.playing || self.relay.is_some() {
             ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(80));
+                .request_repaint_after(std::time::Duration::from_millis(50));
         }
 
         let full = ui.max_rect();
@@ -691,6 +742,27 @@ fn word(ja: bool, ja_text: &'static str, en_text: &'static str) -> &'static str 
     if ja { ja_text } else { en_text }
 }
 
+fn viewer_message(ja: bool, limit: u16) -> String {
+    if ja {
+        format!("この部屋の編集は{limit}人までです。見学で参加しています。")
+    } else {
+        format!("This room already has {limit} editors. You are watching.")
+    }
+}
+
+fn page_is_https() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::window()
+            .and_then(|window| window.location().protocol().ok())
+            .is_some_and(|protocol| protocol == "https:")
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        false
+    }
+}
+
 fn replica_seed() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -748,6 +820,7 @@ mod tests {
             include_str!("lib.rs"),
             include_str!("touch.rs"),
             include_str!("main.rs"),
+            include_str!("socket.rs"),
             include_str!("../web/index.html"),
         ];
         for source in sources {

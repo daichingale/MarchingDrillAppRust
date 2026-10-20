@@ -7,6 +7,8 @@
 //! and draws the flat field with eframe's WebGL backend.
 
 mod app;
+#[cfg(target_arch = "wasm32")]
+mod socket;
 mod touch;
 
 pub use app::{PhoneApp, synced_pair};
