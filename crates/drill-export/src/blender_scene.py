@@ -230,26 +230,20 @@ def add_line(name, field, x, y, sx, sy, material, z=0.03):
 def yard_label(field, x, text, material, y=None):
     curve = bpy.data.curves.new("yard", "FONT")
     curve.body = text
-    curve.size = 2.4
+    curve.size = 1.5
     curve.align_x = "CENTER"
     curve.align_y = "CENTER"
-    curve.extrude = 0.02
+    curve.extrude = 0.015
     curve.resolution_u = 6
     font = ui_font()
     if font is not None:
         curve.font = font
     height = float(field["height"])
-    near = 3.2 if y is None else float(y)
-    plate = mesh_object(
-        f"num-plate-{text}-{x:.0f}",
-        box_mesh(1.5, 0.08, 1.7),
-        to_world(field, x, near - 0.15, 0.95),
-    )
-    paint(plate, shade((18, 28, 22), 0.8, "num-plate"))
+    # Sit on the near track, off the performing surface. No upright board.
+    near = -1.6 if y is None else float(y)
     obj = bpy.data.objects.new(f"num-{text}-{x:.0f}", curve)
-    # Tilt the digits up so the press box can read them. +Z faces the audience.
-    obj.location = to_world(field, x, near, 0.95)
-    obj.rotation_euler = (math.radians(68), 0.0, 0.0)
+    obj.location = to_world(field, x, near, 0.08)
+    obj.rotation_euler = (math.radians(72), 0.0, 0.0)
     link(obj)
     paint(obj, material)
     return obj
@@ -268,15 +262,26 @@ def build_field(scene):
     turf = striped_turf() if kind != "indoor" else shade((214, 176, 120), 0.75, "floor")
     # Surrounding ground, then a track or gym border, then the playing surface.
     ground = mesh_object("horizon", box_mesh(width + 80.0, height + 60.0, 0.05), (0.0, 0.0, -0.08))
-    paint(ground, shade((74, 92, 62), 0.95, "horizon"))
+    paint(ground, shade((58, 122, 62), 0.9, "horizon"))
     border = mesh_object(
         "border",
-        box_mesh(width + (18.0 if kind == "football" else 8.0), height + 14.0, 0.04),
+        box_mesh(width + 16.0, height + 14.0, 0.04),
         (0.0, 0.0, -0.02),
     )
-    paint(border, track if kind == "football" else concrete)
+    paint(border, track)
+    lane = mesh_object(
+        "lane",
+        box_mesh(width + 9.0, height + 7.0, 0.025),
+        (0.0, 0.0, -0.005),
+    )
+    paint(lane, shade((196, 92, 70), 0.65, "lane"))
     playing = mesh_object("field", box_mesh(width, height, 0.04), (0.0, 0.0, 0.0))
     paint(playing, turf)
+    # White lane lines on the clay, just outside the playing surface.
+    add_line("lane-s", field, width * 0.5, -1.2, width + 2.4, 0.14, white, 0.02)
+    add_line("lane-n", field, width * 0.5, height + 1.2, width + 2.4, 0.14, white, 0.02)
+    add_line("lane-w", field, -1.2, height * 0.5, 0.14, height + 2.4, white, 0.02)
+    add_line("lane-e", field, width + 1.2, height * 0.5, 0.14, height + 2.4, white, 0.02)
     if kind == "football":
         # End zones sit past the goal lines.
         for name, x in (("near-end", -6.0), ("far-end", width + 6.0)):
@@ -309,6 +314,11 @@ def build_field(scene):
         circle = mesh_object("center", cylinder_mesh(9.15, 0.02, 24), to_world(field, width * 0.5, height * 0.5, 0.03))
         paint(circle, white)
     else:
+        # Chalk the boundary so the track reads as a sideline, then the contest squares.
+        add_line("sideline-s", field, width * 0.5, 0.12, width, 0.14, white)
+        add_line("sideline-n", field, width * 0.5, height - 0.12, width, 0.14, white)
+        add_line("sideline-w", field, 0.12, height * 0.5, 0.14, height, white)
+        add_line("sideline-e", field, width - 0.12, height * 0.5, 0.14, height, white)
         # Indoor / school floor: contest squares and meter ticks, no yard hashes.
         for index, bounds in enumerate(field.get("frames", [])):
             min_x, min_y, max_x, max_y = bounds
@@ -339,7 +349,7 @@ def build_field(scene):
                 grid_ink,
                 0.045,
             )
-            yard_label(field, float(meters), str(meters), grid_ink, height * 0.32)
+            yard_label(field, float(meters), str(meters), shade((236, 236, 228), 0.4, "yard-ink"), -1.6)
     build_stands(field, kind)
 
 
@@ -348,29 +358,55 @@ def build_stands(field, kind):
     height = float(field["height"])
     span = width * 0.7
     riser_mat = shade((58, 62, 70), 0.75, "riser")
-    seat_mat = shade((96, 104, 118), 0.65, "seat")
     rail_mat = shade((214, 216, 210), 0.35, "rail")
     glass = shade((150, 186, 214), 0.15, "glass")
     frame = shade((48, 52, 58), 0.5, "booth")
-    # Seat row on top of each riser, plus a front rail, on both sidelines.
-    for side, y_edge, outward in (("south", -5.2, -1.0), ("north", height + 5.2, 1.0)):
-        for row in range(6):
-            depth = 1.15
-            rise = 0.42
-            y = y_edge + outward * (0.6 + row * 1.25)
+    # Two banks of empty bleachers, a center aisle, and a seat back on every row.
+    # Alternating seat colors and a gap between rows read as seats from the press box.
+    bank_span = span * 0.46
+    seat_red = shade((176, 64, 58), 0.6, "seat-red")
+    seat_blue = shade((52, 86, 148), 0.6, "seat-blue")
+    back_mat = shade((214, 214, 208), 0.45, "seat-back")
+    aisle_mat = shade((168, 164, 156), 0.8, "aisle")
+    for side, y_edge, outward in (("south", -6.4, -1.0), ("north", height + 6.4, 1.0)):
+        fascia = mesh_object(
+            f"fascia-{side}",
+            box_mesh(span, 0.18, 1.15),
+            to_world(field, width * 0.5, y_edge + outward * 0.1, 0.58),
+        )
+        paint(fascia, frame)
+        for row in range(9):
+            depth = 0.78
+            rise = 0.46
+            pitch = 1.22
+            y = y_edge + outward * (0.55 + row * pitch)
             z = 0.28 + row * rise
-            block = mesh_object(
-                f"stand-{side}-{row}",
-                box_mesh(span, depth, rise),
-                to_world(field, width * 0.5, y, z),
+            seat_color = seat_red if row % 2 == 0 else seat_blue
+            for bank, x_off in (("w", -span * 0.26), ("e", span * 0.26)):
+                block = mesh_object(
+                    f"stand-{side}-{bank}-{row}",
+                    box_mesh(bank_span, depth, rise * 0.92),
+                    to_world(field, width * 0.5 + x_off, y, z),
+                )
+                paint(block, riser_mat)
+                pad = mesh_object(
+                    f"seat-{side}-{bank}-{row}",
+                    box_mesh(bank_span * 0.94, 0.52, 0.09),
+                    to_world(field, width * 0.5 + x_off, y - outward * 0.06, z + rise * 0.52),
+                )
+                paint(pad, seat_color)
+                back = mesh_object(
+                    f"back-{side}-{bank}-{row}",
+                    box_mesh(bank_span * 0.94, 0.07, 0.42),
+                    to_world(field, width * 0.5 + x_off, y - outward * 0.34, z + rise * 0.78),
+                )
+                paint(back, back_mat)
+            tread = mesh_object(
+                f"aisle-{side}-{row}",
+                box_mesh(span * 0.07, 0.7, 0.08),
+                to_world(field, width * 0.5, y, z + rise * 0.5),
             )
-            paint(block, riser_mat)
-            pad = mesh_object(
-                f"seat-{side}-{row}",
-                box_mesh(span * 0.98, 0.42, 0.08),
-                to_world(field, width * 0.5, y + outward * 0.22, z + rise * 0.5 + 0.02),
-            )
-            paint(pad, seat_mat)
+            paint(tread, aisle_mat)
         rail_y = y_edge + outward * 0.15
         rail = mesh_object(
             f"rail-{side}",
@@ -930,56 +966,82 @@ def ui_font():
     return None
 
 
+def frame_span(camera, distance):
+    """Half width and half height of the view, in camera space, at `distance`."""
+    lens = max(1.0, float(getattr(camera.data, "lens", 35.0) or 35.0))
+    res_x = max(1, int(bpy.context.scene.render.resolution_x or 1280))
+    res_y = max(1, int(bpy.context.scene.render.resolution_y or 720))
+    half_w = (18.0 / lens) * distance
+    half_h = (18.0 * res_y / res_x / lens) * distance
+    return half_w, half_h
+
+
 def add_overlay(scene, camera):
     if not scene.get("title_card", True):
         return
     font = ui_font()
-    # Text already faces the lens: it sits on the camera's -Z and its front is +Z.
+    # Text faces the lens: it sits on the camera's -Z and its front is +Z.
+    # Noto CJK ink is about 0.32 of TextCurve.size in this Blender, so the
+    # size is scaled up until the glyphs fill the lower-third bar.
     facing = (0.0, 0.0, 0.0)
-    plate = mesh_object("title-plate", box_mesh(2.4, 0.46, 0.02), (0.0, 0.0, 0.0))
-    stick_to_camera(plate, camera, (0.0, 0.58, -1.9))
-    paint(plate, shade((16, 20, 26), 0.8, "plate"))
+    distance = 5.0
+    glyph = 0.32
+    half_w, half_h = frame_span(camera, distance)
+    bar_w = half_w * 1.55
+    bar_h = half_h * 0.34
+    bar_y = -half_h + bar_h * 0.52
+    plate = mesh_object("title-plate", box_mesh(bar_w, bar_h, 0.02), (0.0, 0.0, 0.0))
+    stick_to_camera(plate, camera, (0.0, bar_y, -distance))
+    paint(plate, shade((16, 20, 26), 0.75, "plate"))
     title = bpy.data.curves.new("title-card", "FONT")
     title.body = scene.get("title") or "Drill"
-    title.size = 0.22
+    title.size = (bar_h * 0.72) / glyph
     title.align_x = "CENTER"
     title.align_y = "CENTER"
     title.extrude = 0.004
-    title.resolution_u = 8
+    title.resolution_u = 12
     if font is not None:
         title.font = font
     card = bpy.data.objects.new("title-card", title)
-    stick_to_camera(card, camera, (0.0, 0.58, -1.82), facing)
+    stick_to_camera(card, camera, (0.0, bar_y, -distance + 0.08), facing)
     link(card)
-    paint(card, shade((248, 244, 230), 0.4, "card-ink"))
-    burn_plate = mesh_object("burn-plate", box_mesh(2.2, 0.20, 0.02), (0.0, 0.0, 0.0))
-    stick_to_camera(burn_plate, camera, (0.0, -0.58, -1.9))
-    paint(burn_plate, shade((16, 20, 26), 0.8, "burn-plate"))
+    paint(card, shade((248, 244, 230), 0.35, "card-ink"))
     burn = bpy.data.curves.new("burn-in", "FONT")
     burn.body = ""
-    burn.size = 0.07
+    burn.size = (bar_h * 0.46) / glyph
     burn.align_x = "CENTER"
     burn.align_y = "CENTER"
     burn.extrude = 0.003
-    burn.resolution_u = 8
+    burn.resolution_u = 12
     if font is not None:
         burn.font = font
     label = bpy.data.objects.new("burn-in", burn)
-    stick_to_camera(label, camera, (0.0, -0.58, -1.82), facing)
+    stick_to_camera(label, camera, (0.0, bar_y, -distance + 0.08), facing)
     link(label)
-    paint(label, shade((248, 244, 230), 0.4, "burn-ink"))
+    paint(label, shade((248, 244, 230), 0.35, "burn-ink"))
     cues = sorted(scene.get("cues") or [], key=lambda item: int(item["frame"]))
     show_name = scene.get("title") or ""
     fps = int(bpy.context.scene.render.fps or 24)
+    # Short intro, then the same bar carries the set and count.
+    intro = max(18, int(fps * 1.25))
+    print(
+        f"overlay bar {bar_w:.2f}x{bar_h:.2f} title {title.size:.2f} burn {burn.size:.2f} intro {intro}",
+        flush=True,
+    )
 
     def on_frame(blend, *_args):
-        show = int(blend.frame_current) <= fps
-        for name in ("title-card", "title-plate"):
+        show = int(blend.frame_current) <= intro
+        for name in ("title-card",):
             obj = bpy.data.objects.get(name)
             if obj is not None:
                 obj.hide_render = not show
+        plate_obj = bpy.data.objects.get("title-plate")
+        if plate_obj is not None:
+            plate_obj.hide_render = False
         obj = bpy.data.objects.get("burn-in")
-        if obj is None or not cues:
+        if obj is not None:
+            obj.hide_render = show or not cues
+        if obj is None or not cues or show:
             return
         chosen = cues[0]
         for cue in cues:
@@ -1016,10 +1078,9 @@ def render_once(animation, samples):
 
 
 def hide_title():
-    for name in ("title-card", "title-plate"):
-        card = bpy.data.objects.get(name)
-        if card:
-            card.hide_render = True
+    card = bpy.data.objects.get("title-card")
+    if card:
+        card.hide_render = True
 
 
 def render_stills(cameras, directory, frame, samples):
@@ -1112,7 +1173,8 @@ def main():
     blend_path = os.path.join(script_dir(), "drill_scene.blend")
     bpy.ops.wm.save_as_mainfile(filepath=blend_path)
     samples = options.samples or int(scene.get("samples") or 8)
-    still_frame = start + int(bpy.context.scene.render.fps or 24)
+    # Past the intro card, so press_box and follow show the set/count bar.
+    still_frame = start + int((bpy.context.scene.render.fps or 24) * 2)
     still_frame = min(still_frame, int(bpy.context.scene.frame_end))
     if options.stills:
         blend = bpy.context.scene

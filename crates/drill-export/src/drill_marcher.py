@@ -24,8 +24,8 @@ SHIN = KNEE_Z - ANKLE_Z
 SHOULDER_Z = 1.42
 SHOULDER_X = 0.23
 HIP_X = 0.11
-UPPER = 0.30
-FORE = 0.26
+UPPER = 0.34
+FORE = 0.33
 HEAD_Z = 1.58
 
 JACKET = 0
@@ -517,11 +517,11 @@ def body_mesh(detailed):
     hat_seg = 16 if detailed else 8
 
     def build(bm):
-        # Hem is an open ring above the hips. Hip forms sit under it, out at
-        # each side, so the pelvis shows and nothing bridges the crotch.
+        # The hem flares over the hip joints. The bottom cap is deleted so the
+        # ring does not shelf between the legs. Trousers sit inside that flare.
         before = set(bm.faces)
-        add_cyl(bm, 0.128, 0.56, (0.0, -0.01, 1.18), JACKET, hat_seg, radius_top=0.185)
-        hem_z = 0.90
+        add_cyl(bm, 0.27, 0.90, (0.0, -0.01, 1.01), JACKET, hat_seg, radius_top=0.185)
+        hem_z = 0.56
         caps = [
             face
             for face in bm.faces
@@ -529,11 +529,14 @@ def body_mesh(detailed):
         ]
         if caps:
             bmesh.ops.delete(bm, geom=caps, context="FACES")
-        add_sphere(bm, 0.084, (-0.125, 0.0, HIP_Z), TROUSER, seg, (0.92, 0.68, 0.62))
-        add_sphere(bm, 0.084, (0.125, 0.0, HIP_Z), TROUSER, seg, (0.92, 0.68, 0.62))
+        # Pelvis stays above the hem, inside the jacket, so the open bottom
+        # shows cloth instead of the background and nothing hangs in the crotch.
+        add_cyl(bm, 0.155, 0.24, (0.0, -0.02, 0.94), TROUSER, hat_seg, radius_top=0.125)
+        add_sphere(bm, 0.09, (-0.10, -0.02, 0.86), TROUSER, seg, (1.0, 0.72, 0.8))
+        add_sphere(bm, 0.09, (0.10, -0.02, 0.86), TROUSER, seg, (1.0, 0.72, 0.8))
         add_sphere(bm, 0.096, (-0.26, -0.02, 1.40), JACKET, seg, (1.05, 0.82, 0.78))
         add_sphere(bm, 0.096, (0.26, -0.02, 1.40), JACKET, seg, (1.05, 0.82, 0.78))
-        add_cyl(bm, 0.148, 0.016, (0.0, -0.01, 1.02), GOLD, hat_seg)
+        add_cyl(bm, 0.232, 0.016, (0.0, -0.01, 1.02), GOLD, hat_seg)
         add_cyl(bm, 0.058, 0.10, (0.0, 0.0, 1.48), SKIN, 10)
         add_cyl(bm, 0.078, 0.045, (0.0, -0.02, 1.44), JACKET, 10, radius_top=0.058)
         add_cyl(bm, 0.070, 0.016, (0.0, -0.02, 1.458), GOLD, 10)
@@ -711,6 +714,19 @@ def cone_mesh(name, radius_base, radius_tip, depth, segments):
     return new_mesh(name, build)
 
 
+def thigh_mesh(detailed):
+    """Thigh with a wide cuff that rises into the jacket and moves with the leg."""
+    seg = 8 if detailed else 5
+
+    def build(bm):
+        # Wide from above the joint through the knee so the legs meet
+        # under the hem. They taper only where the shin begins.
+        depth = THIGH + 0.14
+        add_cyl(bm, 0.116, depth, (0.0, 0.0, 0.07 - depth * 0.5), 0, seg, radius_top=0.124)
+
+    return new_mesh("thigh", build)
+
+
 def unit_cube():
     return new_mesh("cube", lambda bm: add_box(bm, (1.0, 1.0, 1.0), (0.0, 0.0, 0.0), 0))
 
@@ -723,8 +739,8 @@ def shared_meshes(detailed):
     # from the joint toward the wrist and the ankle.
     return {
         "body": body_mesh(detailed),
-        "thigh": cylinder_mesh("thigh", 0.062, THIGH, limb_seg, "top", 0.092),
-        "shin": cylinder_mesh("shin", 0.046, SHIN, limb_seg, "top", 0.066),
+        "thigh": thigh_mesh(detailed),
+        "shin": cylinder_mesh("shin", 0.050, SHIN, limb_seg, "top", 0.082),
         "shoe": shoe_mesh("shoe"),
         "arm": cylinder_mesh("arm", 0.046, UPPER, limb_seg, "top", 0.064),
         "fore": cylinder_mesh("fore", 0.038, FORE, limb_seg, "top", 0.050),
@@ -868,7 +884,7 @@ def arm_targets(prop, gait):
     # Horns: mouthpiece at the lips, bell hand further out, elbows wide.
     # Drums sit at the waist. The flag pole is vertical between both hands.
     table = {
-        "trumpet": {"R": (0.04, -0.22, 1.50), "L": (-0.02, -0.30, 1.48)},
+        "trumpet": {"R": (0.05, -0.20, 1.47), "L": (0.00, -0.24, 1.44)},
         "mellophone": {"R": (0.02, -0.16, 1.50), "L": (0.10, -0.30, 1.44)},
         "trombone": {"R": (0.02, -0.16, 1.50), "L": (-0.16, -0.34, 1.42)},
         "baritone": {"R": (0.06, -0.18, 1.28), "L": (-0.04, -0.20, 1.36)},
@@ -888,7 +904,7 @@ def arm_targets(prop, gait):
 
 # Elbow pole, in character space. X is mirrored per arm.
 POLES = {
-    "trumpet": (0.34, -0.06, 1.40),
+    "trumpet": (0.80, -0.35, 0.90),
     "mellophone": (0.32, -0.08, 1.38),
     "trombone": (0.38, -0.12, 1.30),
     "baritone": (0.30, -0.14, 1.22),
