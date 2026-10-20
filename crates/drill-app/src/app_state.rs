@@ -696,12 +696,23 @@ mod workspace_preset_tests {
         app.apply_workspace_preset(WorkspacePreset::Present);
         assert_eq!(app.workspace_preset, WorkspacePreset::Present);
         assert_eq!(app.view_mode, ViewMode::Stadium3D);
+        assert!(app.camera_program_preview);
         assert!(!app.show_inspector);
         assert!(!app.heatmap_enabled);
         assert_eq!(app.workspace_focus, None);
         assert_eq!(app.document, document);
         assert_eq!(app.history.revision(), revision);
         assert!(!app.dirty);
+
+        app.collab.set_live_for_test(true);
+        assert!(app.command_context().flat_field);
+        app.apply_workspace_preset(WorkspacePreset::Present);
+        assert_eq!(app.view_mode, ViewMode::Field2D);
+        assert!(!app.camera_program_preview);
+        app.execute_command(UiCommand::View3d, &egui::Context::default());
+        assert_eq!(app.view_mode, ViewMode::Field2D);
+        app.execute_command(UiCommand::View2d, &egui::Context::default());
+        assert_eq!(app.view_mode, ViewMode::Field2D);
     }
 }
 
@@ -2178,6 +2189,7 @@ impl DrillApp {
             has_next_set: self.current_set.saturating_add(1) < self.document.sets.len(),
             has_multiple_sets: self.document.sets.len() > 1,
             can_exit_field_tool: self.field_tool != FieldTool::Select,
+            flat_field: self.collab.is_live(),
         }
     }
 
@@ -3265,7 +3277,11 @@ impl DrillApp {
                 self.workspace_focus = Some(WorkspaceFocus::ProductionSheet);
             }
             UiCommand::View2d => self.view_mode = ViewMode::Field2D,
-            UiCommand::View3d => self.view_mode = ViewMode::Stadium3D,
+            UiCommand::View3d => {
+                if !self.collab.is_live() {
+                    self.view_mode = ViewMode::Stadium3D;
+                }
+            }
             UiCommand::ToggleFocusField => {
                 self.focus_field = !self.focus_field;
                 self.status = i18n::registered(
@@ -3311,12 +3327,17 @@ impl DrillApp {
                 self.workspace_focus = Some(WorkspaceFocus::Clinic);
             }
             WorkspacePreset::Present => {
-                self.view_mode = ViewMode::Stadium3D;
+                let flat = self.collab.is_live();
+                self.view_mode = if flat {
+                    ViewMode::Field2D
+                } else {
+                    ViewMode::Stadium3D
+                };
                 self.show_inspector = false;
                 self.show_guidance = false;
                 self.set_simple_mode(false);
                 self.heatmap_enabled = false;
-                self.camera_program_preview = true;
+                self.camera_program_preview = !flat;
                 self.workspace_focus = None;
             }
         }
@@ -3816,12 +3837,14 @@ impl DrillApp {
                             }
                             ui.add_space(8.0);
                         }
-                        if print_output_card(
-                            ui,
-                            self.print_state.video,
-                            text(self.locale, Text::Video3d),
-                            simple_mode::PhoneIcon::Video,
-                        ) {
+                        if !self.collab.is_live()
+                            && print_output_card(
+                                ui,
+                                self.print_state.video,
+                                text(self.locale, Text::Video3d),
+                                simple_mode::PhoneIcon::Video,
+                            )
+                        {
                             self.print_state.video = true;
                         }
                     });

@@ -40,7 +40,7 @@ impl CommandPalette {
             return None;
         }
 
-        let candidates = matching_specs(&self.query, locale);
+        let candidates = palette_specs(&self.query, locale, command_context);
         self.selected = selected_enabled_index(&candidates, command_context, locale, self.selected);
         let mut chosen = None;
         let mut close = false;
@@ -153,6 +153,13 @@ fn matching_specs(query: &str, locale: Locale) -> Vec<&'static Spec> {
         .collect()
 }
 
+fn palette_specs(query: &str, locale: Locale, context: Context) -> Vec<&'static Spec> {
+    matching_specs(query, locale)
+        .into_iter()
+        .filter(|spec| spec.command.offered(context))
+        .collect()
+}
+
 fn selected_enabled_index(
     candidates: &[&Spec],
     context: Context,
@@ -215,6 +222,20 @@ mod tests {
                 .iter()
                 .any(|spec| spec.command == Command::FocusVideo)
         );
+    }
+
+    #[test]
+    fn flat_field_palette_drops_stadium_commands() {
+        let flat = Context {
+            flat_field: true,
+            ..Context::default()
+        };
+        let specs = palette_specs("", Locale::En, flat);
+        assert!(specs.iter().any(|spec| spec.command == Command::View2d));
+        assert!(specs.iter().any(|spec| spec.command == Command::FocusVideo));
+        assert!(specs.iter().all(
+            |spec| spec.command != Command::View3d && spec.command != Command::WorkspacePresent
+        ));
     }
 
     #[test]

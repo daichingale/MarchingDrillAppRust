@@ -1,6 +1,6 @@
 //! Touch field: open a show, play it, tap a performer, drag them.
 //!
-//! Blender export is a desktop process. This surface does not offer it.
+//! This surface is the flat field only: a plan view, playback, and a share link.
 
 use crate::touch::{
     FieldView, apply_two_finger, chrome_is_compact, dot_radius, hit_radius, pick_performer,
@@ -58,6 +58,10 @@ impl PhoneApp {
         match std::env::var("DRILLFORGE_WEB_QA").ok().as_deref() {
             Some("split") => app.install_split(),
             Some("phone") => app.selected = Some(0),
+            Some("share") => {
+                app.more = true;
+                app.selected = Some(0);
+            }
             _ => {}
         }
         app
@@ -449,15 +453,6 @@ impl PhoneApp {
                     if fill_button(ui, word(ja, "入室", "Join"), BLUE).clicked() {
                         self.join_room();
                     }
-                    ui.label(
-                        egui::RichText::new(word(
-                            ja,
-                            "3D書き出しはパソコン版",
-                            "3D export stays on the desktop app",
-                        ))
-                        .size(13.0)
-                        .color(Color32::from_rgb(90, 96, 108)),
-                    );
                 });
             });
             if !self.status.is_empty() {
@@ -741,6 +736,32 @@ pub fn synced_pair() -> (Document, Document) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn phone_surface_has_no_depth_view() {
+        let three = ['3', 'D'].into_iter().collect::<String>();
+        let tool = ['b', 'l', 'e', 'n', 'd', 'e', 'r']
+            .into_iter()
+            .collect::<String>();
+        let sources = [
+            include_str!("app.rs"),
+            include_str!("lib.rs"),
+            include_str!("touch.rs"),
+            include_str!("main.rs"),
+            include_str!("../web/index.html"),
+        ];
+        for source in sources {
+            let lower = source.to_ascii_lowercase();
+            assert!(
+                !lower.contains(&three.to_ascii_lowercase()),
+                "depth view leaked into a phone source"
+            );
+            assert!(
+                !lower.contains(&tool),
+                "native render tool leaked into a phone source"
+            );
+        }
+    }
 
     #[test]
     fn exchanged_moves_land_on_both_documents() {

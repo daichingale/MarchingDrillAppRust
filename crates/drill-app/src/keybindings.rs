@@ -40,7 +40,10 @@ pub(crate) struct DispatchGate {
 impl DispatchGate {
     pub(crate) fn allows(self, action: Action) -> bool {
         match action {
-            Action::Command(command) => command.enabled(self.commands, self.locale).is_ok(),
+            Action::Command(command) => {
+                command.offered(self.commands)
+                    && command.enabled(self.commands, self.locale).is_ok()
+            }
             Action::ToolSelect | Action::ToolMove | Action::ToolPlace => {
                 self.surface == Surface::Full
             }
@@ -1089,7 +1092,9 @@ impl super::DrillApp {
                 }
             });
         });
-        self.blender_path_row(ui);
+        if !self.collab.is_live() {
+            self.blender_path_row(ui);
+        }
         let search_id = ui.make_persistent_id("keybinding-search");
         ui.add(
             egui::TextEdit::singleline(&mut self.keybindings.query)
@@ -1345,7 +1350,8 @@ impl super::DrillApp {
                                 .color(INK),
                         );
                     });
-                    for action in all_actions()
+                    for action in self
+                        .offered_actions()
                         .into_iter()
                         .filter(|action| category_of(*action) == category)
                     {
@@ -1365,8 +1371,18 @@ impl super::DrillApp {
             });
     }
 
-    fn visible_actions(&self, ctx: &egui::Context, query: &str) -> Vec<Action> {
+    fn offered_actions(&self) -> Vec<Action> {
         all_actions()
+            .into_iter()
+            .filter(|action| match action {
+                Action::Command(command) => command.offered(self.command_context()),
+                _ => true,
+            })
+            .collect()
+    }
+
+    fn visible_actions(&self, ctx: &egui::Context, query: &str) -> Vec<Action> {
+        self.offered_actions()
             .into_iter()
             .filter(|action| self.matches_query(ctx, *action, query))
             .collect()
@@ -1907,6 +1923,7 @@ mod tests {
                 has_next_set: true,
                 has_multiple_sets: true,
                 can_exit_field_tool: true,
+                flat_field: false,
             },
             locale: Locale::En,
             can_nudge: true,

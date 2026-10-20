@@ -31,6 +31,9 @@ impl eframe::App for DrillApp {
         }
         self.apply_remote_sync();
         if self.collab.is_live() {
+            self.view_mode = ViewMode::Field2D;
+            self.camera_program_preview = false;
+            self.print_state.video = false;
             ui.ctx().request_repaint_after(Duration::from_millis(80));
         }
         self.presence
@@ -682,7 +685,9 @@ impl eframe::App for DrillApp {
                         ));
                         ui.separator();
                         ui.selectable_value(&mut self.view_mode, ViewMode::Field2D, "2D");
-                        ui.selectable_value(&mut self.view_mode, ViewMode::Stadium3D, "3D");
+                        if !self.collab.is_live() {
+                            ui.selectable_value(&mut self.view_mode, ViewMode::Stadium3D, "3D");
+                        }
                         if let Some(gpu) = &mut self.gpu {
                             let mut enabled = gpu.enabled();
                             if ui
@@ -3058,6 +3063,9 @@ impl DrillApp {
                 UiCommand::WorkspaceReview,
                 UiCommand::WorkspacePresent,
             ] {
+                if self.collab.is_live() && command.omitted_on_flat_field() {
+                    continue;
+                }
                 if ui.button(command.label(self.locale)).clicked() {
                     self.execute_command(command, ui.ctx());
                     ui.close();

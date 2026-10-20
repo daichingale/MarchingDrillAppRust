@@ -96,6 +96,8 @@ pub(crate) struct Context {
     pub has_multiple_sets: bool,
     /// Select/Move/Place: Esc can leave Place/Move even with an empty selection.
     pub can_exit_field_tool: bool,
+    /// A live share room stays on the flat field. Stadium and present are omitted.
+    pub flat_field: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -556,6 +558,15 @@ pub(crate) const SPECS: &[Spec] = &[
 ];
 
 impl Command {
+    /// Stadium view and the present preset leave the flat field.
+    pub(crate) fn omitted_on_flat_field(self) -> bool {
+        matches!(self, Self::View3d | Self::WorkspacePresent)
+    }
+
+    pub(crate) fn offered(self, context: Context) -> bool {
+        !(context.flat_field && self.omitted_on_flat_field())
+    }
+
     pub(crate) fn label(self, locale: Locale) -> &'static str {
         use Command::*;
         match (locale, self) {
@@ -742,6 +753,10 @@ pub(crate) fn specs(menu: Menu) -> impl Iterator<Item = &'static Spec> {
     SPECS.iter().filter(move |spec| spec.menu == menu)
 }
 
+pub(crate) fn listed_specs(menu: Menu, context: Context) -> impl Iterator<Item = &'static Spec> {
+    specs(menu).filter(move |spec| spec.command.offered(context))
+}
+
 /// Renders one native desktop menu and returns the selected command.
 /// Command execution deliberately remains in the application controller.
 ///
@@ -778,7 +793,7 @@ pub(crate) fn show_menu_labeled(
     shortcut_of: &dyn Fn(Command) -> String,
 ) -> Option<Command> {
     let mut chosen = None;
-    for spec in specs(menu) {
+    for spec in listed_specs(menu, context) {
         let shortcut = shortcut_of(spec.command);
         let label = if shortcut.is_empty() {
             spec.command.label(locale).to_owned()
@@ -1032,6 +1047,7 @@ mod tests {
             has_next_set: true,
             has_multiple_sets: true,
             can_exit_field_tool: true,
+            flat_field: false,
         };
         let mut raw_input = egui::RawInput {
             modifiers,
@@ -1084,6 +1100,7 @@ mod tests {
             has_next_set: true,
             has_multiple_sets: true,
             can_exit_field_tool: true,
+            flat_field: false,
         };
         for spec in SPECS {
             assert!(spec.command.enabled(available, Locale::Ja).is_ok());
@@ -1095,6 +1112,27 @@ mod tests {
                 assert!(en.is_ascii());
             }
         }
+    }
+
+    #[test]
+    fn flat_field_omits_stadium_and_keeps_the_plan_view() {
+        let flat = Context {
+            flat_field: true,
+            ..Context::default()
+        };
+        let view: Vec<Command> = listed_specs(Menu::View, flat)
+            .map(|spec| spec.command)
+            .collect();
+        assert!(view.contains(&Command::View2d));
+        assert!(!view.contains(&Command::View3d));
+        assert!(!view.contains(&Command::WorkspacePresent));
+        let workspace: Vec<Command> = listed_specs(Menu::Workspace, flat)
+            .map(|spec| spec.command)
+            .collect();
+        assert!(workspace.contains(&Command::FocusVideo));
+        assert!(workspace.contains(&Command::OpenPrint));
+        let open = Context::default();
+        assert!(listed_specs(Menu::View, open).any(|spec| spec.command == Command::View3d));
     }
 
     #[test]

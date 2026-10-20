@@ -1,10 +1,10 @@
 //! Phone and browser field for DrillForge.
 //!
 //! The desktop crate cannot be compiled to wasm as it stands: native file
-//! dialogs, the audio device, Blender, and worker threads are all in that
-//! binary. This crate keeps the part a phone needs — the document, the field
-//! map, and the same sync values the desktop publishes — and draws it with
-//! eframe's WebGL backend.
+//! dialogs, the audio device, a native render process, and worker threads
+//! are all in that binary. This crate keeps the part a phone needs — the
+//! document, the field map, and the same sync values the desktop publishes —
+//! and draws the flat field with eframe's WebGL backend.
 
 mod app;
 mod touch;

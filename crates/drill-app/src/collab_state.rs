@@ -60,6 +60,8 @@ pub(crate) struct CollabState {
     name: String,
     color: [u8; 3],
     last_hello: Option<Instant>,
+    #[cfg(test)]
+    live_for_test: bool,
 }
 
 impl CollabState {
@@ -72,7 +74,19 @@ impl CollabState {
     }
 
     pub(crate) fn is_live(&self) -> bool {
-        self.client.is_some()
+        #[cfg(test)]
+        {
+            self.client.is_some() || self.live_for_test
+        }
+        #[cfg(not(test))]
+        {
+            self.client.is_some()
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_live_for_test(&mut self, live: bool) {
+        self.live_for_test = live;
     }
 
     pub(crate) fn on_signal(&mut self, signal: &SessionSignal, document: &Document) {
