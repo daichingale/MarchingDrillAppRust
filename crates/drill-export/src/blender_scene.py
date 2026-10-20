@@ -13,6 +13,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 
 import bpy
 import bmesh
@@ -926,22 +927,76 @@ def configure_render(scene_data, options):
     return start
 
 
-def stick_to_camera(obj, camera, location, rotation=(0.0, 0.0, 0.0)):
-    obj.parent = camera
-    obj.location = location
-    obj.rotation_euler = rotation
-
-
 _UI_FONT = None
 _UI_FONT_READY = False
+_CAPTION = None
+
+# Draws the lower third as a flat RGBA image. The caption is not a mesh in the
+# shot, so field geometry cannot cut through the glyphs.
+_CAPTION_DRAW = r"""
+import sys
+from PIL import Image, ImageDraw, ImageFont
 
 
-def ui_font():
-    """Japanese-capable face. The bundle ships Noto Sans JP; system CJK is the fallback."""
-    global _UI_FONT, _UI_FONT_READY
-    if _UI_FONT_READY:
-        return _UI_FONT
-    _UI_FONT_READY = True
+def load_font(path, size):
+    font = ImageFont.truetype(path, size)
+    try:
+        font.set_variation_by_axes([700])
+    except Exception:
+        try:
+            font.set_variation_by_name(b"Bold")
+        except Exception:
+            pass
+    return font
+
+
+def main():
+    dest, text, width_s, height_s, font_path, mode = sys.argv[1:7]
+    width, height = int(width_s), int(height_s)
+    bar_h = max(8, int(round(height * 0.12)))
+    margin = max(4, int(round(height * 0.025)))
+    side = max(8, int(round(width * 0.04)))
+    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    y1 = height - margin
+    y0 = y1 - bar_h
+    radius = max(6, int(round(bar_h * 0.22)))
+    draw.rounded_rectangle((side, y0, width - side, y1), radius=radius, fill=(10, 12, 16, 188))
+    stroke = 1
+    target = int(bar_h * 0.56)
+    max_w = width - 2 * side - int(bar_h * 0.5)
+    font = load_font(font_path, 18)
+    for size in range(18, 220):
+        trial = load_font(font_path, size)
+        box = draw.textbbox((0, 0), text, font=trial, stroke_width=stroke)
+        ink_h = box[3] - box[1]
+        ink_w = box[2] - box[0]
+        if ink_h > target or ink_w > max_w:
+            break
+        font = trial
+    box = draw.textbbox((0, 0), text, font=font, stroke_width=stroke)
+    tw, th = box[2] - box[0], box[3] - box[1]
+    tx = (width - tw) / 2.0 - box[0]
+    ty = (y0 + y1 - th) / 2.0 - box[1]
+    white = (255, 255, 255, 255)
+    draw.text((tx, ty), text, font=font, fill=white, stroke_width=stroke, stroke_fill=white)
+    if mode == "png":
+        base = Image.open(dest).convert("RGBA")
+        if base.size != (width, height):
+            base = base.resize((width, height), Image.Resampling.LANCZOS)
+        Image.alpha_composite(base, overlay).convert("RGB").save(dest)
+    else:
+        overlay.save(dest)
+    print(f"caption {mode} {bar_h}px margin {margin}px {text}", flush=True)
+
+
+if __name__ == "__main__":
+    main()
+"""
+
+
+def font_file():
+    """Japanese-capable face. The bundle ships NotoSansJP.ttf; system CJK is the fallback."""
     folder = script_dir()
     candidates = [
         os.path.join(folder, "NotoSansJP.ttf"),
@@ -953,99 +1008,174 @@ def ui_font():
         "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
     ]
     for path in candidates:
-        if not os.path.isfile(path):
-            continue
-        try:
-            font = bpy.data.fonts.load(path)
-            print(f"ui font {path}", flush=True)
-            _UI_FONT = font
-            return font
-        except RuntimeError as exc:
-            print(f"ui font skipped {path}: {exc}", flush=True)
-    print("ui font missing; title may show boxes", flush=True)
+        if os.path.isfile(path):
+            return path
     return None
 
 
-def frame_span(camera, distance):
-    """Half width and half height of the view, in camera space, at `distance`."""
-    lens = max(1.0, float(getattr(camera.data, "lens", 35.0) or 35.0))
-    res_x = max(1, int(bpy.context.scene.render.resolution_x or 1280))
-    res_y = max(1, int(bpy.context.scene.render.resolution_y or 720))
-    half_w = (18.0 / lens) * distance
-    half_h = (18.0 * res_y / res_x / lens) * distance
-    return half_w, half_h
+def ui_font():
+    """Blender font for the yard numbers. The lower third does not use this."""
+    global _UI_FONT, _UI_FONT_READY
+    if _UI_FONT_READY:
+        return _UI_FONT
+    _UI_FONT_READY = True
+    path = font_file()
+    if path is None:
+        print("ui font missing; title may show boxes", flush=True)
+        return None
+    try:
+        font = bpy.data.fonts.load(path)
+        print(f"ui font {path}", flush=True)
+        _UI_FONT = font
+        return font
+    except RuntimeError as exc:
+        print(f"ui font skipped {path}: {exc}", flush=True)
+        return None
 
 
 def add_overlay(scene, camera):
+    """Remember the caption. It is painted on after the 3D render, in 2D."""
+    global _CAPTION
+    del camera
     if not scene.get("title_card", True):
+        _CAPTION = None
         return
-    font = ui_font()
-    # One text object, one font. It faces the lens: on the camera's -Z, front +Z.
-    # Noto CJK ink is about 0.32 of TextCurve.size. Extrude stays 0 so a glyph
-    # is not drawn twice.
-    facing = (0.0, 0.0, 0.0)
-    distance = 5.0
-    glyph = 0.32
-    half_w, half_h = frame_span(camera, distance)
-    bar_w = half_w * 1.55
-    # About 12% of the frame height, with a margin under the bar.
-    bar_h = half_h * 0.24
-    margin = half_h * 0.05
-    bar_y = -half_h + margin + bar_h * 0.5
-    plate = mesh_object("title-plate", box_mesh(bar_w, bar_h, 0.02), (0.0, 0.0, 0.0))
-    stick_to_camera(plate, camera, (0.0, bar_y, -distance))
-    paint(plate, shade((16, 20, 26), 0.75, "plate"))
-    title = bpy.data.curves.new("title-card", "FONT")
-    title.body = scene.get("title") or "Drill"
-    title.size = (bar_h * 0.55) / glyph
-    title.align_x = "CENTER"
-    title.align_y = "CENTER"
-    title.extrude = 0.0
-    title.resolution_u = 2
-    if hasattr(title, "overflow"):
-        title.overflow = "NONE"
-    if hasattr(title, "bevel_depth"):
-        title.bevel_depth = 0.0
-    if font is not None:
-        title.font = font
-    card = bpy.data.objects.new("title-card", title)
-    stick_to_camera(card, camera, (0.0, bar_y, -distance + 0.08), facing)
-    link(card)
-    paint(card, shade((248, 244, 230), 0.35, "card-ink"))
-    cues = sorted(scene.get("cues") or [], key=lambda item: int(item["frame"]))
-    show_name = scene.get("title") or "Drill"
-    fps = int(bpy.context.scene.render.fps or 24)
-    # Short intro of the show name, then the same object carries set and count.
+    path = font_file()
+    if path:
+        print(f"ui font {path}", flush=True)
+    else:
+        print("ui font missing; title may show boxes", flush=True)
+    blend = bpy.context.scene
+    fps = int(blend.render.fps or 24)
     intro = max(18, int(fps * 1.25))
+    width = int(blend.render.resolution_x or 1280)
+    height = int(blend.render.resolution_y or 720)
+    _CAPTION = {
+        "font": path or "",
+        "title": scene.get("title") or "Drill",
+        "cues": sorted(scene.get("cues") or [], key=lambda item: int(item["frame"])),
+        "intro": intro,
+        "width": width,
+        "height": height,
+    }
     print(
-        f"overlay bar {bar_w:.2f}x{bar_h:.2f} frac {bar_h / (2.0 * half_h):.3f} "
-        f"margin {margin / (2.0 * half_h):.3f} size {title.size:.2f} intro {intro}",
+        f"overlay 2d frac 0.120 margin 0.025 intro {intro} {width}x{height}",
         flush=True,
     )
 
-    def caption(blend):
-        if int(blend.frame_current) <= intro or not cues:
-            return show_name
-        chosen = cues[0]
-        for cue in cues:
-            if int(cue["frame"]) <= blend.frame_current:
-                chosen = cue
-            else:
-                break
-        return f"セット{chosen.get('set', 1)} ・ {chosen.get('count', 0)}カウント"
 
-    def on_frame(blend, *_args):
-        plate_obj = bpy.data.objects.get("title-plate")
-        if plate_obj is not None:
-            plate_obj.hide_render = False
-        obj = bpy.data.objects.get("title-card")
-        if obj is None:
-            return
-        obj.hide_render = False
-        obj.data.body = caption(blend)
+def caption_text(frame):
+    state = _CAPTION
+    if not state:
+        return ""
+    if int(frame) <= int(state["intro"]) or not state["cues"]:
+        return state["title"]
+    chosen = state["cues"][0]
+    for cue in state["cues"]:
+        if int(cue["frame"]) <= int(frame):
+            chosen = cue
+        else:
+            break
+    return f"セット{chosen.get('set', 1)} ・ {chosen.get('count', 0)}カウント"
 
-    bpy.app.handlers.frame_change_pre.append(on_frame)
-    on_frame(bpy.context.scene)
+
+def _draw_caption(dest, text, mode):
+    state = _CAPTION
+    if not state or not state.get("font") or not text:
+        return False
+    handle, script = tempfile.mkstemp(prefix="drill-caption-", suffix=".py")
+    os.close(handle)
+    try:
+        with open(script, "w", encoding="utf-8") as out:
+            out.write(_CAPTION_DRAW)
+        subprocess.check_call(
+            [
+                "python3",
+                script,
+                dest,
+                text,
+                str(state["width"]),
+                str(state["height"]),
+                state["font"],
+                mode,
+            ]
+        )
+        return True
+    finally:
+        try:
+            os.remove(script)
+        except OSError:
+            pass
+
+
+def stamp_still(directory, name, frame):
+    text = caption_text(frame)
+    png = os.path.join(directory, name + ".png")
+    if not text or not os.path.isfile(png):
+        return
+    try:
+        _draw_caption(png, text, "png")
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(f"caption still failed {name}: {exc}", flush=True)
+
+
+def stamp_movie(path):
+    state = _CAPTION
+    if not state or not state.get("font") or not os.path.isfile(path):
+        return
+    blend = bpy.context.scene
+    start = int(blend.frame_start)
+    end = int(blend.frame_end)
+    ranges = []
+    for frame in range(start, end + 1):
+        text = caption_text(frame)
+        if ranges and ranges[-1][2] == text:
+            ranges[-1][1] = frame
+        else:
+            ranges.append([frame, frame, text])
+    folder = tempfile.mkdtemp(prefix="drill-caption-")
+    inputs = ["ffmpeg", "-y", "-i", path]
+    filters = []
+    previous = "0:v"
+    try:
+        for index, (first, last, text) in enumerate(ranges):
+            plate = os.path.join(folder, f"{index}.png")
+            _draw_caption(plate, text, "rgba")
+            inputs.extend(["-i", plate])
+            label = f"v{index}"
+            # ffmpeg frame 0 is Blender frame `start`.
+            enable = f"between(n,{first - start},{last - start})"
+            filters.append(
+                f"[{previous}][{index + 1}:v]overlay=0:0:format=auto:enable='{enable}'[{label}]"
+            )
+            previous = label
+        stamped = path + ".captioned.mp4"
+        command = inputs + [
+            "-filter_complex",
+            ";".join(filters),
+            "-map",
+            f"[{previous}]",
+            "-map",
+            "0:a?",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-crf",
+            "18",
+            "-c:a",
+            "copy",
+            "-movflags",
+            "+faststart",
+            stamped,
+        ]
+        print(f"caption movie {len(ranges)} plates", flush=True)
+        subprocess.check_call(command)
+        os.replace(stamped, path)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(f"caption movie failed: {exc}", flush=True)
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
 
 
 def render_once(animation, samples):
@@ -1070,20 +1200,11 @@ def render_once(animation, samples):
             bpy.ops.render.render(write_still=True)
 
 
-def hide_title():
-    # The intro title and the set/count line are the same object. Stills past
-    # the intro already show the count, so the caption stays visible.
-    card = bpy.data.objects.get("title-card")
-    if card:
-        card.hide_render = False
-
-
 def render_stills(cameras, directory, frame, samples):
     os.makedirs(directory, exist_ok=True)
     blend = bpy.context.scene
     blend.render.image_settings.file_format = "PNG"
     blend.frame_set(frame)
-    hide_title()
     for name, camera in cameras.items():
         if name == "program":
             continue
@@ -1091,6 +1212,7 @@ def render_stills(cameras, directory, frame, samples):
         blend.render.filepath = os.path.join(directory, name)
         print(f"Fra:{frame} still {name}", flush=True)
         render_once(False, samples)
+        stamp_still(directory, name, frame)
 
 
 def render_movie(camera, path, samples):
@@ -1106,6 +1228,7 @@ def render_movie(camera, path, samples):
     blend.render.ffmpeg.audio_codec = "AAC"
     blend.render.filepath = path
     render_once(True, samples)
+    stamp_movie(path)
 
 
 def render_movie_from_stills(path, samples):
@@ -1139,6 +1262,7 @@ def render_movie_from_stills(path, samples):
     ]
     subprocess.check_call(command)
     shutil.rmtree(folder, ignore_errors=True)
+    stamp_movie(path)
 
 
 def main():
@@ -1179,6 +1303,7 @@ def main():
         blend.render.filepath = os.path.join(options.stills, "title")
         print(f"Fra:{start} still title", flush=True)
         render_once(False, samples)
+        stamp_still(options.stills, "title", start)
         render_stills(cameras, options.stills, still_frame, samples)
     saved_time = scene.get("time_of_day") or "day"
     if options.night_stills:
