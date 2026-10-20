@@ -1658,7 +1658,7 @@ impl eframe::App for DrillApp {
                         || input.consume_key(egui::Modifiers::CTRL, egui::Key::Num1)
                 });
                 if reset_view && self.view_mode == ViewMode::Field2D {
-                    self.field_viewport.reset(&self.document.grid);
+                    self.fit_whole_floor();
                 }
                 if focus_selection
                     && self.view_mode == ViewMode::Field2D
@@ -1732,6 +1732,7 @@ impl eframe::App for DrillApp {
                     self.field_viewport
                         .set_content(visible.translate(-rect.min.to_vec2()));
                 }
+                self.maybe_frame_clustered_cast(viewport_size);
                 // Only the rubber-band allowance is enforced here, not the
                 // hard edge: an interactive pan is allowed to pull slightly
                 // past the sideline, and `FieldViewport::tick` springs it
@@ -1836,7 +1837,7 @@ impl eframe::App for DrillApp {
                                         ))
                                         .clicked()
                                     {
-                                        self.field_viewport.reset(&self.document.grid);
+                                        self.fit_whole_floor();
                                     }
                                     if ui
                                         .add_enabled(
@@ -2629,9 +2630,11 @@ impl eframe::App for DrillApp {
                         && nearest_index.is_none()
                     {
                         if ui.input(|input| input.modifiers.shift) {
+                            self.hold_whole_field = false;
                             self.zoom_to_performers(viewport_size);
+                            self.hold_whole_field = true;
                         } else {
-                            self.field_viewport.reset(&self.document.grid);
+                            self.fit_whole_floor();
                         }
                     } else if !pointer_gesture_taken
                         && !self.free_draw_active
@@ -3465,35 +3468,72 @@ impl DrillApp {
         rect: Rect,
         field_map: &drill_render::FieldMap,
     ) {
-        let color = Color32::from_rgb(36, 84, 158);
         let font = egui::FontId::proportional(12.0);
         let to_screen = |point: Point| {
             let mapped = field_map.map(point);
             Pos2::new(rect.left() + mapped.x, rect.top() + mapped.y)
         };
+        let dots: Vec<Pos2> = self
+            .frame_positions
+            .iter()
+            .copied()
+            .map(to_screen)
+            .collect();
+        let visible = self.field_viewport.content_screen(rect);
         for mark in coordinates::field_marks(&self.document.grid, self.locale) {
-            let (pos, align) = match mark.kind {
+            let (pos, align, push) = match mark.kind {
+                // Under the line, on the audience side, so a front rank
+                // does not wear the yard numbers.
                 coordinates::FieldMarkKind::Side => (
-                    to_screen(mark.at) + Vec2::new(0.0, -6.0),
-                    egui::Align2::CENTER_BOTTOM,
+                    to_screen(mark.at) + Vec2::new(0.0, 8.0),
+                    egui::Align2::CENTER_TOP,
+                    Vec2::new(0.0, 14.0),
                 ),
                 coordinates::FieldMarkKind::Depth => (
-                    to_screen(mark.at) + Vec2::new(8.0, 0.0),
-                    egui::Align2::LEFT_CENTER,
+                    to_screen(mark.at) + Vec2::new(-8.0, 0.0),
+                    egui::Align2::RIGHT_CENTER,
+                    Vec2::new(-16.0, 0.0),
                 ),
                 coordinates::FieldMarkKind::Frame => (
-                    to_screen(mark.at) + Vec2::new(0.0, -8.0),
-                    egui::Align2::CENTER_BOTTOM,
+                    to_screen(mark.at) + Vec2::new(0.0, 12.0),
+                    egui::Align2::CENTER_TOP,
+                    Vec2::new(0.0, 14.0),
                 ),
                 coordinates::FieldMarkKind::Front => (
-                    to_screen(mark.at) + Vec2::new(0.0, 6.0),
+                    to_screen(mark.at) + Vec2::new(0.0, 8.0),
                     egui::Align2::CENTER_TOP,
+                    Vec2::new(0.0, 14.0),
                 ),
             };
-            if !rect.expand(28.0).contains(pos) {
+            let galley = painter.layout_no_wrap(mark.text, font.clone(), Color32::PLACEHOLDER);
+            // A contest label carries a small plate so it stays readable on
+            // the yard line. The plate is what has to clear the dots.
+            let plate = matches!(mark.kind, coordinates::FieldMarkKind::Frame);
+            let box_size = if plate {
+                galley.size() + Vec2::new(12.0, 8.0)
+            } else {
+                galley.size()
+            };
+            let (pos, faded) = label_anchor_clear_of_dots(pos, align, box_size, &dots, push);
+            let text_rect = align.anchor_size(pos, galley.size());
+            if !visible.intersects(text_rect.shrink(1.0)) {
                 continue;
             }
-            painter.text(pos, align, mark.text, font.clone(), color);
+            // A contest plate that still lands on someone is left off. A
+            // faint word across a dot is harder to read than no word.
+            if faded && plate {
+                continue;
+            }
+            let color = if faded {
+                Color32::from_rgba_unmultiplied(36, 84, 158, 88)
+            } else {
+                Color32::from_rgb(36, 84, 158)
+            };
+            if plate {
+                let chip = text_rect.expand(4.0);
+                painter.rect_filled(chip, 6.0, Color32::from_white_alpha(235));
+            }
+            painter.galley(text_rect.min, galley, color);
         }
     }
 
@@ -4414,5 +4454,70 @@ impl DrillApp {
                 }
             });
         });
+    }
+}
+
+/// Walks a label along `push` until its box clears the dots. The last step
+/// still reports a hit so the caller can fade it instead of covering a person.
+fn label_anchor_clear_of_dots(
+    mut anchor: Pos2,
+    align: egui::Align2,
+    size: Vec2,
+    dots: &[Pos2],
+    push: Vec2,
+) -> (Pos2, bool) {
+    for step in 0..5 {
+        // A dot is wider than its center. 14px keeps the plate off the body,
+        // not only off the middle of the symbol.
+        let zone = align.anchor_size(anchor, size).expand(14.0);
+        let hits = dots.iter().any(|dot| zone.contains(*dot));
+        if !hits {
+            return (anchor, false);
+        }
+        if step == 4 || push.length_sq() < 1.0 {
+            return (anchor, true);
+        }
+        anchor += push;
+    }
+    (anchor, true)
+}
+
+#[cfg(test)]
+mod label_clear_tests {
+    use super::label_anchor_clear_of_dots;
+    use eframe::egui::{Align2, Pos2, Vec2, pos2, vec2};
+
+    #[test]
+    fn a_frame_label_walks_below_a_dot_then_fades() {
+        let anchor = pos2(100.0, 80.0);
+        let size = vec2(28.0, 14.0);
+        let (clear, faded) =
+            label_anchor_clear_of_dots(anchor, Align2::CENTER_TOP, size, &[], Vec2::new(0.0, 14.0));
+        assert_eq!(clear, anchor);
+        assert!(!faded);
+        let dot = Pos2::new(100.0, 90.0);
+        let (nudged, still) = label_anchor_clear_of_dots(
+            anchor,
+            Align2::CENTER_TOP,
+            size,
+            &[dot],
+            Vec2::new(0.0, 14.0),
+        );
+        assert!(nudged.y > anchor.y);
+        assert!(!still);
+        let mut packed = Vec::new();
+        let mut y = 70.0;
+        while y < 220.0 {
+            packed.push(Pos2::new(100.0, y));
+            y += 8.0;
+        }
+        let (_, faded) = label_anchor_clear_of_dots(
+            anchor,
+            Align2::CENTER_TOP,
+            size,
+            &packed,
+            Vec2::new(0.0, 14.0),
+        );
+        assert!(faded);
     }
 }
