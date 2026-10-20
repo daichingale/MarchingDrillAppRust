@@ -980,76 +980,69 @@ def add_overlay(scene, camera):
     if not scene.get("title_card", True):
         return
     font = ui_font()
-    # Text faces the lens: it sits on the camera's -Z and its front is +Z.
-    # Noto CJK ink is about 0.32 of TextCurve.size in this Blender, so the
-    # size is scaled up until the glyphs fill the lower-third bar.
+    # One text object, one font. It faces the lens: on the camera's -Z, front +Z.
+    # Noto CJK ink is about 0.32 of TextCurve.size. Extrude stays 0 so a glyph
+    # is not drawn twice.
     facing = (0.0, 0.0, 0.0)
     distance = 5.0
     glyph = 0.32
     half_w, half_h = frame_span(camera, distance)
     bar_w = half_w * 1.55
-    bar_h = half_h * 0.34
-    bar_y = -half_h + bar_h * 0.52
+    # About 12% of the frame height, with a margin under the bar.
+    bar_h = half_h * 0.24
+    margin = half_h * 0.05
+    bar_y = -half_h + margin + bar_h * 0.5
     plate = mesh_object("title-plate", box_mesh(bar_w, bar_h, 0.02), (0.0, 0.0, 0.0))
     stick_to_camera(plate, camera, (0.0, bar_y, -distance))
     paint(plate, shade((16, 20, 26), 0.75, "plate"))
     title = bpy.data.curves.new("title-card", "FONT")
     title.body = scene.get("title") or "Drill"
-    title.size = (bar_h * 0.72) / glyph
+    title.size = (bar_h * 0.55) / glyph
     title.align_x = "CENTER"
     title.align_y = "CENTER"
-    title.extrude = 0.004
-    title.resolution_u = 12
+    title.extrude = 0.0
+    title.resolution_u = 2
+    if hasattr(title, "overflow"):
+        title.overflow = "NONE"
+    if hasattr(title, "bevel_depth"):
+        title.bevel_depth = 0.0
     if font is not None:
         title.font = font
     card = bpy.data.objects.new("title-card", title)
     stick_to_camera(card, camera, (0.0, bar_y, -distance + 0.08), facing)
     link(card)
     paint(card, shade((248, 244, 230), 0.35, "card-ink"))
-    burn = bpy.data.curves.new("burn-in", "FONT")
-    burn.body = ""
-    burn.size = (bar_h * 0.46) / glyph
-    burn.align_x = "CENTER"
-    burn.align_y = "CENTER"
-    burn.extrude = 0.003
-    burn.resolution_u = 12
-    if font is not None:
-        burn.font = font
-    label = bpy.data.objects.new("burn-in", burn)
-    stick_to_camera(label, camera, (0.0, bar_y, -distance + 0.08), facing)
-    link(label)
-    paint(label, shade((248, 244, 230), 0.35, "burn-ink"))
     cues = sorted(scene.get("cues") or [], key=lambda item: int(item["frame"]))
-    show_name = scene.get("title") or ""
+    show_name = scene.get("title") or "Drill"
     fps = int(bpy.context.scene.render.fps or 24)
-    # Short intro, then the same bar carries the set and count.
+    # Short intro of the show name, then the same object carries set and count.
     intro = max(18, int(fps * 1.25))
     print(
-        f"overlay bar {bar_w:.2f}x{bar_h:.2f} title {title.size:.2f} burn {burn.size:.2f} intro {intro}",
+        f"overlay bar {bar_w:.2f}x{bar_h:.2f} frac {bar_h / (2.0 * half_h):.3f} "
+        f"margin {margin / (2.0 * half_h):.3f} size {title.size:.2f} intro {intro}",
         flush=True,
     )
 
-    def on_frame(blend, *_args):
-        show = int(blend.frame_current) <= intro
-        for name in ("title-card",):
-            obj = bpy.data.objects.get(name)
-            if obj is not None:
-                obj.hide_render = not show
-        plate_obj = bpy.data.objects.get("title-plate")
-        if plate_obj is not None:
-            plate_obj.hide_render = False
-        obj = bpy.data.objects.get("burn-in")
-        if obj is not None:
-            obj.hide_render = show or not cues
-        if obj is None or not cues or show:
-            return
+    def caption(blend):
+        if int(blend.frame_current) <= intro or not cues:
+            return show_name
         chosen = cues[0]
         for cue in cues:
             if int(cue["frame"]) <= blend.frame_current:
                 chosen = cue
             else:
                 break
-        obj.data.body = f"{show_name}    {chosen.get('set', 1)}    {chosen.get('count', 0)}"
+        return f"セット{chosen.get('set', 1)} ・ {chosen.get('count', 0)}カウント"
+
+    def on_frame(blend, *_args):
+        plate_obj = bpy.data.objects.get("title-plate")
+        if plate_obj is not None:
+            plate_obj.hide_render = False
+        obj = bpy.data.objects.get("title-card")
+        if obj is None:
+            return
+        obj.hide_render = False
+        obj.data.body = caption(blend)
 
     bpy.app.handlers.frame_change_pre.append(on_frame)
     on_frame(bpy.context.scene)
@@ -1078,9 +1071,11 @@ def render_once(animation, samples):
 
 
 def hide_title():
+    # The intro title and the set/count line are the same object. Stills past
+    # the intro already show the count, so the caption stays visible.
     card = bpy.data.objects.get("title-card")
     if card:
-        card.hide_render = True
+        card.hide_render = False
 
 
 def render_stills(cameras, directory, frame, samples):

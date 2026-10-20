@@ -24,8 +24,8 @@ SHIN = KNEE_Z - ANKLE_Z
 SHOULDER_Z = 1.42
 SHOULDER_X = 0.23
 HIP_X = 0.11
-UPPER = 0.34
-FORE = 0.33
+UPPER = 0.38
+FORE = 0.40
 HEAD_Z = 1.58
 
 JACKET = 0
@@ -517,11 +517,12 @@ def body_mesh(detailed):
     hat_seg = 16 if detailed else 8
 
     def build(bm):
-        # The hem flares over the hip joints. The bottom cap is deleted so the
-        # ring does not shelf between the legs. Trousers sit inside that flare.
+        # Short band jacket. The hem ends at the upper hip so the legs below
+        # it are about half the figure. The bottom cap is deleted so the ring
+        # does not shelf between the legs.
         before = set(bm.faces)
-        add_cyl(bm, 0.27, 0.90, (0.0, -0.01, 1.01), JACKET, hat_seg, radius_top=0.185)
-        hem_z = 0.56
+        add_cyl(bm, 0.188, 0.70, (0.0, -0.01, 1.11), JACKET, hat_seg, radius_top=0.176)
+        hem_z = 0.76
         caps = [
             face
             for face in bm.faces
@@ -529,14 +530,14 @@ def body_mesh(detailed):
         ]
         if caps:
             bmesh.ops.delete(bm, geom=caps, context="FACES")
-        # Pelvis stays above the hem, inside the jacket, so the open bottom
-        # shows cloth instead of the background and nothing hangs in the crotch.
-        add_cyl(bm, 0.155, 0.24, (0.0, -0.02, 0.94), TROUSER, hat_seg, radius_top=0.125)
-        add_sphere(bm, 0.09, (-0.10, -0.02, 0.86), TROUSER, seg, (1.0, 0.72, 0.8))
-        add_sphere(bm, 0.09, (0.10, -0.02, 0.86), TROUSER, seg, (1.0, 0.72, 0.8))
+        # Waistband stays above the hem, inside the jacket. The trouser cuffs
+        # cover the joint, so nothing hangs in the crotch and no gap opens.
+        add_cyl(bm, 0.118, 0.16, (0.0, -0.02, 0.90), TROUSER, hat_seg, radius_top=0.108)
+        add_sphere(bm, 0.062, (-0.09, -0.02, 0.90), TROUSER, seg, (1.0, 0.72, 0.85))
+        add_sphere(bm, 0.062, (0.09, -0.02, 0.90), TROUSER, seg, (1.0, 0.72, 0.85))
         add_sphere(bm, 0.096, (-0.26, -0.02, 1.40), JACKET, seg, (1.05, 0.82, 0.78))
         add_sphere(bm, 0.096, (0.26, -0.02, 1.40), JACKET, seg, (1.05, 0.82, 0.78))
-        add_cyl(bm, 0.232, 0.016, (0.0, -0.01, 1.02), GOLD, hat_seg)
+        add_cyl(bm, 0.198, 0.016, (0.0, -0.01, 0.775), GOLD, hat_seg)
         add_cyl(bm, 0.058, 0.10, (0.0, 0.0, 1.48), SKIN, 10)
         add_cyl(bm, 0.078, 0.045, (0.0, -0.02, 1.44), JACKET, 10, radius_top=0.058)
         add_cyl(bm, 0.070, 0.016, (0.0, -0.02, 1.458), GOLD, 10)
@@ -715,14 +716,14 @@ def cone_mesh(name, radius_base, radius_tip, depth, segments):
 
 
 def thigh_mesh(detailed):
-    """Thigh with a wide cuff that rises into the jacket and moves with the leg."""
+    """Trouser from the waist to the knee. A short cuff tucks under the jacket."""
     seg = 8 if detailed else 5
 
     def build(bm):
-        # Wide from above the joint through the knee so the legs meet
-        # under the hem. They taper only where the shin begins.
-        depth = THIGH + 0.14
-        add_cyl(bm, 0.116, depth, (0.0, 0.0, 0.07 - depth * 0.5), 0, seg, radius_top=0.124)
+        # Above the hip joint, inside the hem, so the stride does not open a gap.
+        add_cyl(bm, 0.074, 0.14, (0.0, 0.0, 0.01), 0, seg, radius_top=0.070)
+        # Hip to knee. The top overlaps the cuff; the bottom meets the shin.
+        add_cyl(bm, 0.056, THIGH, (0.0, 0.0, -THIGH * 0.5), 0, seg, radius_top=0.076)
 
     return new_mesh("thigh", build)
 
@@ -740,7 +741,7 @@ def shared_meshes(detailed):
     return {
         "body": body_mesh(detailed),
         "thigh": thigh_mesh(detailed),
-        "shin": cylinder_mesh("shin", 0.050, SHIN, limb_seg, "top", 0.082),
+        "shin": cylinder_mesh("shin", 0.044, SHIN, limb_seg, "top", 0.058),
         "shoe": shoe_mesh("shoe"),
         "arm": cylinder_mesh("arm", 0.046, UPPER, limb_seg, "top", 0.064),
         "fore": cylinder_mesh("fore", 0.038, FORE, limb_seg, "top", 0.050),
@@ -884,7 +885,9 @@ def arm_targets(prop, gait):
     # Horns: mouthpiece at the lips, bell hand further out, elbows wide.
     # Drums sit at the waist. The flag pole is vertical between both hands.
     table = {
-        "trumpet": {"R": (0.05, -0.20, 1.47), "L": (0.00, -0.24, 1.44)},
+        # Right hand on the valves, left hand supporting from below. The hands
+        # stay on their own side of the chest so the forearms cannot cross.
+        "trumpet": {"R": (0.08, -0.26, 1.50), "L": (-0.06, -0.22, 1.36)},
         "mellophone": {"R": (0.02, -0.16, 1.50), "L": (0.10, -0.30, 1.44)},
         "trombone": {"R": (0.02, -0.16, 1.50), "L": (-0.16, -0.34, 1.42)},
         "baritone": {"R": (0.06, -0.18, 1.28), "L": (-0.04, -0.20, 1.36)},
@@ -904,7 +907,8 @@ def arm_targets(prop, gait):
 
 # Elbow pole, in character space. X is mirrored per arm.
 POLES = {
-    "trumpet": (0.80, -0.35, 0.90),
+    # Low and wide, so the upper arms drop out and the forearms rise to the mouth.
+    "trumpet": (0.85, -0.45, 0.42),
     "mellophone": (0.32, -0.08, 1.38),
     "trombone": (0.38, -0.12, 1.30),
     "baritone": (0.30, -0.14, 1.22),
