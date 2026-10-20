@@ -2,10 +2,11 @@
 //!
 //! This surface is the flat field only: a plan view, playback, and a share link.
 
-use crate::touch::{FieldView, apply_two_finger, chrome_is_compact, hit_radius, pick_performer};
-use drill_core::{
-    Document, Edit, Locale, PerformerId, Point, RouteTable, Set, SetAnnotation, Symbol,
+use crate::touch::{
+    FieldView, PhoneMap, apply_two_finger, chrome_is_compact, fitted_view, hit_radius,
+    phone_dot_radius, pick_phone, yard_line_numbers,
 };
+use drill_core::{Document, Edit, PerformerId, Point, RouteTable, Set, SetAnnotation, Symbol};
 #[cfg(target_arch = "wasm32")]
 use drill_presence::PresenceMessage;
 use drill_presence::{Presence, UserId};
@@ -26,8 +27,9 @@ const _: () = assert!(HIT >= 44.0);
 const TOOL_H: f32 = 56.0;
 const CHIP_H: f32 = 40.0;
 const STRIP_H: f32 = 56.0;
-const FIELD_MARGIN: f32 = 26.0;
-const MORE_H: f32 = 156.0;
+const MORE_H: f32 = 188.0;
+/// Icons on the bar itself. Add, undo, redo, and share live under the menu.
+const PRIMARY_ICONS: usize = 6;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PhoneTool {
@@ -471,47 +473,37 @@ impl PhoneApp {
         let can_redo = self.history.can_redo();
         let mut action = None;
         ui.scope_builder(egui::UiBuilder::new().max_rect(top), |ui| {
-            egui::ScrollArea::horizontal()
-                .id_salt("phone-tools")
-                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 4.0;
-                        ui.add_space(4.0);
-                        if icon_button(ui, Icon::Prev, false, true).clicked() {
-                            action = Some(BarAction::Prev);
-                        }
-                        if icon_button(ui, Icon::Next, false, true).clicked() {
-                            action = Some(BarAction::Next);
-                        }
-                        if icon_button(ui, Icon::Add, false, can_edit).clicked() {
-                            action = Some(BarAction::Add);
-                        }
-                        let play_icon = if playing { Icon::Stop } else { Icon::Play };
-                        if icon_button(ui, play_icon, playing, true).clicked() {
-                            action = Some(BarAction::Play);
-                        }
-                        if icon_button(ui, Icon::Undo, false, can_edit && can_undo).clicked() {
-                            action = Some(BarAction::Undo);
-                        }
-                        if icon_button(ui, Icon::Redo, false, can_edit && can_redo).clicked() {
-                            action = Some(BarAction::Redo);
-                        }
-                        if icon_button(ui, Icon::Select, tool == PhoneTool::Select, true).clicked()
-                        {
-                            action = Some(BarAction::Select);
-                        }
-                        if icon_button(ui, Icon::Move, tool == PhoneTool::Move, true).clicked() {
-                            action = Some(BarAction::Move);
-                        }
-                        if icon_button(ui, Icon::Share, false, true).clicked() {
-                            action = Some(BarAction::Share);
-                        }
-                        if icon_button(ui, Icon::Menu, self.more, true).clicked() {
-                            action = Some(BarAction::Menu);
-                        }
-                    });
-                });
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                let gap = 4.0;
+                let count = (PRIMARY_ICONS + 1) as f32;
+                let size = ((rect.width() - 8.0 - gap * (count - 1.0)) / count).clamp(44.0, HIT);
+                ui.add_space(
+                    ((rect.width() - (size * count + gap * (count - 1.0))) * 0.5).max(0.0),
+                );
+                if icon_button(ui, Icon::Prev, false, true, size).clicked() {
+                    action = Some(BarAction::Prev);
+                }
+                if icon_button(ui, Icon::Next, false, true, size).clicked() {
+                    action = Some(BarAction::Next);
+                }
+                let play_icon = if playing { Icon::Stop } else { Icon::Play };
+                if icon_button(ui, play_icon, playing, true, size).clicked() {
+                    action = Some(BarAction::Play);
+                }
+                if icon_button(ui, Icon::Select, tool == PhoneTool::Select, true, size).clicked() {
+                    action = Some(BarAction::Select);
+                }
+                if icon_button(ui, Icon::Move, tool == PhoneTool::Move, true, size).clicked() {
+                    action = Some(BarAction::Move);
+                }
+                if icon_button(ui, Icon::Fit, false, true, size).clicked() {
+                    action = Some(BarAction::Fit);
+                }
+                if icon_button(ui, Icon::Menu, self.more, true, size).clicked() {
+                    action = Some(BarAction::Menu);
+                }
+            });
         });
         let ctx = ui.ctx().clone();
         match action {
@@ -526,6 +518,10 @@ impl PhoneApp {
             Some(BarAction::Redo) => self.redo_edit(),
             Some(BarAction::Select) => self.tool = PhoneTool::Select,
             Some(BarAction::Move) => self.tool = PhoneTool::Move,
+            Some(BarAction::Fit) => {
+                let (_, _, field, _) = phone_layout(ui.max_rect(), self.more);
+                self.fit_to(field);
+            }
             Some(BarAction::Share) => self.copy_link(&ctx),
             Some(BarAction::Menu) => self.more = !self.more,
             None => {}
@@ -541,10 +537,23 @@ impl PhoneApp {
         let mut sample = false;
         let mut toggle_lang = false;
         let mut join = false;
+        let mut extra = None;
         ui.scope_builder(egui::UiBuilder::new().max_rect(lower), |ui| {
             ui.spacing_mut().item_spacing.y = 6.0;
             ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
+                ui.spacing_mut().item_spacing.x = 4.0;
+                if icon_button(ui, Icon::Add, false, can_edit, HIT).clicked() {
+                    extra = Some(BarAction::Add);
+                }
+                if icon_button(ui, Icon::Undo, false, can_edit && can_undo, HIT).clicked() {
+                    extra = Some(BarAction::Undo);
+                }
+                if icon_button(ui, Icon::Redo, false, can_edit && can_redo, HIT).clicked() {
+                    extra = Some(BarAction::Redo);
+                }
+                if icon_button(ui, Icon::Share, false, true, HIT).clicked() {
+                    extra = Some(BarAction::Share);
+                }
                 if text_button(ui, word(ja, "見本", "Sample")).clicked() {
                     sample = true;
                 }
@@ -584,13 +593,25 @@ impl PhoneApp {
         if join {
             self.join_room();
         }
+        match extra {
+            Some(BarAction::Add) => self.add_set(),
+            Some(BarAction::Undo) => self.undo_edit(),
+            Some(BarAction::Redo) => self.redo_edit(),
+            Some(BarAction::Share) => self.copy_link(&ctx),
+            _ => {}
+        }
     }
 
     fn field_body(&mut self, ui: &mut egui::Ui, rect: Rect, compact: bool) {
         self.ensure_fit(rect);
         let response = ui.interact(rect, ui.id().with("phone-field"), Sense::click_and_drag());
+        if response.double_clicked() {
+            self.fit_to(rect);
+            self.drag_from = None;
+            self.suppress_drag = true;
+        }
         let positions = self.positions_now();
-        let mut map = field_map(&self.document, rect, self.view);
+        let mut map = phone_map(&self.document, rect, self.view);
         if let Some(touch) = ui.input(|input| input.multi_touch()) {
             self.view = apply_two_finger(
                 self.view,
@@ -598,18 +619,20 @@ impl PhoneApp {
                 touch.translation_delta.x,
                 touch.translation_delta.y,
                 map.scale,
+                map.orientation,
             );
             self.suppress_drag = true;
-            map = field_map(&self.document, rect, self.view);
+            map = phone_map(&self.document, rect, self.view);
         }
         let tapping = response.clicked() || response.drag_started();
-        if tapping && ui.input(|input| input.multi_touch()).is_none() {
+        if tapping && !response.double_clicked() && ui.input(|input| input.multi_touch()).is_none()
+        {
             self.suppress_drag = false;
             let local = response
                 .interact_pointer_pos()
                 .map(|pos| local_vec(rect, pos));
-            self.selected = local
-                .and_then(|point| pick_performer(&map, &positions, point, hit_radius(compact)));
+            self.selected =
+                local.and_then(|point| pick_phone(&map, &positions, point, hit_radius(compact)));
             self.press_origin = response.interact_pointer_pos();
             if response.drag_started() && self.tool == PhoneTool::Move {
                 self.drag_from = self
@@ -652,7 +675,6 @@ impl PhoneApp {
             BLUE,
             None,
             self.peer_marks(),
-            self.ja,
         );
         if self.view_only {
             let banner = Rect::from_min_size(rect.min, EVec2::new(rect.width(), 48.0));
@@ -700,7 +722,6 @@ impl PhoneApp {
                 Color32::from_rgb(242, 116, 116),
                 Some("A"),
                 &[],
-                self.ja,
             );
         }
         if let Some(positions) = right_positions {
@@ -714,23 +735,20 @@ impl PhoneApp {
                 Color32::from_rgb(104, 197, 232),
                 Some("B"),
                 &[],
-                self.ja,
             );
         }
     }
 }
 
-fn field_map(document: &Document, rect: Rect, view: FieldView) -> FieldMap {
-    FieldMap::with_view(
+fn phone_map(document: &Document, rect: Rect, view: FieldView) -> PhoneMap {
+    PhoneMap::from_view(
         document.grid.width,
         document.grid.height,
         Vec2 {
             x: rect.width(),
             y: rect.height(),
         },
-        FIELD_MARGIN,
-        Some(view.center),
-        view.zoom,
+        view,
     )
 }
 
@@ -741,7 +759,7 @@ fn local_vec(rect: Rect, pos: Pos2) -> Vec2 {
     }
 }
 
-fn screen_pos(rect: Rect, map: &FieldMap, point: Point) -> Pos2 {
+fn screen_pos(rect: Rect, map: &PhoneMap, point: Point) -> Pos2 {
     let mapped = map.map(point);
     Pos2::new(rect.min.x + mapped.x, rect.min.y + mapped.y)
 }
@@ -757,33 +775,35 @@ fn paint_field(
     ring: Color32,
     cursor: Option<&str>,
     peers: &[Presence],
-    ja: bool,
 ) {
     let painter = ui.painter().with_clip_rect(rect);
-    let map = field_map(document, rect, view);
-    let radius = (map.scale * 1.1).clamp(5.0, 11.0);
+    let map = phone_map(document, rect, view);
+    let radius = phone_dot_radius(map.scale);
+    let chart = Vec2 { x: 800.0, y: 800.0 };
+    let source = FieldMap::with_view(
+        document.grid.width,
+        document.grid.height,
+        chart,
+        0.0,
+        None,
+        1.0,
+    );
     let options = RenderOptions {
-        margin: FIELD_MARGIN,
+        margin: 0.0,
         show_step_grid: document.grid.show_step_grid,
         show_hashes: true,
-        show_labels: true,
-        dot_radius: radius,
-        label_size: 12.0,
-        field_center: Some(view.center),
-        field_zoom: view.zoom,
+        show_labels: false,
+        field_center: None,
+        field_zoom: 1.0,
         extend_grid: false,
         symbol_override: Some(Symbol::Circle),
-        label_inside: true,
         ..RenderOptions::default()
     };
     let scene = Scene {
         document,
         positions,
         viewport: Viewport {
-            size: Vec2 {
-                x: rect.width(),
-                y: rect.height(),
-            },
+            size: chart,
             ui_scale: 1.0,
         },
         options: &options,
@@ -791,24 +811,64 @@ fn paint_field(
     };
     let mut list = DisplayList::new();
     drill_render::build_field_2d(&scene, &mut BuildScratch, &mut list);
+    let place = |point: Vec2| {
+        let field = source.unmap(point);
+        screen_pos(rect, &map, field)
+    };
     for command in list.paint_order() {
-        paint_command(&painter, rect.min, &list, command);
+        match *command {
+            DrawCmd::FieldFill {
+                rect: fill,
+                fill: color,
+            } => {
+                let a = place(fill.min);
+                let b = place(fill.max);
+                painter.rect_filled(Rect::from_two_pos(a, b), 0.0, rgba(color));
+            }
+            DrawCmd::Line { a, b, width, color } => {
+                painter.line_segment([place(a), place(b)], Stroke::new(width, rgba(color)));
+            }
+            DrawCmd::Dot { .. } | DrawCmd::Text { .. } => {}
+        }
     }
-    paint_yard_numbers(&painter, rect, document, &map, ja);
+    paint_yard_numbers(&painter, rect, document, &map);
+    let (turf_min, turf_max) = map.turf();
     for (index, performer) in document.performers.iter().enumerate() {
         let Some(point) = positions.get(index).copied() else {
             continue;
         };
+        if !point_on_floor(point, document.grid.width, document.grid.height) {
+            continue;
+        }
         let pos = screen_pos(rect, &map, point);
+        if pos.x < rect.min.x + turf_min.x - radius
+            || pos.x > rect.min.x + turf_max.x + radius
+            || pos.y < rect.min.y + turf_min.y - radius
+            || pos.y > rect.min.y + turf_max.y + radius
+        {
+            continue;
+        }
+        let rgb = performer.resolved_color(&document.sections);
+        let fill = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+        painter.circle_filled(pos, radius, fill);
+        painter.circle_stroke(pos, radius, Stroke::new(1.5, Color32::from_rgb(20, 20, 20)));
         if selected == Some(index) {
             painter.circle_stroke(pos, radius + 4.0, Stroke::new(3.0, ring));
         }
+        painter.text(
+            pos,
+            Align2::CENTER_CENTER,
+            dot_number(&performer.label),
+            FontId::monospace((radius * 0.95).clamp(11.0, 16.0)),
+            ink_for(rgb),
+        );
         paint_peer_marks(&painter, pos, performer.id, peers, radius);
     }
     if let (Some(label), Some(index)) = (cursor, selected)
         && let Some(point) = positions.get(index).copied()
+        && point_on_floor(point, document.grid.width, document.grid.height)
     {
-        let pos = screen_pos(rect, &map, point) + EVec2::new(22.0, -18.0);
+        let pos = screen_pos(rect, &map, point) + EVec2::new(radius + 14.0, -radius - 6.0);
         painter.circle_filled(pos, 12.0, ring);
         painter.text(
             pos,
@@ -820,141 +880,61 @@ fn paint_field(
     }
 }
 
-fn paint_yard_numbers(
-    painter: &egui::Painter,
-    rect: Rect,
-    document: &Document,
-    map: &FieldMap,
-    ja: bool,
-) {
-    let locale = if ja { Locale::Ja } else { Locale::En };
-    let font = FontId::proportional(11.0);
+fn point_on_floor(point: Point, width: f32, height: f32) -> bool {
+    point.x >= -0.5 && point.y >= -0.5 && point.x <= width + 0.5 && point.y <= height + 0.5
+}
+
+fn paint_yard_numbers(painter: &egui::Painter, rect: Rect, document: &Document, map: &PhoneMap) {
+    let font = FontId::proportional(18.0);
     let color = Color32::from_rgb(36, 84, 158);
-    for mark in drill_core::coordinates::field_marks(&document.grid, locale) {
-        let mapped = map.map(mark.at);
-        let at = Pos2::new(rect.min.x + mapped.x, rect.min.y + mapped.y);
-        let (pos, align) = match mark.kind {
-            drill_core::coordinates::FieldMarkKind::Depth => {
-                (at + EVec2::new(-6.0, 0.0), Align2::RIGHT_CENTER)
-            }
-            _ => (at + EVec2::new(0.0, 6.0), Align2::CENTER_TOP),
-        };
-        painter.text(pos, align, mark.text, font.clone(), color);
-    }
-}
-
-fn paint_command(painter: &egui::Painter, origin: Pos2, list: &DisplayList, command: &DrawCmd) {
-    match *command {
-        DrawCmd::FieldFill { rect, fill } => {
-            painter.rect_filled(offset_rect(origin, rect), 0.0, rgba(fill));
-        }
-        DrawCmd::Line { a, b, width, color } => {
-            painter.line_segment(
-                [offset_pos(origin, a), offset_pos(origin, b)],
-                Stroke::new(width, rgba(color)),
-            );
-        }
-        DrawCmd::Dot {
-            center,
-            radius,
-            fill,
-            stroke,
-            symbol,
-        } => {
-            paint_symbol(
-                painter,
-                offset_pos(origin, center),
-                radius,
-                rgba(fill),
-                rgba(stroke),
-                symbol,
-            );
-        }
-        DrawCmd::Text {
-            at,
-            text,
-            size,
+    for (x, number) in yard_line_numbers(document.grid.width) {
+        let pos = screen_pos(
+            rect,
+            map,
+            Point {
+                x,
+                y: (document.grid.height * 0.12).clamp(3.0, 8.0),
+            },
+        );
+        painter.text(
+            pos,
+            Align2::CENTER_CENTER,
+            number.to_string(),
+            font.clone(),
             color,
-        } => {
-            painter.text(
-                offset_pos(origin, at),
-                Align2::CENTER_BOTTOM,
-                list.text(text),
-                FontId::monospace(size),
-                rgba(color),
-            );
-        }
+        );
     }
 }
 
-fn paint_symbol(
-    painter: &egui::Painter,
-    center: Pos2,
-    radius: f32,
-    fill: Color32,
-    stroke: Color32,
-    symbol: Symbol,
-) {
-    match symbol {
-        Symbol::Circle => {
-            painter.circle_filled(center, radius, fill);
-            painter.circle_stroke(center, radius, Stroke::new(1.0, stroke));
+fn dot_number(label: &str) -> String {
+    let label = label.trim();
+    let mut digits = String::new();
+    let mut started = false;
+    for ch in label.chars() {
+        if ch.is_ascii_digit() {
+            started = true;
+            digits.push(ch);
+            if digits.len() == 2 {
+                break;
+            }
+        } else if started {
+            break;
         }
-        Symbol::Square => {
-            let half = radius * 0.8;
-            let rect = Rect::from_center_size(center, EVec2::splat(half * 2.0));
-            painter.rect_filled(rect, 0.0, fill);
-            painter.rect_stroke(
-                rect,
-                0.0,
-                Stroke::new(1.0, stroke),
-                egui::StrokeKind::Inside,
-            );
-        }
-        Symbol::Cross => {
-            let width = (radius * 0.4).max(1.0);
-            painter.line_segment(
-                [
-                    Pos2::new(center.x - radius, center.y - radius),
-                    Pos2::new(center.x + radius, center.y + radius),
-                ],
-                Stroke::new(width, stroke),
-            );
-            painter.line_segment(
-                [
-                    Pos2::new(center.x - radius, center.y + radius),
-                    Pos2::new(center.x + radius, center.y - radius),
-                ],
-                Stroke::new(width, stroke),
-            );
-        }
-        Symbol::Triangle | Symbol::Diamond | Symbol::Star => {
-            let points = drill_render::symbol_points(
-                Vec2 {
-                    x: center.x,
-                    y: center.y,
-                },
-                radius,
-                symbol,
-            )
-            .into_iter()
-            .map(|point| Pos2::new(point.x, point.y))
-            .collect();
-            painter.add(egui::Shape::convex_polygon(
-                points,
-                fill,
-                Stroke::new(1.0, stroke),
-            ));
-        }
+    }
+    if digits.is_empty() {
+        label.chars().take(2).collect()
+    } else {
+        digits
     }
 }
 
-fn offset_pos(origin: Pos2, point: Vec2) -> Pos2 {
-    Pos2::new(origin.x + point.x, origin.y + point.y)
-}
-
-fn offset_rect(origin: Pos2, rect: drill_render::Rect) -> Rect {
-    Rect::from_min_max(offset_pos(origin, rect.min), offset_pos(origin, rect.max))
+fn ink_for(rgb: [u8; 3]) -> Color32 {
+    let luminance = u32::from(rgb[0]) * 3 + u32::from(rgb[1]) * 6 + u32::from(rgb[2]);
+    if luminance > 1400 {
+        Color32::from_rgb(20, 24, 28)
+    } else {
+        Color32::WHITE
+    }
 }
 
 fn rgba(color: Rgba) -> Color32 {
@@ -979,6 +959,7 @@ enum BarAction {
     Redo,
     Select,
     Move,
+    Fit,
     Share,
     Menu,
 }
@@ -993,17 +974,24 @@ enum Icon {
     Redo,
     Select,
     Move,
+    Fit,
     Share,
     Menu,
 }
 
-fn icon_button(ui: &mut egui::Ui, icon: Icon, selected: bool, enabled: bool) -> egui::Response {
+fn icon_button(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    selected: bool,
+    enabled: bool,
+    size: f32,
+) -> egui::Response {
     let sense = if enabled {
         Sense::click()
     } else {
         Sense::hover()
     };
-    let (rect, response) = ui.allocate_exact_size(EVec2::splat(HIT), sense);
+    let (rect, response) = ui.allocate_exact_size(EVec2::splat(size), sense);
     let fill = if selected {
         if matches!(icon, Icon::Stop) {
             Color32::from_rgb(176, 48, 48)
@@ -1072,6 +1060,12 @@ fn paint_icon(painter: &egui::Painter, center: Pos2, icon: Icon, ink: Color32) {
         Icon::Select => {
             let box_rect = Rect::from_center_size(center, EVec2::splat(16.0));
             painter.rect_stroke(box_rect, 2.0, stroke, egui::StrokeKind::Inside);
+        }
+        Icon::Fit => {
+            for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+                painter.line_segment([at(sx * 8.0, sy * 4.0), at(sx * 8.0, sy * 8.0)], stroke);
+                painter.line_segment([at(sx * 4.0, sy * 8.0), at(sx * 8.0, sy * 8.0)], stroke);
+            }
         }
         Icon::Move => {
             painter.line_segment([at(0.0, -9.0), at(0.0, 9.0)], stroke);
@@ -1226,8 +1220,21 @@ impl PhoneApp {
         if key.0 == 0 || key.1 == 0 || self.fitted == Some(key) {
             return;
         }
-        self.fitted = Some(key);
-        self.view = FieldView::fit(self.document.grid.width, self.document.grid.height);
+        self.fit_to(rect);
+    }
+
+    fn fit_to(&mut self, rect: Rect) {
+        let positions = self.positions_now();
+        self.view = fitted_view(
+            self.document.grid.width,
+            self.document.grid.height,
+            Vec2 {
+                x: rect.width(),
+                y: rect.height(),
+            },
+            &positions,
+        );
+        self.fitted = Some((rect.width().round() as u32, rect.height().round() as u32));
     }
 
     fn presence_row(&mut self, ui: &mut egui::Ui, rect: Rect) {
