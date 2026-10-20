@@ -3283,6 +3283,7 @@ impl DrillApp {
     pub(crate) fn show_timeline_playback_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             self.timeline_transport_controls(ui);
+            self.show_music_sync_controls(ui);
             self.timeline_tempo_controls(ui);
             self.timeline_option_controls(ui);
         });
@@ -3319,13 +3320,71 @@ impl DrillApp {
         self.show_playback_speed_presets(ui);
     }
 
-    fn timeline_tempo_controls(&mut self, ui: &mut egui::Ui) {
+    /// Live tempo, the song's suggested BPM, and the count click. These stay
+    /// on the timeline row itself so a closed playback section cannot hide them.
+    pub(crate) fn show_music_sync_controls(&mut self, ui: &mut egui::Ui) {
         let live_bpm = super::playhead_bpm(&self.document, self.current_set, self.count_position)
             .round() as i32;
         ui.label(
-            super::i18n::registered(self.locale, "full-mode.034")
-                .replace("{0}", &live_bpm.to_string()),
+            egui::RichText::new(
+                super::i18n::registered(self.locale, "full-mode.034")
+                    .replace("{0}", &live_bpm.to_string()),
+            )
+            .size(16.0)
+            .color(Color32::from_rgb(20, 24, 32)),
         );
+        let guessed = self.audio_state.bpm_guess();
+        let suggest = match guessed {
+            Some(bpm) => format!("♪ {}", bpm.round() as i32),
+            None => text(self.locale, Text::SuggestTempo).to_owned(),
+        };
+        if ui
+            .add_enabled(
+                guessed.is_some(),
+                egui::Button::new(
+                    egui::RichText::new(suggest)
+                        .size(16.0)
+                        .color(Color32::WHITE),
+                )
+                .fill(Color32::from_rgb(20, 96, 200)),
+            )
+            .on_hover_text(text(self.locale, Text::SuggestTempoHint))
+            .clicked()
+            && let Some(bpm) = guessed
+        {
+            self.apply_song_tempo(bpm);
+        }
+        let click_on = self.click_settings.enabled;
+        let click_ink = if click_on {
+            Color32::WHITE
+        } else {
+            Color32::from_rgb(20, 36, 84)
+        };
+        let click_fill = if click_on {
+            Color32::from_rgb(20, 96, 200)
+        } else {
+            Color32::from_rgb(255, 214, 102)
+        };
+        if ui
+            .add(
+                egui::Button::new(
+                    egui::RichText::new(text(self.locale, Text::Metronome))
+                        .size(16.0)
+                        .color(click_ink),
+                )
+                .fill(click_fill),
+            )
+            .on_hover_text(text(self.locale, Text::MetronomeHint))
+            .clicked()
+        {
+            self.click_settings.enabled = !self.click_settings.enabled;
+            if !self.click_settings.enabled && self.document.audio.is_none() {
+                self.audio_state.clear();
+            }
+        }
+    }
+
+    fn timeline_tempo_controls(&mut self, ui: &mut egui::Ui) {
         let scene_bpm = self.scene_opening_bpm();
         ui.label(
             super::i18n::registered(self.locale, "full-mode.075")
@@ -3345,31 +3404,6 @@ impl DrillApp {
             .clicked()
         {
             self.scene_tempo_faster();
-        }
-        let guessed = self.audio_state.bpm_guess();
-        if ui
-            .add_enabled(
-                guessed.is_some(),
-                egui::Button::new(text(self.locale, Text::SuggestTempo)),
-            )
-            .on_hover_text(text(self.locale, Text::SuggestTempoHint))
-            .clicked()
-            && let Some(bpm) = guessed
-        {
-            self.apply_song_tempo(bpm);
-        }
-        if ui
-            .selectable_label(
-                self.click_settings.enabled,
-                text(self.locale, Text::Metronome),
-            )
-            .on_hover_text(text(self.locale, Text::MetronomeHint))
-            .clicked()
-        {
-            self.click_settings.enabled = !self.click_settings.enabled;
-            if !self.click_settings.enabled && self.document.audio.is_none() {
-                self.audio_state.clear();
-            }
         }
         let current_walk = self.current_scene_walk();
         ui.menu_button(

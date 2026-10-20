@@ -105,6 +105,81 @@ pub fn suggest_bpm(asset: &AudioAsset) -> Option<BpmGuess> {
     (confidence >= MIN_CONFIDENCE).then_some(BpmGuess { bpm, confidence })
 }
 
+/// A click/drum track: a low decaying hit on every downbeat and a shorter
+/// tick on the other beats. Used to load a real WAV through the decoder.
+pub fn render_drum(
+    bpm: f32,
+    seconds: f32,
+    sample_rate: u32,
+) -> Result<AudioAsset, crate::AudioError> {
+    let bpm = if bpm.is_finite() {
+        bpm.clamp(40.0, 240.0)
+    } else {
+        120.0
+    };
+    let seconds = if seconds.is_finite() {
+        seconds.clamp(1.0, 60.0)
+    } else {
+        8.0
+    };
+    let rate = sample_rate.clamp(8_000, 48_000);
+    let frames = (seconds * rate as f32).round().max(1.0) as usize;
+    let period = ((rate as f32) * 60.0 / bpm).round().max(1.0) as usize;
+    let mut samples = vec![0i16; frames];
+    let mut beat = 0usize;
+    let mut frame = 0usize;
+    while frame < frames {
+        let downbeat = beat.is_multiple_of(4);
+        // Long enough that a timeline column reads as a bar, not a one-pixel spike.
+        let length = if downbeat {
+            period * 4 / 5
+        } else {
+            period * 3 / 5
+        };
+        let freq = if downbeat { 70.0 } else { 180.0 };
+        let decay = if downbeat { 6.0 } else { 9.0 };
+        let gain = if downbeat { 26_000.0 } else { 22_000.0 };
+        for step in 0..length {
+            let index = frame + step;
+            if index >= frames {
+                break;
+            }
+            let t = step as f32 / rate as f32;
+            let env = (-t * decay).exp();
+            let tone = (t * freq * std::f32::consts::TAU).sin();
+            let click = if step < 8 { 0.45 } else { 0.0 };
+            let value = ((tone * 0.85 + click) * env * gain) as i32;
+            let mixed = i32::from(samples[index]).saturating_add(value);
+            samples[index] = mixed.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16;
+        }
+        frame += period;
+        beat += 1;
+    }
+    AudioAsset::from_interleaved(samples, rate, 1, 1.0)
+}
+
+/// 16-bit mono PCM WAV for `samples` at `sample_rate`.
+pub fn pcm16_wav(sample_rate: u32, samples: &[i16]) -> Vec<u8> {
+    let data_bytes = samples.len() * 2;
+    let mut bytes = Vec::with_capacity(44 + data_bytes);
+    bytes.extend_from_slice(b"RIFF");
+    bytes.extend_from_slice(&(36 + data_bytes as u32).to_le_bytes());
+    bytes.extend_from_slice(b"WAVEfmt ");
+    bytes.extend_from_slice(&16u32.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&sample_rate.to_le_bytes());
+    bytes.extend_from_slice(&(sample_rate * 2).to_le_bytes());
+    bytes.extend_from_slice(&2u16.to_le_bytes());
+    bytes.extend_from_slice(&16u16.to_le_bytes());
+    bytes.extend_from_slice(b"data");
+    bytes.extend_from_slice(&(data_bytes as u32).to_le_bytes());
+    for sample in samples {
+        bytes.extend_from_slice(&sample.to_le_bytes());
+    }
+    bytes
+}
+
 fn refine_lag(scores: &[f64], lag: usize, lag_min: usize, lag_max: usize) -> f64 {
     if lag <= lag_min || lag >= lag_max {
         return lag as f64;
@@ -160,6 +235,22 @@ mod tests {
     fn stereo_pulses_use_the_same_tempo() {
         let guess = suggest_bpm(&pulses(120.0, 2)).expect("stereo guess");
         assert!((guess.bpm - 120.0).abs() < 1.5);
+    }
+
+    #[test]
+    fn a_132_drum_wav_decodes_back_to_about_132() {
+        use crate::{DecodeLimits, NullProgress, decode_bytes};
+        let asset = render_drum(132.0, 16.0, 22_050).unwrap();
+        let bytes = pcm16_wav(22_050, asset.samples());
+        let decoded = decode_bytes(bytes, Some("wav"), DecodeLimits::default(), &NullProgress)
+            .expect("wav decodes");
+        let guess = suggest_bpm(&decoded.asset).expect("drum has a tempo");
+        assert!(
+            (guess.bpm - 132.0).abs() < 1.5,
+            "expected 132, got {}",
+            guess.bpm
+        );
+        assert!((decoded.asset.duration_seconds() - 16.0).abs() < 0.05);
     }
 
     #[test]

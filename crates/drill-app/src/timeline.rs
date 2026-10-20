@@ -11,9 +11,11 @@ pub(crate) struct TimelineChange {
 
 /// Waveform columns for the visible count span, plus the bar size used to
 /// mark downbeats. Empty columns leave the track as a plain count lane.
+/// `tempo_changes` are later BPM anchors `(count, bpm)` drawn on the lane.
 pub(crate) struct TimelineWave {
     pub(crate) columns: Vec<(f32, f32)>,
     pub(crate) beats_per_measure: u16,
+    pub(crate) tempo_changes: Vec<(f32, f32)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -368,33 +370,44 @@ fn paint_track_chip(
     painter.galley(rect.min, galley, color);
 }
 
-/// Daylight labels stay dark enough to read on the white count track.
-/// Night mode keeps the brighter set so they still read on the dark lane.
-fn paint_waveform(painter: &egui::Painter, rect: Rect, columns: &[(f32, f32)], dark: bool) {
-    let band = Rect::from_min_max(
-        Pos2::new(rect.left(), rect.top() + 36.0),
-        Pos2::new(rect.right(), rect.bottom() - 4.0),
-    );
-    if band.height() < 8.0 || columns.is_empty() {
+/// Dark strip along the bottom of the count track. Set names stay above it.
+fn wave_lane(rect: Rect) -> Rect {
+    Rect::from_min_max(
+        Pos2::new(
+            rect.left() + 2.0,
+            (rect.bottom() - 64.0).max(rect.top() + 44.0),
+        ),
+        Pos2::new(rect.right() - 2.0, rect.bottom() - 2.0),
+    )
+}
+
+/// A filled mirrored waveform on a dark lane, so drum hits read across the
+/// whole count span instead of as hairline spikes on white paper.
+fn paint_waveform(painter: &egui::Painter, rect: Rect, columns: &[(f32, f32)]) {
+    if columns.is_empty() {
         return;
     }
-    let color = if dark {
-        Color32::from_rgb(120, 190, 255)
-    } else {
-        Color32::from_rgb(20, 96, 200)
-    };
+    let band = wave_lane(rect);
+    if band.height() < 12.0 || band.width() < 8.0 {
+        return;
+    }
+    painter.rect_filled(band, 4.0, Color32::from_rgb(12, 28, 48));
     let mid = band.center().y;
-    let half = band.height() * 0.48;
-    for (index, (min, max)) in columns.iter().enumerate() {
-        let x = band.left() + index as f32 / columns.len() as f32 * band.width();
-        let top = mid - max.clamp(-1.0, 1.0) * half;
-        let bottom = mid - min.clamp(-1.0, 1.0) * half;
-        painter.line_segment(
-            [
-                Pos2::new(x, top.min(bottom)),
-                Pos2::new(x, top.max(bottom).max(top + 1.0)),
-            ],
-            Stroke::new(1.5, color),
+    let half = band.height() * 0.46;
+    let slot = band.width() / columns.len() as f32;
+    let color = Color32::from_rgb(126, 210, 255);
+    for (index, (min_sample, max_sample)) in columns.iter().enumerate() {
+        let amp = min_sample.abs().max(max_sample.abs()).clamp(0.0, 1.0);
+        if amp < 0.012 {
+            continue;
+        }
+        let bar = (amp * half).max(2.5);
+        let x = band.left() + index as f32 * slot;
+        let right = (x + (slot * 0.94).max(1.0)).min(band.right());
+        painter.rect_filled(
+            Rect::from_min_max(Pos2::new(x, mid - bar), Pos2::new(right, mid + bar)),
+            0.0,
+            color,
         );
     }
 }
@@ -420,11 +433,20 @@ fn paint_beat_ticks(
         if x < rect.left() || x > rect.right() {
             continue;
         }
-        let top = if downbeat && over_wave {
-            rect.top() + 34.0
+        if over_wave && downbeat {
+            let lane = wave_lane(rect);
+            painter.line_segment(
+                [Pos2::new(x, lane.top() - 12.0), Pos2::new(x, lane.bottom())],
+                Stroke::new(3.0, Color32::from_rgb(255, 196, 48)),
+            );
+            continue;
+        }
+        let floor = if over_wave {
+            wave_lane(rect).top()
         } else {
-            rect.bottom() - if downbeat { 16.0 } else { 8.0 }
+            rect.bottom()
         };
+        let top = floor - if downbeat { 16.0 } else { 8.0 };
         let color = if downbeat {
             Color32::from_rgb(196, 132, 18)
         } else if dark {
@@ -433,8 +455,39 @@ fn paint_beat_ticks(
             Color32::from_black_alpha(70)
         };
         painter.line_segment(
-            [Pos2::new(x, top), Pos2::new(x, rect.bottom() - 1.0)],
+            [Pos2::new(x, top), Pos2::new(x, floor - 1.0)],
             Stroke::new(if downbeat { 2.0 } else { 1.0 }, color),
+        );
+    }
+}
+
+fn paint_tempo_changes(
+    painter: &egui::Painter,
+    rect: Rect,
+    viewport: TimelineViewport,
+    changes: &[(f32, f32)],
+    over_wave: bool,
+) {
+    for &(count, bpm) in changes {
+        let x = viewport.count_to_x(count, rect.left(), rect.width());
+        if x < rect.left() + 4.0 || x > rect.right() - 4.0 {
+            continue;
+        }
+        let bottom = if over_wave {
+            wave_lane(rect).bottom()
+        } else {
+            rect.bottom()
+        };
+        painter.line_segment(
+            [Pos2::new(x, rect.top() + 18.0), Pos2::new(x, bottom)],
+            Stroke::new(2.0, Color32::from_rgb(214, 40, 120)),
+        );
+        painter.text(
+            Pos2::new(x + 4.0, rect.top() + 42.0),
+            egui::Align2::LEFT_TOP,
+            format!("{:.0} BPM", bpm),
+            egui::FontId::proportional(13.0),
+            Color32::from_rgb(140, 16, 64),
         );
     }
 }
@@ -485,7 +538,7 @@ pub(crate) fn draw_count_track(
     let global = document
         .global_count(current_set, local_count)
         .clamp(0.0, total);
-    let track_height = if wave.columns.is_empty() { 84.0 } else { 128.0 };
+    let track_height = if wave.columns.is_empty() { 84.0 } else { 172.0 };
     let (response, painter) = ui.allocate_painter(
         Vec2::new(ui.available_width(), track_height),
         Sense::click_and_drag(),
@@ -681,8 +734,13 @@ pub(crate) fn draw_count_track(
         // when a peer is parked on a formation the local user is not viewing.
         // Drawn bottom-left of the segment, clear of the set title row.
         let mut pip = 0.0_f32;
+        let pip_y = if wave.columns.is_empty() {
+            rect.bottom() - 7.0
+        } else {
+            wave_lane(rect).top() - 8.0
+        };
         for (_, color) in peer_sets.iter().filter(|(set, _)| *set == index) {
-            let center = Pos2::new(left + 7.0 + pip, rect.bottom() - 7.0);
+            let center = Pos2::new(left + 7.0 + pip, pip_y);
             if center.x + 4.0 > right {
                 break; // The segment is too narrow at this zoom.
             }
@@ -696,18 +754,6 @@ pub(crate) fn draw_count_track(
         }
         start_count = end_count;
     }
-
-    if !wave.columns.is_empty() {
-        paint_waveform(&painter, rect, &wave.columns, dark);
-    }
-    paint_beat_ticks(
-        &painter,
-        rect,
-        *viewport,
-        wave.beats_per_measure,
-        dark,
-        !wave.columns.is_empty(),
-    );
 
     let range_left = viewport.count_to_x(playback_start as f32, rect.left(), rect.width());
     let range_right = viewport.count_to_x(playback_end as f32, rect.left(), rect.width());
@@ -736,7 +782,12 @@ pub(crate) fn draw_count_track(
             .filter(|key| viewport.visible_range().contains(&key.count))
         {
             let x = viewport.count_to_x(key.count, rect.left(), rect.width());
-            let center = Pos2::new(x, rect.bottom() - 27.0);
+            let marker_y = if wave.columns.is_empty() {
+                rect.bottom() - 27.0
+            } else {
+                wave_lane(rect).top() - 10.0
+            };
+            let center = Pos2::new(x, marker_y);
             painter.add(egui::Shape::convex_polygon(
                 vec![
                     center + Vec2::new(0.0, -5.0),
@@ -859,16 +910,35 @@ pub(crate) fn draw_count_track(
         change.range = Some((playback_start, end));
     }
 
+    let over_wave = !wave.columns.is_empty();
+    if over_wave {
+        paint_waveform(&painter, rect, &wave.columns);
+    }
+    paint_beat_ticks(
+        &painter,
+        rect,
+        *viewport,
+        wave.beats_per_measure,
+        dark,
+        over_wave,
+    );
+    paint_tempo_changes(&painter, rect, *viewport, &wave.tempo_changes, over_wave);
+
     let tick_stride = timeline_tick_stride(viewport.span.ceil() as u32, rect.width());
     let first_tick = (viewport.start.floor() as u32).div_ceil(tick_stride) * tick_stride;
     let last_tick = (viewport.start + viewport.span).ceil().min(total) as u32;
+    let tick_floor = if over_wave {
+        wave_lane(rect).top()
+    } else {
+        rect.bottom()
+    };
     for count in (first_tick..=last_tick).step_by(tick_stride as usize) {
         let x = viewport.count_to_x(count as f32, rect.left(), rect.width());
         let major = count % tick_stride.saturating_mul(4) == 0;
         painter.line_segment(
             [
-                Pos2::new(x, rect.bottom() - if major { 10.0 } else { 6.0 }),
-                Pos2::new(x, rect.bottom()),
+                Pos2::new(x, tick_floor - if major { 10.0 } else { 6.0 }),
+                Pos2::new(x, tick_floor),
             ],
             Stroke::new(
                 1.0,
@@ -881,7 +951,7 @@ pub(crate) fn draw_count_track(
         );
         if major {
             painter.text(
-                Pos2::new(x + 2.0, rect.bottom() - 1.0),
+                Pos2::new(x + 2.0, tick_floor - 1.0),
                 egui::Align2::LEFT_BOTTOM,
                 count.to_string(),
                 egui::FontId::monospace(12.0),
@@ -1395,6 +1465,7 @@ mod tests {
                     &TimelineWave {
                         columns: Vec::new(),
                         beats_per_measure: 4,
+                        tempo_changes: Vec::new(),
                     },
                 );
             });

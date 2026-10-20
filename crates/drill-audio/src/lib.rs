@@ -10,7 +10,7 @@ mod peaks;
 mod rate;
 
 pub use asset::{AudioAsset, DecodeLimits};
-pub use beats::{BpmGuess, suggest_bpm};
+pub use beats::{BpmGuess, pcm16_wav, render_drum, suggest_bpm};
 pub use click::{
     ClickEvent, ClickMixer, ClickMode, ClickSchedule, ClickSettings, ClickVoices, CountIn,
     DuckingMode, render_mix_with_clicks,

@@ -138,22 +138,6 @@ pub(crate) const COUNT_IN_BEATS: f32 = 4.0;
 ///
 /// The toolbar's base-tempo editor writes count 0. A later tempo-map change
 /// must not keep showing that opening number while the playhead is elsewhere.
-fn music_preview_asset() -> drill_audio::AudioAsset {
-    let rate = 8_000u32;
-    let frames = rate as usize * 8;
-    let period = (rate as f32 * 60.0 / 120.0) as usize;
-    let mut samples = vec![0i16; frames];
-    let mut frame = 0usize;
-    while frame < frames {
-        for step in 0..40.min(frames - frame) {
-            samples[frame + step] = (14_000.0 * (1.0 - step as f32 / 40.0)) as i16;
-        }
-        frame += period.max(1);
-    }
-    drill_audio::AudioAsset::from_interleaved(samples, rate, 1, 1.0)
-        .expect("preview pulses are a valid asset")
-}
-
 pub(crate) fn playhead_bpm(document: &Document, set_index: usize, local_count: f32) -> f32 {
     document
         .tempo
@@ -5026,19 +5010,61 @@ impl DrillApp {
         }
     }
 
-    /// Headless waveform for the timeline screenshot. Pulses sit on 120 BPM
-    /// so the beat ticks and the wave land on the same counts.
-    fn install_music_preview(&mut self) {
-        let asset = music_preview_asset();
-        let duration = asset.duration_seconds() as f32;
-        self.document.tempo = drill_core::tempo::TempoMap::constant(120.0);
+    /// Screenshot harness. Writes a 30s 132 BPM drum WAV, decodes it before
+    /// the first paint, and builds a six-set show. The opening stays at 120
+    /// until `apply_guess` writes the detected tempo at the playhead. A
+    /// second change at set 4 holds 100 BPM for the rest of the show.
+    fn install_music_show(&mut self, apply_guess: bool) {
+        let path = std::path::PathBuf::from("/tmp/drillforge-132.wav");
+        let Ok(rendered) = drill_audio::render_drum(132.0, 30.0, 22_050) else {
+            return;
+        };
+        let bytes = drill_audio::pcm16_wav(rendered.sample_rate(), rendered.samples());
+        if std::fs::write(&path, bytes).is_err() {
+            return;
+        }
+        let Ok(decoded) = drill_audio::decode_file(
+            &path,
+            drill_audio::DecodeLimits::default(),
+            &drill_audio::NullProgress,
+        ) else {
+            return;
+        };
+        while self.document.sets.len() < 6 {
+            let before = self.document.sets.len();
+            self.duplicate_current_set();
+            if self.document.sets.len() == before {
+                break;
+            }
+        }
+        let outgoing = self.document.sets.len().saturating_sub(1);
+        for set in self.document.sets.iter_mut().take(outgoing) {
+            set.counts = 8;
+            set.hold = 0;
+        }
+        self.navigate_to_set(0);
+        self.count_position = 0.0;
+        let mut tempo = drill_core::tempo::TempoMap::constant(120.0);
+        if self.document.sets.len() > 3 {
+            tempo.set(self.document.global_count(3, 0.0), 100.0);
+        }
+        self.document.tempo = tempo;
+        self.tempo_bpm = 120.0;
+        let duration = decoded.asset.duration_seconds() as f32;
         self.document.audio = Some(drill_core::audio::AudioTrack {
-            path: "preview.wav".into(),
+            path: path.display().to_string(),
             duration_seconds: duration,
             ..drill_core::audio::AudioTrack::default()
         });
-        self.audio_state.install_preview(asset);
+        self.audio_state.install_preview(decoded.asset);
+        self.playback_start = 0;
+        self.playback_end = self.document.timeline_counts();
         self.timeline_view = TimelineViewport::fit(self.document.timeline_counts());
+        self.full_timeline_expanded = true;
+        self.nav_glide.settle();
+        if apply_guess && let Some(bpm) = self.audio_state.bpm_guess() {
+            self.apply_song_tempo(bpm);
+        }
     }
 
     fn timeline_wave(&mut self, width: f32) -> TimelineWave {
@@ -5050,9 +5076,18 @@ impl DrillApp {
             self.timeline_view.visible_range(),
             width,
         );
+        let tempo_changes = self
+            .document
+            .tempo
+            .events()
+            .iter()
+            .filter(|event| event.count > 0.5)
+            .map(|event| (event.count, event.bpm))
+            .collect();
         TimelineWave {
             columns,
             beats_per_measure: self.beats_per_measure,
+            tempo_changes,
         }
     }
 
