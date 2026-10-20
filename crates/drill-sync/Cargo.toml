@@ -1,0 +1,18 @@
+[package]
+name = "drill-sync"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Last-writer-wins sync for DrillForge performer dots and set counts"
+
+[dependencies]
+drill-core = { path = "../drill-core", version = "0.1.0" }
+serde.workspace = true
+serde_json.workspace = true
+web-time = "1.1"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
+rustls-pemfile = "2"
+tungstenite = { version = "0.30.0", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
+webpki-roots = "0.26"

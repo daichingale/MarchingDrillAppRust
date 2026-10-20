@@ -3668,6 +3668,10 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "shortcuts.060") => "Song later",
         (Locale::Ja, "shortcuts.061") => "曲を外す",
         (Locale::En, "shortcuts.061") => "Remove song",
+        (Locale::Ja, "collab.001") => "この部屋の編集は{0}人までです。見学で参加しています。",
+        (Locale::En, "collab.001") => "This room already has {0} editors. You are watching.",
+        (Locale::Ja, "collab.002") => "編集できるようになりました。",
+        (Locale::En, "collab.002") => "You can edit now.",
         _ => "[missing message]",
     }
 }

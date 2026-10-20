@@ -24,6 +24,25 @@ impl eframe::App for DrillApp {
         self.update_state.poll();
         // Presence is view-only: this reads the document and selection to
         // publish "where I am", and drains peers to draw. It cannot edit.
+        // The join signal it records is consumed here, and the edit socket
+        // is a separate client on the same room.
+        if let Some(signal) = self.presence.take_session_signal() {
+            self.collab.on_signal(&signal, &self.document);
+        }
+        self.apply_remote_sync();
+        if let Some(editing) = self.collab.take_role_change() {
+            self.status = if editing {
+                self.editor_grant_status()
+            } else {
+                self.viewer_status()
+            };
+        }
+        if self.collab.is_live() {
+            self.view_mode = ViewMode::Field2D;
+            self.camera_program_preview = false;
+            self.print_state.video = false;
+            ui.ctx().request_repaint_after(Duration::from_millis(80));
+        }
         self.presence
             .poll(&self.document, self.current_set, &self.selected);
         if let Some(event) = self.underlay_state.poll(ui.ctx()) {
@@ -673,7 +692,9 @@ impl eframe::App for DrillApp {
                         ));
                         ui.separator();
                         ui.selectable_value(&mut self.view_mode, ViewMode::Field2D, "2D");
-                        ui.selectable_value(&mut self.view_mode, ViewMode::Stadium3D, "3D");
+                        if !self.collab.is_live() {
+                            ui.selectable_value(&mut self.view_mode, ViewMode::Stadium3D, "3D");
+                        }
                         if let Some(gpu) = &mut self.gpu {
                             let mut enabled = gpu.enabled();
                             if ui
@@ -3049,6 +3070,9 @@ impl DrillApp {
                 UiCommand::WorkspaceReview,
                 UiCommand::WorkspacePresent,
             ] {
+                if self.collab.is_live() && command.omitted_on_flat_field() {
+                    continue;
+                }
                 if ui.button(command.label(self.locale)).clicked() {
                     self.execute_command(command, ui.ctx());
                     ui.close();

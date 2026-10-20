@@ -8,6 +8,8 @@ mod app_ui;
 mod audio_state;
 #[path = "bootstrap.rs"]
 mod bootstrap;
+#[path = "collab_state.rs"]
+mod collab_state;
 #[path = "command_palette.rs"]
 mod command_palette;
 #[path = "commands.rs"]
@@ -694,12 +696,23 @@ mod workspace_preset_tests {
         app.apply_workspace_preset(WorkspacePreset::Present);
         assert_eq!(app.workspace_preset, WorkspacePreset::Present);
         assert_eq!(app.view_mode, ViewMode::Stadium3D);
+        assert!(app.camera_program_preview);
         assert!(!app.show_inspector);
         assert!(!app.heatmap_enabled);
         assert_eq!(app.workspace_focus, None);
         assert_eq!(app.document, document);
         assert_eq!(app.history.revision(), revision);
         assert!(!app.dirty);
+
+        app.collab.set_live_for_test(true);
+        assert!(app.command_context().flat_field);
+        app.apply_workspace_preset(WorkspacePreset::Present);
+        assert_eq!(app.view_mode, ViewMode::Field2D);
+        assert!(!app.camera_program_preview);
+        app.execute_command(UiCommand::View3d, &egui::Context::default());
+        assert_eq!(app.view_mode, ViewMode::Field2D);
+        app.execute_command(UiCommand::View2d, &egui::Context::default());
+        assert_eq!(app.view_mode, ViewMode::Field2D);
     }
 }
 
@@ -1170,6 +1183,7 @@ pub(crate) struct DrillApp {
     /// Live collaborator presence. View-only by construction: this can draw
     /// who is looking at what, and can never mutate the document.
     presence: presence_state::PresenceState,
+    collab: collab_state::CollabState,
     gpu: Option<gpu_bridge::Bridge>,
     /// Toggleable frame-pacing overlay. Session-only diagnostics: never part
     /// of the document, never touches undo history.
@@ -1397,6 +1411,7 @@ impl Default for DrillApp {
             update_state: update_state::UpdateState::default(),
             import_state: import_state::ImportState::default(),
             presence: presence_state::PresenceState::default(),
+            collab: collab_state::CollabState::default(),
             gpu: None,
             perf_hud: perf_hud::PerfHud::default(),
             plugin_state: plugin_state::PluginUiState::default(),
@@ -2174,6 +2189,7 @@ impl DrillApp {
             has_next_set: self.current_set.saturating_add(1) < self.document.sets.len(),
             has_multiple_sets: self.document.sets.len() > 1,
             can_exit_field_tool: self.field_tool != FieldTool::Select,
+            flat_field: self.collab.is_live(),
         }
     }
 
@@ -3261,7 +3277,11 @@ impl DrillApp {
                 self.workspace_focus = Some(WorkspaceFocus::ProductionSheet);
             }
             UiCommand::View2d => self.view_mode = ViewMode::Field2D,
-            UiCommand::View3d => self.view_mode = ViewMode::Stadium3D,
+            UiCommand::View3d => {
+                if !self.collab.is_live() {
+                    self.view_mode = ViewMode::Stadium3D;
+                }
+            }
             UiCommand::ToggleFocusField => {
                 self.focus_field = !self.focus_field;
                 self.status = i18n::registered(
@@ -3307,12 +3327,17 @@ impl DrillApp {
                 self.workspace_focus = Some(WorkspaceFocus::Clinic);
             }
             WorkspacePreset::Present => {
-                self.view_mode = ViewMode::Stadium3D;
+                let flat = self.collab.is_live();
+                self.view_mode = if flat {
+                    ViewMode::Field2D
+                } else {
+                    ViewMode::Stadium3D
+                };
                 self.show_inspector = false;
                 self.show_guidance = false;
                 self.set_simple_mode(false);
                 self.heatmap_enabled = false;
-                self.camera_program_preview = true;
+                self.camera_program_preview = !flat;
                 self.workspace_focus = None;
             }
         }
@@ -3812,12 +3837,14 @@ impl DrillApp {
                             }
                             ui.add_space(8.0);
                         }
-                        if print_output_card(
-                            ui,
-                            self.print_state.video,
-                            text(self.locale, Text::Video3d),
-                            simple_mode::PhoneIcon::Video,
-                        ) {
+                        if !self.collab.is_live()
+                            && print_output_card(
+                                ui,
+                                self.print_state.video,
+                                text(self.locale, Text::Video3d),
+                                simple_mode::PhoneIcon::Video,
+                            )
+                        {
                             self.print_state.video = true;
                         }
                     });
@@ -4215,13 +4242,54 @@ impl DrillApp {
         app.keybindings.load();
         app.apply_qa_simple_fixture();
         app.apply_qa_keys();
+        app.apply_qa_collab();
         app
     }
 
+    /// Screenshot harness. `DRILLFORGE_QA_COLLAB=wss://host:port|room` opens
+    /// the full field on the demo show and joins that room.
+    fn apply_qa_collab(&mut self) {
+        let Ok(raw) = std::env::var("DRILLFORGE_QA_COLLAB") else {
+            return;
+        };
+        let Some((host, room)) = raw.split_once('|') else {
+            return;
+        };
+        if host.is_empty() || room.is_empty() {
+            return;
+        }
+        self.onboarding.show_welcome = false;
+        self.onboarding.coach_dismissed = true;
+        self.onboarding.welcome_seen = true;
+        self.show_guidance = false;
+        self.set_simple_mode(false);
+        self.simple_mode.return_hint = false;
+        self.full_legacy_chrome = false;
+        self.full_inspector_collapsed = true;
+        self.full_timeline_expanded = false;
+        self.install_document(drill_core::Document::demo(2, 4));
+        self.presence.host_input = host.to_owned();
+        self.presence.room_input = room.to_owned();
+        self.presence.force_display_name("PC");
+        let _ = self.presence.connect();
+    }
+
     fn execute_edit(&mut self, edit: Edit, failure: &str) -> bool {
+        if self.collab.is_view_only() && !self.collab.is_applying() {
+            self.status = self.viewer_status();
+            return false;
+        }
+        let echo = if self.collab.is_applying() {
+            None
+        } else {
+            collab_state::echo_from(&self.document, &edit)
+        };
         match self.history.execute(&mut self.document, edit) {
             Ok(()) => {
                 self.dirty = true;
+                if let Some(echo) = echo {
+                    self.collab.publish_echo(echo);
+                }
                 true
             }
             Err(_) => {
@@ -4229,6 +4297,30 @@ impl DrillApp {
                 false
             }
         }
+    }
+
+    /// Applies edits that won the room's last-writer-wins merge.
+    ///
+    /// `set_applying` keeps `execute_edit` from publishing them back out.
+    fn apply_remote_sync(&mut self) {
+        let edits = self.collab.poll_edits(&self.document);
+        if edits.is_empty() {
+            return;
+        }
+        self.collab.set_applying(true);
+        for edit in edits {
+            let _ = self.execute_edit(edit, "");
+        }
+        self.collab.set_applying(false);
+    }
+
+    fn viewer_status(&self) -> String {
+        i18n::registered(self.locale, "collab.001")
+            .replace("{0}", &self.collab.editor_limit().to_string())
+    }
+
+    fn editor_grant_status(&self) -> String {
+        i18n::registered(self.locale, "collab.002").into()
     }
 
     fn show_subset_snapshot_workspace(&mut self, context: &egui::Context) {

@@ -12,10 +12,13 @@
 //! with non-blocking `try_recv` once per frame. The UI thread never blocks,
 //! never joins, and never panics on a network fault.
 
+#[cfg(not(target_arch = "wasm32"))]
 mod client;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod relay;
 mod room;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub use client::{ConnectionStatus, DEFAULT_PORT, HEARTBEAT, PresenceClient};
 pub use room::{Rooms, normalize_room_code, room_code_from_path, room_path};
 

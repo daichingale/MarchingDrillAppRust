@@ -1,0 +1,21 @@
+[package]
+name = "drill-relay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "WebSocket fanout for DrillForge presence and collaborative edits"
+
+[dependencies]
+drill-presence = { path = "../drill-presence", version = "0.1.0" }
+drill-sync = { path = "../drill-sync", version = "0.1.0" }
+rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
+rustls-pemfile = "2"
+tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
+
+[dev-dependencies]
+drill-core = { path = "../drill-core", version = "0.1.0" }
+rcgen = "0.13"
+
+[[bin]]
+name = "drill-relay"
+path = "src/bin/relay.rs"

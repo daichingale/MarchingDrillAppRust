@@ -100,6 +100,21 @@ struct Peer {
     last_seen: Instant,
 }
 
+/// Why the edit socket should follow the presence room.
+///
+/// Presence itself still cannot describe a document change. The parent
+/// reads this and opens the sync client beside the cursor client.
+pub(crate) enum SessionSignal {
+    Join {
+        host: String,
+        room: String,
+        replica: u64,
+        name: String,
+        color: [u8; 3],
+    },
+    Leave,
+}
+
 #[derive(Default)]
 pub(crate) struct PresenceState {
     identity: Option<Identity>,
@@ -117,6 +132,7 @@ pub(crate) struct PresenceState {
     local_cursor: Option<Point>,
     published: Option<Presence>,
     name_dirty: bool,
+    session_signal: Option<SessionSignal>,
 }
 
 impl PresenceState {
@@ -180,6 +196,16 @@ impl PresenceState {
         identity.persist();
     }
 
+    /// Sets the in-memory display name without writing the identity file.
+    pub(crate) fn force_display_name(&mut self, name: &str) {
+        let _ = self.identity();
+        if let Some(identity) = self.identity.as_mut() {
+            identity.display_name = name.to_owned();
+        }
+        self.name_input = name.to_owned();
+        self.name_dirty = false;
+    }
+
     /// Joins `room_input` on `host_input`. Returns the normalized room code on
     /// success, or `None` when the code was unusable.
     pub(crate) fn connect(&mut self) -> Option<String> {
@@ -197,9 +223,24 @@ impl PresenceState {
         self.client = Some(PresenceClient::connect(
             &host,
             &room,
-            Presence::new(identity.user_id, identity.display_name, identity.color),
+            Presence::new(
+                identity.user_id,
+                identity.display_name.clone(),
+                identity.color,
+            ),
         ));
+        self.session_signal = Some(SessionSignal::Join {
+            host,
+            room: room.clone(),
+            replica: identity.user_id.get(),
+            name: identity.display_name,
+            color: identity.color,
+        });
         Some(room)
+    }
+
+    pub(crate) fn take_session_signal(&mut self) -> Option<SessionSignal> {
+        self.session_signal.take()
     }
 
     /// Drops the connection and every peer overlay with it. Presence is
@@ -210,6 +251,7 @@ impl PresenceState {
         self.label_anchors.clear();
         self.set_marks.clear();
         self.published = None;
+        self.session_signal = Some(SessionSignal::Leave);
     }
 
     /// One frame of presence work: drain inbound, expire the silent, publish

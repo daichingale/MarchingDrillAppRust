@@ -35,7 +35,12 @@ fn native_options() -> eframe::NativeOptions {
             .with_inner_size(qa_inner_size()),
         // eframe's deterministic screenshot harness currently exists only in
         // the Glow integration. Production stays on wgpu.
-        renderer: if std::env::var_os("EFRAME_SCREENSHOT_TO").is_some() {
+        // Glow is the software path: eframe's screenshot harness, and the
+        // collab screenshot, which has to stay open long enough for a peer
+        // to arrive. Production stays on wgpu.
+        renderer: if std::env::var_os("EFRAME_SCREENSHOT_TO").is_some()
+            || std::env::var_os("DRILLFORGE_QA_COLLAB").is_some()
+        {
             eframe::Renderer::Glow
         } else {
             eframe::Renderer::Wgpu

@@ -1,0 +1,27 @@
+[package]
+name = "drill-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Touch-first DrillForge field for phones and the browser"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "drill-web"
+path = "src/main.rs"
+
+[dependencies]
+drill-core = { path = "../drill-core", version = "0.1.0" }
+drill-presence = { path = "../drill-presence", version = "0.1.0" }
+drill-render = { path = "../drill-render", version = "0.1.0" }
+drill-sync = { path = "../drill-sync", version = "0.1.0" }
+eframe = { version = "0.35.0", default-features = false, features = ["glow", "__screenshot", "wayland", "x11"] }
+serde_json.workspace = true
+web-time = "1.1"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2.108"
+wasm-bindgen-futures = "0.4.58"
+web-sys = { version = "0.3.77", features = ["HtmlCanvasElement", "WebSocket", "MessageEvent", "Event", "Location", "Window"] }

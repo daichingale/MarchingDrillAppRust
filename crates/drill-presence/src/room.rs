@@ -112,6 +112,17 @@ impl Rooms {
             .count()
     }
 
+    /// Delivers one frame to a single connection. Used for editor-seat notices.
+    pub fn send_to(&self, room: &str, conn: ConnId, payload: &str) -> bool {
+        let Some(peers) = self.rooms.get(room) else {
+            return false;
+        };
+        peers
+            .iter()
+            .find(|(id, _)| *id == conn)
+            .is_some_and(|(_, outbox)| outbox.try_send(payload.to_owned()).is_ok())
+    }
+
     #[must_use]
     pub fn occupancy(&self, room: &str) -> usize {
         self.rooms.get(room).map_or(0, Vec::len)
