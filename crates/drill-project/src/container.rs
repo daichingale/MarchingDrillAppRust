@@ -190,7 +190,8 @@ pub fn load(path: &Path) -> Result<LoadedProject, ProjectError> {
         return Err(ProjectError::LimitExceeded("entries"));
     }
     for index in 0..archive.len() {
-        let name = archive.by_index(index)?.name().to_owned();
+        let entry = archive.by_index(index)?;
+        let name = entry.name().map_err(ProjectError::from)?.into_owned();
         validate_entry_name(&name)?;
     }
     let mimetype = read_entry(&mut archive, "mimetype", 256)?;

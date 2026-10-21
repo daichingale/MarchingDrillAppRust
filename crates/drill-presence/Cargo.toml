@@ -17,7 +17,8 @@ serde_json.workspace = true
 # `Job<T>` concurrency model exactly. Wasm builds keep the presence JSON
 # types and skip the socket.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
+# Same rustls switch as drill-sync: do not pull webpki-roots 0.26.
+tungstenite = { version = "0.30.0", default-features = false, features = ["handshake", "__rustls-tls"] }
 
 [[bin]]
 name = "drill-presence-relay"

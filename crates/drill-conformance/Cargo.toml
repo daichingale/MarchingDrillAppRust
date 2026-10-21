@@ -14,7 +14,7 @@ drill-export = { path = "../drill-export", version = "0.1.0" }
 drill-plugin = { path = "../drill-plugin", version = "0.1.0" }
 serde_json.workspace = true
 image = { version = "0.25.10", default-features = false, features = ["png"] }
-zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+zip = { version = "9.0.0", default-features = false, features = ["deflate"] }
 
 [[test]]
 name = "complexity_dos"
