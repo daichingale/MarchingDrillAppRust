@@ -13,6 +13,8 @@ web-time = "1.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
-rustls-pemfile = "2"
-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
-webpki-roots = "0.26"
+# `__rustls-tls` turns rustls on without tungstenite's webpki-roots 0.26
+# feature. That 0.26 crate is the vulnerable root bundle. The socket builder
+# installs webpki-roots 1.0 itself.
+tungstenite = { version = "0.30.0", default-features = false, features = ["handshake", "__rustls-tls"] }
+webpki-roots = "1.0.10"

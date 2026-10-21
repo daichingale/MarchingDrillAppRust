@@ -86,16 +86,21 @@ fn serve_tls_with_limit(listener: &TcpListener, config: Arc<rustls::ServerConfig
 }
 
 fn tls_server_config(cert_pem: &[u8], key_pem: &[u8]) -> Result<Arc<rustls::ServerConfig>, String> {
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let certs = rustls_pemfile::certs(&mut std::io::Cursor::new(cert_pem))
+    let certs = CertificateDer::pem_slice_iter(cert_pem)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| format!("certificate: {error}"))?;
     if certs.is_empty() {
         return Err("certificate PEM contained no certificate".into());
     }
-    let key = rustls_pemfile::private_key(&mut std::io::Cursor::new(key_pem))
-        .map_err(|error| format!("private key: {error}"))?
-        .ok_or_else(|| "private key PEM contained no key".to_owned())?;
+    let key = PrivateKeyDer::from_pem_slice(key_pem).map_err(|error| {
+        if matches!(error, rustls::pki_types::pem::Error::NoItemsFound) {
+            "private key PEM contained no key".to_owned()
+        } else {
+            format!("private key: {error}")
+        }
+    })?;
     let config = rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs, key)

@@ -489,7 +489,10 @@ fn extract_mxl(bytes: &[u8], opts: &MusicalImportOptions) -> Result<Vec<u8>, Mus
         if file.encrypted() {
             return Err(MusicalError::Invalid("encrypted MXL is unsupported"));
         }
-        let name = file.name().to_owned();
+        let name = file
+            .name()
+            .map_err(|_| MusicalError::Invalid("MXL entry name"))?
+            .into_owned();
         validate_mxl_path(&name)?;
         if !names.insert(name.clone()) {
             return Err(MusicalError::Invalid("duplicate MXL entry"));

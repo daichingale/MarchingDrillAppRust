@@ -59,8 +59,8 @@ $app = [IO.File]::ReadAllText((Join-Path $sourceRoot 'app_state.rs'))
 $plugin = [IO.File]::ReadAllText((Join-Path $sourceRoot 'plugin_state.rs'))
 $workspace = [IO.File]::ReadAllText((Join-Path $sourceRoot 'workspace_inspector.rs'))
 $reviewed = @(
-    @($app, 'NearestLine=>i18n::registered(self.locale, "app-state.026")'),
-    @($app, 'NearestHash=>i18n::registered(self.locale, "app-state.025")'),
+    @($app, 'NearestLine=>{i18n::registered(self.locale, "app-state.026")'),
+    @($app, 'NearestHash=>{i18n::registered(self.locale, "app-state.025")'),
     @($app, 'i18n::registered(self.locale, "app-state.082"),'),
     @($app, 'i18n::registered(self.locale, "app-state.083"),'),
     @($app, 'i18n::registered(self.locale, "app-state.084"),'),
@@ -74,7 +74,11 @@ $reviewed = @(
     @($workspace, '.on_hover_text(super::i18n::registered(self.locale, "workspace-inspector.047"))')
 )
 foreach ($entry in $reviewed) {
-    if (-not $entry[0].Contains($entry[1])) { throw "Reviewed multi-pair mapping changed: $($entry[1])" }
+    # rustfmt may wrap a reviewed pair. The mapping is the tokens in order,
+    # not the line break between them.
+    $haystack = $entry[0] -replace '\s', ''
+    $needle = $entry[1] -replace '\s', ''
+    if (-not $haystack.Contains($needle)) { throw "Reviewed multi-pair mapping changed: $($entry[1])" }
 }
 
 # Locale-neutral raw UI tokens are deliberately tiny and reviewed: arrows and

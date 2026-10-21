@@ -332,7 +332,8 @@ fn client_config() -> Result<Arc<rustls::ClientConfig>, String> {
 }
 
 fn parse_certs(pem: &[u8]) -> Result<Vec<rustls::pki_types::CertificateDer<'static>>, String> {
-    let certs = rustls_pemfile::certs(&mut std::io::Cursor::new(pem))
+    use rustls::pki_types::{CertificateDer, pem::PemObject};
+    let certs = CertificateDer::pem_slice_iter(pem)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| format!("certificate: {error}"))?;
     if certs.is_empty() {

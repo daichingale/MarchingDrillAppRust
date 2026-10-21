@@ -9,6 +9,14 @@ The bundled `assets/NotoSansJP.ttf` font is distributed under the SIL Open
 Font License 1.1. The complete license text is provided in
 `assets/OFL-NotoSansJP.txt`.
 
+## Mozilla CA certificates
+
+`webpki-roots` embeds the Mozilla CA certificate list so rustls can verify
+public `wss://` relays. That list is data, not program code, and Mozilla
+distributes it under the Community Data License Agreement Permissive 2.0
+(SPDX `CDLA-Permissive-2.0`). DrillForge does not modify the list. The
+license text travels with the `webpki-roots` crate.
+
 ## Symphonia
 
 The `symphonia` audio decoding crates are used under the Mozilla Public
