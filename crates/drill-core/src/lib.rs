@@ -24,6 +24,7 @@ pub mod shapes;
 pub mod show_heatmap;
 pub mod snapshot;
 pub mod stadium;
+pub mod stamps;
 pub mod svg;
 pub mod symmetry;
 pub mod tempo;
