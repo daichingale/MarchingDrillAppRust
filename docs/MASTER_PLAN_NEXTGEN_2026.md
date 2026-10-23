@@ -1,5 +1,5 @@
 # DrillForge Next-Generation Master Plan v2.0
-**策定日:** 2026-10-23 / **状態:** 提案・レビュー用 / **対象:** デスクトップ・モバイル・共同編集・オフライン制作
+**策定日:** 2026-10-23 / **更新日:** 2026-10-24 / **状態:** 提案・レビュー用 / **対象:** デスクトップ・モバイル・共同編集・オフライン制作
 
 > **目的:** Pyware 3D の複製ではなく、マーチングの構想→ドリル設計→動作検証→演出→現場練習→改訂→配布を、正確・高速・安全につなぐ独立したオープンソース製品を作る。
 >
@@ -281,7 +281,7 @@ EditIntent {
 6. R6: 同期する前後の操作が atomic か、LWWだけで取りこぼすケースをテストに追加。
 7. R5: AI非接続でも使える隊形候補比較（移動距離/最大歩幅/交差/固定点）をまず型付きモデルで作る。
 
-機能別タスクは [FEATURE_BACKLOG_NEXTGEN_2026](product/FEATURE_BACKLOG_NEXTGEN_2026.md)、画面/操作は [INTERACTION_SPEC_NEXTGEN_2026](product/INTERACTION_SPEC_NEXTGEN_2026.md)、設計判断は [ADR-0003](adr/0003-nextgen-editing-and-time-model.md) を参照。
+機能別タスクは [FEATURE_BACKLOG_NEXTGEN_2026](product/FEATURE_BACKLOG_NEXTGEN_2026.md)、画面/操作は [INTERACTION_SPEC_NEXTGEN_2026](product/INTERACTION_SPEC_NEXTGEN_2026.md)、物理距離・運動・安全チェックの契約は [GEOMETRY_MOTION_SPEC_NEXTGEN_2026](product/GEOMETRY_MOTION_SPEC_NEXTGEN_2026.md)、受入テストとリリース判定は [QUALITY_MATRIX_NEXTGEN_2026](product/QUALITY_MATRIX_NEXTGEN_2026.md)、編集の安全性と共同作業の設計判断は [ADR-0003](adr/0003-nextgen-editing-and-time-model.md) を参照。
 
 ## 13. 未決事項（実証方法を添えて保留）
 
@@ -296,4 +296,5 @@ EditIntent {
 | 公開サーバの費用と管理 | 自己ホスト可能、配布なしで基本編集 | 維持費・認可・バックアップ・運用責任の確認 |
 
 ## 更新履歴
+- **v2.1 / 2026-10-24:** 動作・実距離とカウント間衝突の詳細契約、QA・配布ゲートと実機証拠台帳、既存CI/PR/Issueリンクを別紙として明確化。
 - **v2.0 / 2026-10-23:** 既存実装と古い設計文書の差を整理し、6ピラー、atomic editing、時刻/演技トラック、学校向けプライバシー、受入テスト、リスク駆動ロードマップを追加。
