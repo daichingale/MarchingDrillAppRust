@@ -9,11 +9,11 @@ Rust製・オープンソースのマーチングドリル制作環境。**ド�
 
 Rust の対応ツールチェーンと、各OSで必要な描画/音声ライブラリが利用できる環境で実行してください。
 
-\`\`\`powershell
+```powershell
 cargo run --release -p drill-app
-\`\`\`
+```
 
-**主な操作:** 演者をクリック・範囲選択し、ドラッグ、回転、反転、拡大縮小、整列、等間隔分配で隊形を編集できます。\`Ctrl/Cmd+Z\`でUndo、\`Ctrl/Cmd+Shift+Z\`でRedo、再生でセット間の移動と曲線経路を確認します。実際のキーバインドはアプリ内のショートカット表示に従ってください。
+**主な操作:** 演者をクリック・範囲選択し、ドラッグ、回転、反転、拡大縮小、整列、等間隔分配で隊形を編集できます。`Ctrl/Cmd+Z`でUndo、`Ctrl/Cmd+Shift+Z`でRedo、再生でセット間の移動と曲線経路を確認します。実際のキーバインドはアプリ内のショートカット表示に従ってください。
 
 ## 現行コードが備える主な機能
 
@@ -22,21 +22,21 @@ cargo run --release -p drill-app
 - **音楽とタイムライン:** 可変BPM、音源デコード/再生、波形、クリック、範囲ループ、MIDI/MusicXMLの時間情報インポート。
 - **フィールドと3D:** 屋内日本30mフロア、メートル/ヤード系、2D/3Dスタジアム、複数カメラ、物理的な視認性解析と描画のフォールバック。
 - **出力:** CSV/TSV・SVG・PDF・ドリルブック/Production Sheet、2D/3D動画およびBlender用の場面書き出し機能（形式・外部実行環境には条件あり）。
-- **作品の保存:** バージョン付きJSONと、参照アセットを含められる \`.drillproj\`、原子的保存、バックアップ、復旧経路。
+- **作品の保存:** バージョン付きJSONと、参照アセットを含められる `.drillproj`、原子的保存、バックアップ、復旧経路。
 - **相互運用と拡張:** CSV/TSV/TXT/XLSXなどの一般形式、隔離プラグインの基盤、Web/スマホ練習ビューとルームでの限定的な共同編集。
 
 **「コード上の機能がある」ことと「正式な一般配布品質が証明された」ことは違います。** Windows/macOSの署名、実端末のDPI/音声/GPU、大人数でのデザイナー受入れテスト、依存関係の最新監査は別途必要です。
 
 ## アーキテクチャ
 
-- \`drill-core\`: 安定した演者ID/セットID、幾何、カウント、編集コマンドと履歴。
-- \`drill-app\`: egui UI とアプリの操作、2D/3D表示の接続。
-- \`drill-render\`, \`drill-gpu\`, \`drill-export\`: 同じ作品データに基づく描画、PDF/SVG/動画。
-- \`drill-audio\`: 音源・タイムライン・クリック・再生。
-- \`drill-project\`, \`drill-jobs\`: 保存・検証・非同期ジョブ/キャンセル。
-- \`drill-interop\`: 許可された一般的な公開フォーマットの入力と検証。
-- \`drill-mobile-viewer\`, \`drill-web\`, \`drill-sync\`, \`drill-relay\`, \`drill-presence\`: 練習用モバイル/共同編集。
-- \`drill-plugin\`, \`drill-updater\`: 隔離拡張・更新の基盤。
+- `drill-core`: 安定した演者ID/セットID、幾何、カウント、編集コマンドと履歴。
+- `drill-app`: egui UI とアプリの操作、2D/3D表示の接続。
+- `drill-render`, `drill-gpu`, `drill-export`: 同じ作品データに基づく描画、PDF/SVG/動画。
+- `drill-audio`: 音源・タイムライン・クリック・再生。
+- `drill-project`, `drill-jobs`: 保存・検証・非同期ジョブ/キャンセル。
+- `drill-interop`: 許可された一般的な公開フォーマットの入力と検証。
+- `drill-mobile-viewer`, `drill-web`, `drill-sync`, `drill-relay`, `drill-presence`: 練習用モバイル/共同編集。
+- `drill-plugin`, `drill-updater`: 隔離拡張・更新の基盤。
 
 内部のデータ/時刻/セキュリティルールは [docs/design/](docs/design/)、製品の出荷条件は [PRODUCT_QUALITY.md](PRODUCT_QUALITY.md) を参照。
 
