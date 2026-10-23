@@ -3513,6 +3513,38 @@ impl DrillApp {
             ui.ctx().copy_text(csv);
             self.status = super::i18n::registered(self.locale, "full-mode.030").into();
         }
+        // Export the selected performers' exact per-count route samples.
+        // Unlike ordinary dot CSV, this includes intermediate curved/gated
+        // positions and arrival/hold counts for coaching and interop checks.
+        if ui
+            .add_enabled(
+                !self.selected.is_empty() && self.current_set + 1 < self.document.sets.len(),
+                egui::Button::new(super::i18n::registered(self.locale, "trajectory-export.001")),
+            )
+            .on_hover_text(super::i18n::registered(self.locale, "trajectory-export.002"))
+            .clicked()
+        {
+            let indices: Vec<usize> = self.selected.iter().copied().collect();
+            match drill_core::trajectory_export::transition_trajectory_csv(
+                &self.document,
+                self.current_set,
+                &indices,
+            ) {
+                Ok(csv) => self.export_text("transition-trajectory.csv", "CSV", "csv", csv),
+                Err(drill_core::trajectory_export::TrajectoryCsvError::NoTransition) => {
+                    self.status = super::i18n::registered(self.locale, "trajectory-export.003").into();
+                }
+                Err(drill_core::trajectory_export::TrajectoryCsvError::NoSelection) => {
+                    self.status = super::i18n::registered(self.locale, "trajectory-export.004").into();
+                }
+                Err(drill_core::trajectory_export::TrajectoryCsvError::InvalidSelection) => {
+                    self.status = super::i18n::registered(self.locale, "trajectory-export.005").into();
+                }
+                Err(drill_core::trajectory_export::TrajectoryCsvError::TooManyRows) => {
+                    self.status = super::i18n::registered(self.locale, "trajectory-export.006").into();
+                }
+            }
+        }
         let scene_start = self.document.global_count(self.current_set, 0.0) as u32;
         let scene_end = (scene_start + u32::from(self.document.sets[self.current_set].counts))
             .min(self.document.timeline_counts());
