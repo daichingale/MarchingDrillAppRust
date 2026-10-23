@@ -2,8 +2,18 @@
 //! Suitable for rehearsal diagnostics and comparison with other drill editors.
 //! Uses the same route evaluator as live playback (including gates and holds).
 
-use crate::{Document, Unit, coordinates::csv_escape, transition};
+use crate::{Document, Unit, transition};
 use std::{collections::BTreeSet, fmt::Write as _};
+
+// CSV escaping is deliberately local: it is an export-only detail and does
+// not need to expose the coordinates module's private implementation.
+fn csv_escape(value: &str) -> String {
+    if value.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_owned()
+    }
+}
 
 /// Bound synchronous clipboard exports to avoid allocating huge strings on the UI thread.
 pub const MAX_TRAJECTORY_CSV_ROWS: usize = 50_000;
