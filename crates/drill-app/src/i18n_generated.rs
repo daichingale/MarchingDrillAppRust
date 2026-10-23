@@ -3672,6 +3672,18 @@ pub(crate) fn registered(locale: Locale, id: &str) -> &'static str {
         (Locale::En, "collab.001") => "This room already has {0} editors. You are watching.",
         (Locale::Ja, "collab.002") => "編集できるようになりました。",
         (Locale::En, "collab.002") => "You can edit now.",
+        (Locale::Ja, "trajectory-export.001") => "軌跡CSVを書き出す",
+        (Locale::En, "trajectory-export.001") => "Export trajectory CSV",
+        (Locale::Ja, "trajectory-export.002") => "選択中の演者について、現在のセットから次のセットまで1カウントごとの移動経路を書き出します",
+        (Locale::En, "trajectory-export.002") => "Export the selected performers' exact positions at every count up to the next set",
+        (Locale::Ja, "trajectory-export.003") => "次のセットがありません",
+        (Locale::En, "trajectory-export.003") => "No next set to export",
+        (Locale::Ja, "trajectory-export.004") => "演者を選択してください",
+        (Locale::En, "trajectory-export.004") => "Select one or more performers",
+        (Locale::Ja, "trajectory-export.005") => "選択に無効な演者が含まれています",
+        (Locale::En, "trajectory-export.005") => "The selection includes an invalid performer",
+        (Locale::Ja, "trajectory-export.006") => "データが多すぎます。演者を減らして再実行してください",
+        (Locale::En, "trajectory-export.006") => "Too many data rows. Select fewer performers and try again",
         _ => "[missing message]",
     }
 }
