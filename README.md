@@ -1,5 +1,8 @@
 # DrillForge
 
+> **次世代の製品設計:** [統合マスタープラン 2026 v2.1](docs/MASTER_PLAN_NEXTGEN_2026.md) · [画面/操作設計](docs/product/INTERACTION_SPEC_NEXTGEN_2026.md) · [機能バックログ90件](docs/product/FEATURE_BACKLOG_NEXTGEN_2026.md) · [動作・安全性設計](docs/product/GEOMETRY_MOTION_SPEC_NEXTGEN_2026.md) · [検証マトリクス](docs/product/QUALITY_MATRIX_NEXTGEN_2026.md) · [設計判断案](docs/adr/0003-nextgen-editing-and-time-model.md)  
+> これらは**今後の設計案**であり、すべてが実装済みではありません。最新の実装根拠とリリース条件は [IMPLEMENTATION_EVIDENCE](docs/IMPLEMENTATION_EVIDENCE.md) を参照してください。
+
 Pyware 3D級のマーチングドリル制作環境を目指す、Rust製デスクトップアプリです。現在は高速な2D編集・セット間アニメーション・安定したドキュメントモデルを備えたMVPです。
 
 ## 起動
