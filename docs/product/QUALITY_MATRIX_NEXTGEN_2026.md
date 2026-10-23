@@ -12,7 +12,7 @@
 
 ## 1. 開発の品質ループ
 
-\`\`\`text
+```text
 ユーザーシナリオ
   ↓
 構造化した要件（機能ID・保存/Undo/共有への影響）
@@ -30,7 +30,7 @@ UIのJA/EN・DPI・キーボードとアクセシビリティ確認
 指導者が1曲で使う→事故/手戻り/操作時間を観測
   ↓
 ADR・設計表・実装証拠台帳・Issueの状態を更新
-\`\`\`
+```
 
 ## 2. 必須の受入テスト組
 
@@ -82,11 +82,11 @@ ADR・設計表・実装証拠台帳・Issueの状態を更新
 ## 4. CI と実機のゲートを分ける
 
 ### Gate A: PRをマージする条件
-- Linux/Windows/macOSで \`cargo fmt --all -- --check\`。
-- \`cargo clippy --workspace --all-targets --locked -- -D warnings\`。
-- \`cargo test --workspace --locked\` と既存golden/release checks、依存/ライセンス監査成功。
+- Linux/Windows/macOSで `cargo fmt --all -- --check`。
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`。
+- `cargo test --workspace --locked` と既存golden/release checks、依存/ライセンス監査成功。
 - Rustの危険なunsafe/全量clone/同期I/Oの追加がある場合はコスト・設計根拠。
-- UI文字追加時は登録済みJA/EN catalog。過去 \`MESSAGE_CATALOG.md\` の監査内容は再生成しない。
+- UI文字追加時は登録済みJA/EN catalog。過去 `MESSAGE_CATALOG.md` の監査内容は再生成しない。
 - バグ修正時は最小の再現テスト。新機能は使用法と保存/Undo/失敗例を含む。
 
 ### Gate B: ベータ配布の条件
@@ -119,7 +119,7 @@ Gate Cを達成していない場合は**マスタープランが完成してい
 
 ## 6. 証拠台帳フォーマット
 
-\`\`\`text
+```text
 Evidence ID:
 Feature/Issue/PR:
 Git commit / branch:
@@ -133,13 +133,13 @@ Artifact links / screenshots / logs:
 Classification: code-proved | CI-verified | hardware-verified | field-accepted
 Reviewer / date:
 Remaining limitations:
-\`\`\`
+```
 
-**管理ルール:** 自動テストが実行できなければ \`not run\`、機材がなければ \`not verified\` と書く。参考値と本番計測値を混ぜない。
+**管理ルール:** 自動テストが実行できなければ `not run`、機材がなければ `not verified` と書く。参考値と本番計測値を混ぜない。
 
 ## 7. 直近の決定事項と改善ループ
 
 - PR #62のカウント別軌跡CSVは**まだ main 未マージ**。出力単位、文字化け、後半hold、出力サイズ、画面のメニュー動線を最初の新規受入対象にする。
-- Issue #63の取り下げ依存は**出荷阻害のS0**。\`cargo-deny\`のポリシーを無条件に弱めて通さない。
+- Issue #63の取り下げ依存は**出荷阻害のS0**。`cargo-deny`のポリシーを無条件に弱めて通さない。
 - 経路/単位/フロアの合意が取れない機能は「未確定」として隔離。無理に作って仕様が増殖しないようにする。
 - 月に1回、教員・ドリルデザイナーの指摘を「再現可能なテスト + UI修正 + 設計更新」に反映する（作業ループとしての提案。自動実行を設定したという意味ではない）。
