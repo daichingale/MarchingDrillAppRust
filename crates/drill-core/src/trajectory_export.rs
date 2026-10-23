@@ -128,7 +128,10 @@ pub fn transition_trajectory_csv(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Point, transition::{ChordPoint, Easing, Gate, Route, RouteShape}};
+    use crate::{
+        Point,
+        transition::{ChordPoint, Easing, Gate, Route, RouteShape},
+    };
 
     #[test]
     fn start_arrival_and_hold_are_included_once() {
@@ -140,7 +143,11 @@ mod tests {
         let before = document.clone();
 
         let csv = transition_trajectory_csv(&document, 0, &[0]).unwrap();
-        let rows: Vec<Vec<&str>> = csv.lines().skip(1).map(|row| row.split(',').collect()).collect();
+        let rows: Vec<Vec<&str>> = csv
+            .lines()
+            .skip(1)
+            .map(|row| row.split(',').collect())
+            .collect();
         assert_eq!(rows.len(), 7);
         assert_eq!(rows[0][2], "0");
         assert_eq!(rows[0][4], "move");
@@ -164,9 +171,15 @@ mod tests {
             document.performers[1].id,
             Route {
                 shape: RouteShape::Curve {
-                    control: ChordPoint { along: 0.5, lateral: 0.3 },
+                    control: ChordPoint {
+                        along: 0.5,
+                        lateral: 0.3,
+                    },
                 },
-                gate: Gate { depart: 1.0, arrive: Some(3.0) },
+                gate: Gate {
+                    depart: 1.0,
+                    arrive: Some(3.0),
+                },
                 easing: Easing::Smooth,
             },
         );
@@ -180,8 +193,14 @@ mod tests {
             let values: Vec<&str> = row.split(',').collect();
             let csv_x = values[7].parse::<f32>().unwrap();
             let csv_y = values[8].parse::<f32>().unwrap();
-            assert!((csv_x - evaluated[1].x).abs() < 0.00002, "x at count {count}");
-            assert!((csv_y - evaluated[1].y).abs() < 0.00002, "y at count {count}");
+            assert!(
+                (csv_x - evaluated[1].x).abs() < 0.00002,
+                "x at count {count}"
+            );
+            assert!(
+                (csv_y - evaluated[1].y).abs() < 0.00002,
+                "y at count {count}"
+            );
         }
     }
 
@@ -202,10 +221,22 @@ mod tests {
     #[test]
     fn rejects_invalid_or_unbounded_exports() {
         let document = Document::demo(1, 1);
-        assert_eq!(transition_trajectory_csv(&document, 1, &[0]), Err(TrajectoryCsvError::NoTransition));
-        assert_eq!(transition_trajectory_csv(&document, 0, &[]), Err(TrajectoryCsvError::NoSelection));
-        assert_eq!(transition_trajectory_csv(&document, 0, &[99]), Err(TrajectoryCsvError::InvalidSelection));
-        assert_eq!(transition_trajectory_csv(&document, 0, &[0, 0]), Err(TrajectoryCsvError::InvalidSelection));
+        assert_eq!(
+            transition_trajectory_csv(&document, 1, &[0]),
+            Err(TrajectoryCsvError::NoTransition)
+        );
+        assert_eq!(
+            transition_trajectory_csv(&document, 0, &[]),
+            Err(TrajectoryCsvError::NoSelection)
+        );
+        assert_eq!(
+            transition_trajectory_csv(&document, 0, &[99]),
+            Err(TrajectoryCsvError::InvalidSelection)
+        );
+        assert_eq!(
+            transition_trajectory_csv(&document, 0, &[0, 0]),
+            Err(TrajectoryCsvError::InvalidSelection)
+        );
 
         let mut large = Document::demo(1, 20);
         large.sets[0].counts = 4_096;
