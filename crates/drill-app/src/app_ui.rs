@@ -3519,9 +3519,15 @@ impl DrillApp {
         if ui
             .add_enabled(
                 !self.selected.is_empty() && self.current_set + 1 < self.document.sets.len(),
-                egui::Button::new(super::i18n::registered(self.locale, "trajectory-export.001")),
+                egui::Button::new(super::i18n::registered(
+                    self.locale,
+                    "trajectory-export.001",
+                )),
             )
-            .on_hover_text(super::i18n::registered(self.locale, "trajectory-export.002"))
+            .on_hover_text(super::i18n::registered(
+                self.locale,
+                "trajectory-export.002",
+            ))
             .clicked()
         {
             let indices: Vec<usize> = self.selected.iter().copied().collect();
@@ -3532,16 +3538,20 @@ impl DrillApp {
             ) {
                 Ok(csv) => self.export_text("transition-trajectory.csv", "CSV", "csv", csv),
                 Err(drill_core::trajectory_export::TrajectoryCsvError::NoTransition) => {
-                    self.status = super::i18n::registered(self.locale, "trajectory-export.003").into();
+                    self.status =
+                        super::i18n::registered(self.locale, "trajectory-export.003").into();
                 }
                 Err(drill_core::trajectory_export::TrajectoryCsvError::NoSelection) => {
-                    self.status = super::i18n::registered(self.locale, "trajectory-export.004").into();
+                    self.status =
+                        super::i18n::registered(self.locale, "trajectory-export.004").into();
                 }
                 Err(drill_core::trajectory_export::TrajectoryCsvError::InvalidSelection) => {
-                    self.status = super::i18n::registered(self.locale, "trajectory-export.005").into();
+                    self.status =
+                        super::i18n::registered(self.locale, "trajectory-export.005").into();
                 }
                 Err(drill_core::trajectory_export::TrajectoryCsvError::TooManyRows) => {
-                    self.status = super::i18n::registered(self.locale, "trajectory-export.006").into();
+                    self.status =
+                        super::i18n::registered(self.locale, "trajectory-export.006").into();
                 }
             }
         }
