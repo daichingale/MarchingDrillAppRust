@@ -27,6 +27,7 @@ pub mod stadium;
 pub mod svg;
 pub mod symmetry;
 pub mod tempo;
+pub mod trajectory_export;
 pub mod transition;
 pub mod underlay;
 pub mod video;
