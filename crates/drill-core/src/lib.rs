@@ -28,6 +28,7 @@ pub mod svg;
 pub mod symmetry;
 pub mod tempo;
 pub mod transition;
+pub mod trajectory_export;
 pub mod underlay;
 pub mod video;
 pub mod visibility;
