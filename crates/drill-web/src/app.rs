@@ -14,6 +14,8 @@ use drill_sync::{DotId, ReplicaId, RoomEvent, ShowState};
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, Vec2 as EVec2};
 use web_time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+mod stamp_ui;
+
 const INK: Color32 = Color32::from_rgb(32, 36, 44);
 const BLUE: Color32 = Color32::from_rgb(20, 96, 200);
 const GRASS: Color32 = Color32::from_rgb(16, 84, 46);
@@ -57,6 +59,7 @@ pub struct PhoneApp {
     relay: Option<drill_sync::SyncClient>,
     #[cfg(target_arch = "wasm32")]
     relay: Option<crate::socket::BrowserClient>,
+    stamp_session: Option<stamp_ui::StampSession>,
 }
 
 impl Default for PhoneApp {
@@ -78,6 +81,7 @@ impl PhoneApp {
                 app.more = true;
                 app.selected = Some(0);
             }
+            Some("stamp") => app.install_stamp_preview(),
             _ => {}
         }
         app
@@ -120,6 +124,7 @@ impl PhoneApp {
             #[cfg(target_arch = "wasm32")]
             last_presence: None,
             relay: None,
+            stamp_session: None,
         }
     }
 
@@ -156,6 +161,7 @@ impl PhoneApp {
         self.playing = false;
         self.selected = None;
         self.split = None;
+        self.stamp_session = None;
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.relay = None;
@@ -397,8 +403,14 @@ impl PhoneApp {
         }
         let next = self.current_set as isize + delta;
         if (0..len as isize).contains(&next) {
+            if self.stamp_open() {
+                self.publish_stamp();
+            }
             self.current_set = next as usize;
             self.local_count = 0.0;
+            if self.stamp_open() {
+                self.rebind_stamp();
+            }
         }
     }
 }
@@ -419,9 +431,17 @@ impl eframe::App for PhoneApp {
         let full = ui.max_rect();
         let compact = chrome_is_compact(full.width());
         let bar_h = if self.more { 132.0 } else { 64.0 };
+        let strip_h = self.stamp_strip_height(compact);
         let bar = Rect::from_min_size(full.min, EVec2::new(full.width(), bar_h));
-        let field = Rect::from_min_max(Pos2::new(full.min.x, bar.max.y), full.max);
+        let field = Rect::from_min_max(
+            Pos2::new(full.min.x, bar.max.y),
+            Pos2::new(full.max.x, (full.max.y - strip_h).max(bar.max.y)),
+        );
         self.toolbar(ui, bar, compact);
+        if strip_h > 0.0 {
+            let strip = Rect::from_min_max(Pos2::new(full.min.x, field.max.y), full.max);
+            self.stamp_strip(ui, strip, compact);
+        }
         if self.split.is_some() {
             self.split_body(ui, field);
         } else {
@@ -440,12 +460,20 @@ impl PhoneApp {
         );
         let ja = self.ja;
         let playing = self.playing;
-        let set_name = self
-            .document
-            .sets
-            .get(self.current_set)
-            .map(|set| set.name.clone())
-            .unwrap_or_default();
+        let set_count = self.document.sets.len().max(1);
+        let set_label = format!("{}/{}", self.current_set + 1, set_count);
+        let set_name = if compact {
+            set_label
+        } else {
+            let name = self
+                .document
+                .sets
+                .get(self.current_set)
+                .map(|set| set.name.clone())
+                .unwrap_or_default();
+            format!("{name}  {set_label}")
+        };
+        let stamp_on = self.stamp_open();
         let top = Rect::from_min_size(
             rect.min + EVec2::new(8.0, 8.0),
             EVec2::new((rect.width() - 16.0).max(1.0), 48.0),
@@ -472,6 +500,9 @@ impl PhoneApp {
                 }
                 if ink_button(ui, "▶").clicked() {
                     self.step_set(1);
+                }
+                if stamp_ui::mode_button(ui, stamp_on).clicked() {
+                    self.toggle_stamp();
                 }
                 ui.label(egui::RichText::new(set_name).size(16.0).color(INK));
                 if compact {
@@ -548,44 +579,60 @@ impl PhoneApp {
             self.suppress_drag = true;
             map = field_map(&self.document, rect, self.view);
         }
-        let tapping = response.clicked() || response.drag_started();
-        if tapping && ui.input(|input| input.multi_touch()).is_none() {
-            self.suppress_drag = false;
-            let local = response
-                .interact_pointer_pos()
-                .map(|pos| local_vec(rect, pos));
-            self.selected = local
-                .and_then(|point| pick_performer(&map, &positions, point, hit_radius(compact)));
-            self.press_origin = response.interact_pointer_pos();
-        }
-        if response.dragged()
-            && !self.suppress_drag
-            && !self.playing
-            && let (Some(index), Some(origin), Some(pos)) = (
-                self.selected,
-                self.press_origin,
-                response.interact_pointer_pos(),
-            )
-            && origin.distance(pos) > 6.0
-        {
-            let point = map.unmap(local_vec(rect, pos));
-            self.place_selected(index, point);
+        let stamp_mode = self.stamp_open();
+        if stamp_mode && !self.suppress_drag && ui.input(|input| input.multi_touch()).is_none() {
+            self.stamp_pointer(&response, rect, &map, compact);
+        } else if !stamp_mode {
+            let tapping = response.clicked() || response.drag_started();
+            if tapping && ui.input(|input| input.multi_touch()).is_none() {
+                self.suppress_drag = false;
+                let local = response
+                    .interact_pointer_pos()
+                    .map(|pos| local_vec(rect, pos));
+                self.selected = local
+                    .and_then(|point| pick_performer(&map, &positions, point, hit_radius(compact)));
+                self.press_origin = response.interact_pointer_pos();
+            }
+            if response.dragged()
+                && !self.suppress_drag
+                && !self.playing
+                && let (Some(index), Some(origin), Some(pos)) = (
+                    self.selected,
+                    self.press_origin,
+                    response.interact_pointer_pos(),
+                )
+                && origin.distance(pos) > 6.0
+            {
+                let point = map.unmap(local_vec(rect, pos));
+                self.place_selected(index, point);
+            }
         }
         if response.drag_stopped() {
             self.suppress_drag = false;
         }
         let positions = self.positions_now();
+        let alone = self.selected.into_iter().collect::<Vec<_>>();
+        let selected: &[usize] = if let Some(session) = &self.stamp_session {
+            if session.selected.len() > 12 {
+                &[]
+            } else {
+                &session.selected
+            }
+        } else {
+            &alone
+        };
         paint_field(
             ui,
             rect,
             &self.document,
             &positions,
             self.view,
-            self.selected,
+            selected,
             BLUE,
             None,
             self.peer_marks(),
         );
+        self.paint_stamp(ui, rect, &map);
         if self.view_only {
             let banner = Rect::from_min_size(rect.min, EVec2::new(rect.width(), 48.0));
             ui.painter()
@@ -628,7 +675,7 @@ impl PhoneApp {
                 &left_doc,
                 &positions,
                 self.view,
-                Some(0),
+                &[0],
                 Color32::from_rgb(242, 116, 116),
                 Some("A"),
                 &[],
@@ -641,7 +688,7 @@ impl PhoneApp {
                 &right_doc,
                 &positions,
                 self.view,
-                Some(1),
+                &[1],
                 Color32::from_rgb(104, 197, 232),
                 Some("B"),
                 &[],
@@ -683,7 +730,7 @@ fn paint_field(
     document: &Document,
     positions: &[Point],
     view: FieldView,
-    selected: Option<usize>,
+    selected: &[usize],
     ring: Color32,
     cursor: Option<&str>,
     peers: &[Presence],
@@ -715,7 +762,8 @@ fn paint_field(
         );
         y += grid.major_line_interval.max(5.0);
     }
-    let radius = dot_radius(rect.width() < 520.0);
+    let radius = drawn_radius(rect.width() < 520.0, &map, positions);
+    let show_labels = radius >= 8.5;
     for (index, performer) in document.performers.iter().enumerate() {
         let Some(point) = positions.get(index).copied() else {
             continue;
@@ -726,20 +774,22 @@ fn paint_field(
             .0
             .map(|rgb| Color32::from_rgb(rgb[0], rgb[1], rgb[2]))
             .unwrap_or(GOLD);
-        if selected == Some(index) {
+        if selected.contains(&index) {
             painter.circle_stroke(pos, radius + 6.0, Stroke::new(3.0, ring));
         }
         painter.circle_filled(pos, radius, color);
-        painter.text(
-            pos,
-            Align2::CENTER_CENTER,
-            &performer.label,
-            FontId::proportional(10.0),
-            Color32::from_rgb(20, 24, 28),
-        );
+        if show_labels {
+            painter.text(
+                pos,
+                Align2::CENTER_CENTER,
+                &performer.label,
+                FontId::proportional(10.0),
+                Color32::from_rgb(20, 24, 28),
+            );
+        }
         paint_peer_marks(&painter, pos, performer.id, peers);
     }
-    if let (Some(label), Some(index)) = (cursor, selected)
+    if let (Some(label), Some(&index)) = (cursor, selected.first())
         && let Some(point) = positions.get(index).copied()
     {
         let pos = screen_pos(rect, &map, point) + EVec2::new(22.0, -18.0);
@@ -752,6 +802,36 @@ fn paint_field(
             Color32::WHITE,
         );
     }
+}
+
+fn drawn_radius(compact: bool, map: &FieldMap, positions: &[Point]) -> f32 {
+    let cap = dot_radius(compact);
+    if positions.len() < 2 {
+        return cap;
+    }
+    let mut nearest = Vec::with_capacity(positions.len());
+    for (index, point) in positions.iter().enumerate() {
+        let screen = map.map(*point);
+        let mut best = f32::MAX;
+        for (other_index, other) in positions.iter().enumerate() {
+            if index == other_index {
+                continue;
+            }
+            let there = map.map(*other);
+            let dx = screen.x - there.x;
+            let dy = screen.y - there.y;
+            best = best.min((dx * dx + dy * dy).sqrt());
+        }
+        if best.is_finite() {
+            nearest.push(best);
+        }
+    }
+    if nearest.is_empty() {
+        return cap;
+    }
+    nearest.sort_by(f32::total_cmp);
+    let mid = nearest[nearest.len() / 2];
+    (mid * 0.34).clamp(4.5, cap)
 }
 
 fn ink_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
@@ -1047,6 +1127,7 @@ mod tests {
             .collect::<String>();
         let sources = [
             include_str!("app.rs"),
+            include_str!("app/stamp_ui.rs"),
             include_str!("lib.rs"),
             include_str!("touch.rs"),
             include_str!("main.rs"),
