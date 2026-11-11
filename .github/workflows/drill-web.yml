@@ -1,0 +1,45 @@
+name: Browser editor
+
+on:
+  pull_request:
+    paths:
+      - 'crates/**'
+      - 'assets/**'
+      - 'Cargo.*'
+      - 'scripts/package-drill-web.mjs'
+      - '.github/workflows/drill-web.yml'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build browser editor
+        shell: bash
+        run: |
+          cargo build --locked --release --target wasm32-unknown-unknown -p drill-web --lib
+          bindgen_version=$(awk '/^name = "wasm-bindgen"$/{getline; gsub(/"/, "", $3); print $3; exit}' Cargo.lock)
+          cargo install --locked wasm-bindgen-cli --version "=${bindgen_version}"
+          wasm-bindgen --target web --out-dir target/drill-web-site/pkg target/wasm32-unknown-unknown/release/drill_web.wasm
+          node --check crates/drill-web/web/editor.mjs
+          node --check crates/drill-web/web/offline.js
+          node scripts/package-drill-web.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: drill-web-site
+          path: target/drill-web-site
+          if-no-files-found: error
