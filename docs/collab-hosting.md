@@ -168,3 +168,46 @@ to be on the same network. This is the path with no certificate and no bill.
 The practical pair is **Fly.io for the relay and GitHub Pages for the
 page**: about **$2.19 per month**, one public `wss://` name, and the
 phones never need the rehearsal Wi-Fi.
+
+## Browser editor preview
+
+The browser editor uses the same `drill-core::Document` as the desktop app.
+Start a Japanese floor project, add a set by copying the last formation,
+drag performers, or import and export a DrillForge JSON project. The
+project list and autosave are per browser profile. Export a file before
+clearing browser data or moving a project to another device.
+
+Build the static release from the repository root:
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo build --locked --release --target wasm32-unknown-unknown -p drill-web --lib
+cargo install --locked wasm-bindgen-cli --version '=0.2.126'
+wasm-bindgen --target web --out-dir target/drill-web-site/pkg target/wasm32-unknown-unknown/release/drill_web.wasm
+node scripts/package-drill-web.mjs
+python -m http.server 8080 --directory target/drill-web-site
+```
+
+Open `http://localhost:8080`. The Browser editor workflow also publishes
+`drill-web-site` as a CI artifact. Serve that directory over HTTPS in
+production. After the service worker installs, the page and locally saved
+projects can reopen offline. Browser storage limits still apply. If saving
+fails, export the current project before leaving the editor.
+
+### Free hosting for the preview and for shared projects
+
+| Service | Role and constraints |
+| --- | --- |
+| [Cloudflare Pages Free](https://developers.cloudflare.com/pages/platform/limits/) | Static editor. 500 builds/month and 25 MiB per file. Upload the built directory so the Rust toolchain is kept in CI. |
+| [Cloudflare Workers and Durable Objects](https://developers.cloudflare.com/durable-objects/platform/pricing/) | Candidate for a persistent WebSocket backend. SQLite-backed Durable Objects are available on Free. Use WebSocket hibernation and budget for requests, active duration, and storage. Requires a new server adapter and identity provider integration. |
+| [Supabase Free](https://supabase.com/pricing) | Candidate for Auth, Postgres project storage, and Realtime. 500 MB database. Free projects pause after one week of inactivity. A rehearsal pilot must account for reactivation before use. Pro starts at $25/month. |
+| [Render Free](https://render.com/docs/free) | Can run the native relay for demonstrations. The service sleeps after 15 idle minutes, loses its local filesystem state on sleep, and takes about a minute to wake. |
+| [Fly.io Machines](https://fly.io/docs/about/pricing/) | Runs the native Rust binary continuously on paid compute. Region, memory, and egress affect the final cost. |
+
+Cloudflare Pages is a free static deployment option for this browser
+build. For shared projects, the design in [PR #64](https://github.com/daichingale/MarchingDrillAppRust/pull/64)
+requires authenticated project membership, durable storage, and revision
+checks on structural edits. A project ID must never grant access by
+itself. Keep the current relay for trusted rooms. It holds room state in
+memory and implements editor seats, so it does not supply a production
+login, per-project permissions, or durable project storage.

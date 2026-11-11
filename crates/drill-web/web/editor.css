@@ -1,0 +1,85 @@
+:root {
+  color-scheme: light;
+  font: 16px system-ui, sans-serif;
+  color: #172927;
+  background: #102818;
+}
+
+body {
+  margin: 0;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .5rem .75rem;
+  padding: .35rem .65rem;
+  background: #172927;
+  color: white;
+}
+
+#status {
+  font-size: .875rem;
+}
+
+button, input {
+  box-sizing: border-box;
+  min-height: 44px;
+  font: inherit;
+}
+
+button {
+  padding: .35rem .7rem;
+  border: 1px solid #627570;
+  border-radius: .4rem;
+  background: white;
+  color: #172927;
+  cursor: pointer;
+}
+
+canvas {
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  touch-action: none;
+}
+
+dialog {
+  box-sizing: border-box;
+  width: min(34rem, calc(100% - 1rem));
+  max-height: 90dvh;
+  border: 0;
+  border-radius: .8rem;
+  padding: 1rem;
+}
+
+dialog::backdrop {
+  background: #101c1acc;
+}
+
+dialog h1 {
+  font-size: 1.35rem;
+}
+
+#create {
+  display: grid;
+  gap: .4rem;
+  margin-bottom: 1rem;
+}
+
+#projects {
+  padding: 0;
+  list-style: none;
+}
+
+#projects button {
+  width: 100%;
+  margin-block: .2rem;
+  text-align: start;
+  overflow-wrap: anywhere;
+}

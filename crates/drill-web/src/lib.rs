@@ -98,6 +98,46 @@ impl WebHandle {
     }
 
     #[wasm_bindgen]
+    pub fn blank_project(title: &str, performers: usize) -> Result<String, JsValue> {
+        let mut document = drill_core::Document::blank(performers);
+        document.title = title.to_owned();
+        serde_json::to_string(&document).map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
+    pub fn add_set(&self, counts: u16) -> Result<(), JsValue> {
+        let mut app = self
+            .runner
+            .app_mut::<PhoneApp>()
+            .ok_or_else(|| JsValue::from_str("エディターを利用できません。"))?;
+        app.append_set(counts).map_err(JsValue::from_str)
+    }
+
+    /// Returns a snapshot once per change, or on explicit export.
+    pub fn snapshot(&self, force: bool) -> Result<Option<String>, JsValue> {
+        let Some(mut app) = self.runner.app_mut::<PhoneApp>() else {
+            return Ok(None);
+        };
+        if !force && !app.document_changed {
+            return Ok(None);
+        }
+        let json = app
+            .document_json()
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        app.document_changed = false;
+        Ok(Some(json))
+    }
+
+    pub fn open_project(&self, json: &str) -> Result<(), JsValue> {
+        let document = drill_core::Document::from_json(json)
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        let mut app = self
+            .runner
+            .app_mut::<PhoneApp>()
+            .ok_or_else(|| JsValue::from_str("Editor unavailable"))?;
+        app.load_document(document);
+        Ok(())
+    }
+
     pub async fn start(
         &self,
         canvas: web_sys::HtmlCanvasElement,
@@ -108,7 +148,9 @@ impl WebHandle {
                 eframe::WebOptions::default(),
                 Box::new(|creation| {
                     install_fonts(&creation.egui_ctx);
-                    Ok(Box::new(PhoneApp::new()))
+                    let mut app = PhoneApp::new();
+                    app.web_context = Some(creation.egui_ctx.clone());
+                    Ok(Box::new(app))
                 }),
             )
             .await

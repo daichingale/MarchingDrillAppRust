@@ -30,6 +30,10 @@ struct SplitDemo {
 
 pub struct PhoneApp {
     document: Document,
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) document_changed: bool,
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) web_context: Option<egui::Context>,
     show: ShowState,
     view: FieldView,
     current_set: usize,
@@ -98,6 +102,10 @@ impl PhoneApp {
         let peer_color = drill_presence::palette_color_for(UserId::from_raw(show.replica().get()));
         Self {
             document,
+            #[cfg(target_arch = "wasm32")]
+            document_changed: false,
+            #[cfg(target_arch = "wasm32")]
+            web_context: None,
             show,
             view,
             current_set: 0,
@@ -146,7 +154,8 @@ impl PhoneApp {
         self.selected = Some(0);
     }
 
-    fn load_document(&mut self, document: Document) {
+    pub(crate) fn load_document(&mut self, document: Document) {
+        self.mark_document_changed();
         let positions = document
             .sets
             .first()
@@ -162,9 +171,63 @@ impl PhoneApp {
         self.selected = None;
         self.split = None;
         self.stamp_session = None;
-        #[cfg(not(target_arch = "wasm32"))]
+        self.relay = None;
+        self.view_only = false;
+        self.editor_limit = 0;
+        self.last_hello = None;
+        #[cfg(target_arch = "wasm32")]
+        self.peers.clear();
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn append_set(&mut self, counts: u16) -> Result<(), &'static str> {
+        if self.relay.is_some() || self.view_only {
+            return Err("共同編集中はセットを追加できません。");
+        }
+        let mut next = self.document.clone();
+        let Some(id) = next.next_set_id() else {
+            return Err("これ以上セットを追加できません。");
+        };
+        let Some(previous) = next.sets.last_mut() else {
+            return Err("元になるセットがありません。");
+        };
+        previous.counts = counts;
+        let positions = previous.positions.clone();
+        next.sets.push(drill_core::Set {
+            id,
+            name: format!("セット {}", next.sets.len() + 1),
+            counts: 16,
+            positions,
+            hold: 0,
+            routes: Default::default(),
+            annotation: Default::default(),
+            shape: None,
+            generated_by: None,
+        });
+        next.validate()
+            .map_err(|_| "セットを追加できませんでした。")?;
+        self.close_stamp();
+        self.document = next;
+        self.show = ShowState::from_document(&self.document, self.show.replica());
+        self.current_set = self.document.sets.len() - 1;
+        self.local_count = 0.0;
+        self.playing = false;
+        self.mark_document_changed();
+        Ok(())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn document_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(&self.document)
+    }
+
+    fn mark_document_changed(&mut self) {
+        #[cfg(target_arch = "wasm32")]
         {
-            self.relay = None;
+            self.document_changed = true;
+            if let Some(context) = &self.web_context {
+                context.request_repaint();
+            }
         }
     }
 
@@ -284,7 +347,11 @@ impl PhoneApp {
         else {
             return;
         };
+        if *slot == point {
+            return;
+        }
         *slot = point;
+        self.mark_document_changed();
         let Some(op) = self.show.move_dot(
             DotId {
                 set_id,
@@ -332,6 +399,12 @@ impl PhoneApp {
             self.show.ingest(event);
         }
         self.show.write_document(&mut self.document);
+        if events
+            .iter()
+            .any(|event| matches!(event, RoomEvent::Op { .. } | RoomEvent::Hello { .. }))
+        {
+            self.mark_document_changed();
+        }
         self.applying = false;
     }
 
@@ -418,6 +491,11 @@ impl PhoneApp {
 impl eframe::App for PhoneApp {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         Color32::from_rgb(244, 246, 248).to_normalized_gamma_f32()
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -511,7 +589,9 @@ impl PhoneApp {
                         self.more = !self.more;
                     }
                 } else {
-                    if ink_button(ui, word(ja, "見本", "Sample")).clicked() {
+                    if cfg!(not(target_arch = "wasm32"))
+                        && ink_button(ui, word(ja, "見本", "Sample")).clicked()
+                    {
                         self.load_document(Document::demo(2, 4));
                     }
                     if ink_button(ui, word(ja, "共有", "Share")).clicked() {
@@ -531,7 +611,10 @@ impl PhoneApp {
             ui.scope_builder(egui::UiBuilder::new().max_rect(second), |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
-                    if compact && ink_button(ui, word(ja, "見本", "Sample")).clicked() {
+                    if cfg!(not(target_arch = "wasm32"))
+                        && compact
+                        && ink_button(ui, word(ja, "見本", "Sample")).clicked()
+                    {
                         self.load_document(Document::demo(2, 4));
                     }
                     if compact && ink_button(ui, if ja { "EN" } else { "JA" }).clicked() {
