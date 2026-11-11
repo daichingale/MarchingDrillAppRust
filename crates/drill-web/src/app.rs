@@ -32,6 +32,8 @@ pub struct PhoneApp {
     document: Document,
     #[cfg(target_arch = "wasm32")]
     pub(crate) document_changed: bool,
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) web_context: Option<egui::Context>,
     show: ShowState,
     view: FieldView,
     current_set: usize,
@@ -102,6 +104,8 @@ impl PhoneApp {
             document,
             #[cfg(target_arch = "wasm32")]
             document_changed: false,
+            #[cfg(target_arch = "wasm32")]
+            web_context: None,
             show,
             view,
             current_set: 0,
@@ -221,6 +225,9 @@ impl PhoneApp {
         #[cfg(target_arch = "wasm32")]
         {
             self.document_changed = true;
+            if let Some(context) = &self.web_context {
+                context.request_repaint();
+            }
         }
     }
 
@@ -582,7 +589,9 @@ impl PhoneApp {
                         self.more = !self.more;
                     }
                 } else {
-                    if ink_button(ui, word(ja, "見本", "Sample")).clicked() {
+                    if cfg!(not(target_arch = "wasm32"))
+                        && ink_button(ui, word(ja, "見本", "Sample")).clicked()
+                    {
                         self.load_document(Document::demo(2, 4));
                     }
                     if ink_button(ui, word(ja, "共有", "Share")).clicked() {
@@ -602,7 +611,10 @@ impl PhoneApp {
             ui.scope_builder(egui::UiBuilder::new().max_rect(second), |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
-                    if compact && ink_button(ui, word(ja, "見本", "Sample")).clicked() {
+                    if cfg!(not(target_arch = "wasm32"))
+                        && compact
+                        && ink_button(ui, word(ja, "見本", "Sample")).clicked()
+                    {
                         self.load_document(Document::demo(2, 4));
                     }
                     if compact && ink_button(ui, if ja { "EN" } else { "JA" }).clicked() {

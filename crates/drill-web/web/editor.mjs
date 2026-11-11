@@ -115,6 +115,14 @@ byId("create").addEventListener("submit", (event) => {
   }
 });
 
+byId("sample").addEventListener("click", () => {
+  try {
+    create(JSON.stringify({ ...template, title: "見本ドリル" }));
+  } catch (error) {
+    message(String(error));
+  }
+});
+
 byId("import").addEventListener("change", async (event) => {
   const [file] = event.target.files;
   event.target.value = "";
@@ -148,7 +156,7 @@ const addSet = byId("add-set");
 addSet.disabled = false;
 addSet.addEventListener("click", () => setDialog.showModal());
 byId("set-form").addEventListener("submit", (event) => {
-  if (event.submitter.formMethod === "dialog") return;
+  if (event.submitter?.formMethod === "dialog") return;
   event.preventDefault();
   try {
     app.add_set(byId("counts").valueAsNumber);

@@ -148,7 +148,9 @@ impl WebHandle {
                 eframe::WebOptions::default(),
                 Box::new(|creation| {
                     install_fonts(&creation.egui_ctx);
-                    Ok(Box::new(PhoneApp::new()))
+                    let mut app = PhoneApp::new();
+                    app.web_context = Some(creation.egui_ctx.clone());
+                    Ok(Box::new(app))
                 }),
             )
             .await
