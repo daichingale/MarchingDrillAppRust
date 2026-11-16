@@ -3,6 +3,7 @@ import init, { WebHandle } from "./pkg/drill_web.js";
 const byId = (id) => document.getElementById(id);
 const prefix = "drillforge.project.";
 const activeKey = "drillforge.active";
+const revisionPrefix = "drillforge.cloud.revision.";
 const library = byId("library");
 const status = byId("status");
 let currentId;
@@ -39,6 +40,10 @@ function trySave() {
 
 function open(id, json, isNew = false) {
   save();
+  activate(id, json, isNew);
+}
+
+function activate(id, json, isNew) {
   app.open_project(json);
   currentId = id;
   saved = isNew ? undefined : json;
@@ -190,6 +195,87 @@ window.addEventListener("pagehide", trySave);
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) trySave();
 });
+
+const cloud = byId("cloud");
+const cloudSave = byId("cloud-save");
+const cloudRefresh = byId("cloud-refresh");
+const cloudList = byId("cloud-projects");
+
+async function cloudRequest(id = "", options) {
+  const result = await fetch("./api/projects" + (id ? "/" + id : ""), options);
+  if (!result.headers.get("Content-Type")?.includes("application/json")) {
+    throw new Error("クラウドに接続できません。ログインと接続を確認してください。");
+  }
+  const payload = await result.json();
+  if (!result.ok) throw new Error(payload.error ?? "クラウドでの操作に失敗しました。");
+  return payload;
+}
+
+async function refreshCloud(quiet = false) {
+  try {
+    const { projects } = await cloudRequest();
+    cloud.hidden = false;
+    cloudList.replaceChildren();
+    for (const { id, title } of projects) {
+      const item = document.createElement("li");
+      const button = document.createElement("button");
+      button.textContent = title;
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        try {
+          const remote = await cloudRequest(id);
+          save();
+          const local = localStorage.getItem(prefix + id);
+          if (local && local !== remote.document) {
+            // Keep the local copy available for export or a separate save.
+            localStorage.setItem(prefix + crypto.randomUUID(), local);
+          }
+          localStorage.setItem(prefix + id, remote.document);
+          localStorage.setItem(revisionPrefix + id, String(remote.revision));
+          // The current version has already been saved before replacing its record.
+          activate(id, remote.document, false);
+          library.close();
+          message("クラウドの作品を開きました");
+        } catch (error) {
+          message(String(error));
+        } finally {
+          button.disabled = false;
+        }
+      });
+      item.append(button);
+      cloudList.append(item);
+    }
+  } catch (error) {
+    if (!quiet) message(String(error));
+  }
+}
+
+cloudRefresh.addEventListener("click", () => refreshCloud());
+cloudSave.addEventListener("click", async () => {
+  cloudSave.disabled = true;
+  try {
+    const id = currentId;
+    if (!id) throw new Error("保存する作品を開いてください。");
+    const document = app.snapshot(true);
+    if (!document) throw new Error("作品を取得できませんでした。");
+    draft = document;
+    save();
+    const revision = localStorage.getItem(revisionPrefix + id) ?? "0";
+    const result = await cloudRequest(id, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "If-Match": '"' + revision + '"' },
+      body: document,
+    });
+    localStorage.setItem(revisionPrefix + id, String(result.revision));
+    message("クラウドに保存済み");
+    await refreshCloud();
+  } catch (error) {
+    message(String(error));
+  } finally {
+    cloudSave.disabled = false;
+  }
+});
+toggle.addEventListener("click", () => refreshCloud(true));
 
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("./offline.js").catch(console.warn);

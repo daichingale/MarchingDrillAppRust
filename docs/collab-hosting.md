@@ -211,3 +211,21 @@ checks on structural edits. A project ID must never grant access by
 itself. Keep the current relay for trusted rooms. It holds room state in
 memory and implements editor seats, so it does not supply a production
 login, per-project permissions, or durable project storage.
+
+## Account-based cloud saving on Sites
+
+Build the browser artifact as above. Use the Sites Git checkout containing
+the same source revision and a provisioned `.openai/hosting.json`. Run
+`node scripts/package-drill-web-cloud.mjs <site-checkout>` from the built
+repository. This stages the editor assets, the Worker and the D1 schema
+for deployment. Deploy the archive through Sites so that its authentication
+gateway injects the verified account identifier. Do not run the API on
+an independently reachable Worker using the same header contract.
+
+In the published editor, open 作品一覧 and use the cloud save button.
+Sign in with the same ChatGPT account on the second device, open
+クラウドの作品 and choose the saved title. Saving updates the current
+revision. When a second device has already saved a newer version, the
+server rejects the stale save and the local edit stays on the device.
+Project permissions are owner-only. Storage is capped at 100 projects
+per account and 768 KiB per cloud project. This flow uses manual sync.
