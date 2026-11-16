@@ -30,6 +30,10 @@ struct SplitDemo {
 
 pub struct PhoneApp {
     document: Document,
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) document_changed: bool,
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) web_context: Option<egui::Context>,
     show: ShowState,
     view: FieldView,
     current_set: usize,
@@ -93,11 +97,15 @@ impl PhoneApp {
             .first()
             .map(|set| set.positions.as_slice())
             .unwrap_or(&[]);
-        let view = FieldView::frame_cast(document.grid.width, document.grid.height, positions);
+        let view = initial_field_view(&document, positions);
         let show = ShowState::from_document(&document, ReplicaId::from_raw(replica_seed()));
         let peer_color = drill_presence::palette_color_for(UserId::from_raw(show.replica().get()));
         Self {
             document,
+            #[cfg(target_arch = "wasm32")]
+            document_changed: false,
+            #[cfg(target_arch = "wasm32")]
+            web_context: None,
             show,
             view,
             current_set: 0,
@@ -146,13 +154,14 @@ impl PhoneApp {
         self.selected = Some(0);
     }
 
-    fn load_document(&mut self, document: Document) {
+    pub(crate) fn load_document(&mut self, document: Document) {
+        self.mark_document_changed();
         let positions = document
             .sets
             .first()
             .map(|set| set.positions.as_slice())
             .unwrap_or(&[]);
-        let view = FieldView::frame_cast(document.grid.width, document.grid.height, positions);
+        let view = initial_field_view(&document, positions);
         self.show = ShowState::from_document(&document, self.show.replica());
         self.document = document;
         self.view = view;
@@ -162,9 +171,77 @@ impl PhoneApp {
         self.selected = None;
         self.split = None;
         self.stamp_session = None;
-        #[cfg(not(target_arch = "wasm32"))]
+        self.relay = None;
+        self.view_only = false;
+        self.editor_limit = 0;
+        self.last_hello = None;
+        #[cfg(target_arch = "wasm32")]
+        self.peers.clear();
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn append_set(&mut self, counts: u16) -> Result<(), &'static str> {
+        if self.relay.is_some() || self.view_only {
+            return Err("共同編集中はセットを追加できません。");
+        }
+        let mut next = self.document.clone();
+        let Some(id) = next.next_set_id() else {
+            return Err("これ以上セットを追加できません。");
+        };
+        let Some(previous) = next.sets.last_mut() else {
+            return Err("元になるセットがありません。");
+        };
+        previous.counts = counts;
+        let positions = previous.positions.clone();
+        next.sets.push(drill_core::Set {
+            id,
+            name: format!("セット {}", next.sets.len() + 1),
+            counts: 16,
+            positions,
+            hold: 0,
+            routes: Default::default(),
+            annotation: Default::default(),
+            shape: None,
+            generated_by: None,
+        });
+        next.validate()
+            .map_err(|_| "セットを追加できませんでした。")?;
+        self.close_stamp();
+        self.document = next;
+        self.show = ShowState::from_document(&self.document, self.show.replica());
+        self.current_set = self.document.sets.len() - 1;
+        self.local_count = 0.0;
+        self.playing = false;
+        self.mark_document_changed();
+        Ok(())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn adjust_field_view(&mut self, direction: i8) {
+        let grid = &self.document.grid;
+        if direction == 0 {
+            self.view = FieldView::fit(grid.width, grid.height);
+        } else {
+            let factor = if direction > 0 { 1.25 } else { 0.8 };
+            self.view.zoom = (self.view.zoom * factor).clamp(0.35, 8.0);
+        }
+        if let Some(context) = &self.web_context {
+            context.request_repaint();
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn document_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(&self.document)
+    }
+
+    fn mark_document_changed(&mut self) {
+        #[cfg(target_arch = "wasm32")]
         {
-            self.relay = None;
+            self.document_changed = true;
+            if let Some(context) = &self.web_context {
+                context.request_repaint();
+            }
         }
     }
 
@@ -276,6 +353,11 @@ impl PhoneApp {
         else {
             return;
         };
+        let grid = &self.document.grid;
+        let point = Point {
+            x: point.x.clamp(0.0, grid.width),
+            y: point.y.clamp(0.0, grid.height),
+        };
         let Some(slot) = self
             .document
             .sets
@@ -284,7 +366,11 @@ impl PhoneApp {
         else {
             return;
         };
+        if *slot == point {
+            return;
+        }
         *slot = point;
+        self.mark_document_changed();
         let Some(op) = self.show.move_dot(
             DotId {
                 set_id,
@@ -332,6 +418,12 @@ impl PhoneApp {
             self.show.ingest(event);
         }
         self.show.write_document(&mut self.document);
+        if events
+            .iter()
+            .any(|event| matches!(event, RoomEvent::Op { .. } | RoomEvent::Hello { .. }))
+        {
+            self.mark_document_changed();
+        }
         self.applying = false;
     }
 
@@ -418,6 +510,11 @@ impl PhoneApp {
 impl eframe::App for PhoneApp {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         Color32::from_rgb(244, 246, 248).to_normalized_gamma_f32()
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -511,7 +608,9 @@ impl PhoneApp {
                         self.more = !self.more;
                     }
                 } else {
-                    if ink_button(ui, word(ja, "見本", "Sample")).clicked() {
+                    if cfg!(not(target_arch = "wasm32"))
+                        && ink_button(ui, word(ja, "見本", "Sample")).clicked()
+                    {
                         self.load_document(Document::demo(2, 4));
                     }
                     if ink_button(ui, word(ja, "共有", "Share")).clicked() {
@@ -531,7 +630,10 @@ impl PhoneApp {
             ui.scope_builder(egui::UiBuilder::new().max_rect(second), |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
-                    if compact && ink_button(ui, word(ja, "見本", "Sample")).clicked() {
+                    if cfg!(not(target_arch = "wasm32"))
+                        && compact
+                        && ink_button(ui, word(ja, "見本", "Sample")).clicked()
+                    {
                         self.load_document(Document::demo(2, 4));
                     }
                     if compact && ink_button(ui, if ja { "EN" } else { "JA" }).clicked() {
@@ -697,6 +799,22 @@ impl PhoneApp {
     }
 }
 
+fn initial_field_view(document: &Document, positions: &[Point]) -> FieldView {
+    let grid = &document.grid;
+    if grid.reference_frames.is_empty() {
+        FieldView::frame_cast(grid.width, grid.height, positions)
+    } else {
+        FieldView::fit(grid.width, grid.height)
+    }
+}
+
+fn field_rect(rect: Rect, map: &FieldMap, center: Point, width: f32, height: f32) -> Rect {
+    Rect::from_center_size(
+        screen_pos(rect, map, center),
+        EVec2::new(width * map.scale, height * map.scale),
+    )
+}
+
 fn field_map(document: &Document, rect: Rect, view: FieldView) -> FieldMap {
     FieldMap::with_view(
         document.grid.width,
@@ -736,31 +854,69 @@ fn paint_field(
     peers: &[Presence],
 ) {
     let painter = ui.painter().with_clip_rect(rect);
-    painter.rect_filled(rect, 0.0, GRASS);
+    painter.rect_filled(rect, 0.0, Color32::from_rgb(17, 43, 35));
     let map = field_map(document, rect, view);
     let grid = &document.grid;
-    let line = Stroke::new(1.0, Color32::from_white_alpha(70));
-    let mut x = 0.0;
-    while x <= grid.width + 0.01 {
-        painter.line_segment(
-            [
-                screen_pos(rect, &map, Point { x, y: 0.0 }),
-                screen_pos(rect, &map, Point { x, y: grid.height }),
-            ],
-            line,
-        );
-        x += grid.major_line_interval.max(5.0);
+    let center = Point {
+        x: grid.width * 0.5,
+        y: grid.height * 0.5,
+    };
+    let floor = field_rect(rect, &map, center, grid.width, grid.height);
+    painter.rect_filled(floor, 0.0, GRASS);
+
+    let line = Stroke::new(1.0, Color32::from_white_alpha(55));
+    let spacing = grid.major_line_interval.max(5.0);
+    for (length, horizontal) in [(grid.width, false), (grid.height, true)] {
+        let steps = (length * 0.5 / spacing).floor() as i32;
+        for step in -steps..=steps {
+            let position = length * 0.5 + step as f32 * spacing;
+            if horizontal {
+                let y = screen_pos(
+                    rect,
+                    &map,
+                    Point {
+                        x: 0.0,
+                        y: position,
+                    },
+                )
+                .y;
+                painter.hline(floor.x_range(), y, line);
+            } else {
+                let x = screen_pos(
+                    rect,
+                    &map,
+                    Point {
+                        x: position,
+                        y: 0.0,
+                    },
+                )
+                .x;
+                painter.vline(x, floor.y_range(), line);
+            }
+        }
     }
-    let mut y = 0.0;
-    while y <= grid.height + 0.01 {
-        painter.line_segment(
-            [
-                screen_pos(rect, &map, Point { x: 0.0, y }),
-                screen_pos(rect, &map, Point { x: grid.width, y }),
-            ],
-            line,
+    painter.rect_stroke(floor, 0.0, line, egui::StrokeKind::Inside);
+
+    let unit = match grid.unit {
+        drill_core::Unit::Meters => "m",
+        drill_core::Unit::Yards => "yd",
+    };
+    for (index, &side) in grid.reference_frames.iter().enumerate() {
+        // Size markings use the physical dimensions. The step grid is independent.
+        let frame = field_rect(rect, &map, center, side, side);
+        let ink = if index == 0 {
+            Color32::WHITE
+        } else {
+            Color32::from_white_alpha(150)
+        };
+        painter.rect_stroke(frame, 0.0, Stroke::new(2.0, ink), egui::StrokeKind::Middle);
+        painter.text(
+            frame.center_top() + EVec2::new(0.0, 4.0),
+            Align2::CENTER_TOP,
+            format!("{side}{unit} × {side}{unit}"),
+            FontId::proportional(14.0),
+            ink,
         );
-        y += grid.major_line_interval.max(5.0);
     }
     let radius = drawn_radius(rect.width() < 520.0, &map, positions);
     let show_labels = radius >= 8.5;
@@ -1118,6 +1274,28 @@ pub fn synced_pair() -> (Document, Document) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn japanese_floor_fits_and_marks_an_exact_thirty_meter_square() {
+        let document = Document::blank(8);
+        let mut app = PhoneApp::from_document(document);
+        let grid = &app.document.grid;
+        assert_eq!(grid.reference_frames[0], 30.0);
+        assert_eq!(app.view, FieldView::fit(46.0, 40.0));
+
+        let viewport = Rect::from_min_size(Pos2::ZERO, EVec2::new(360.0, 550.0));
+        let map = field_map(&app.document, viewport, app.view);
+        let frame = field_rect(viewport, &map, app.view.center, 30.0, 30.0);
+        assert!(viewport.contains_rect(frame));
+        assert!((frame.width() / map.scale - 30.0).abs() < 0.001);
+        assert!((frame.height() / map.scale - 30.0).abs() < 0.001);
+
+        app.place_selected(0, Point { x: 38.0, y: 35.0 });
+        assert_eq!(
+            app.document.sets[0].positions[0],
+            Point { x: 38.0, y: 35.0 }
+        );
+    }
 
     #[test]
     fn phone_surface_has_no_depth_view() {

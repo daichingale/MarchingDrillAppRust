@@ -450,6 +450,7 @@ impl PhoneApp {
     }
 
     fn publish_indexes(&mut self, indexes: &[usize], points: &[Point]) {
+        self.mark_document_changed();
         for &index in indexes {
             if let Some(&point) = points.get(index) {
                 self.place_selected(index, point);
