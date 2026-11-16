@@ -11,6 +11,11 @@
     <strong>DrillForge</strong>
     <button id="library-toggle" type="button" disabled>作品一覧</button>
     <button id="add-set" type="button" disabled>セット追加</button>
+    <div id="field-tools" role="group" aria-label="フィールド表示" hidden>
+      <button type="button" data-view="-1" aria-label="縮小">−</button>
+      <button type="button" data-view="0">全体</button>
+      <button type="button" data-view="1" aria-label="拡大">＋</button>
+    </div>
     <span id="status" role="status">エディターを起動中…</span>
   </header>
   <dialog id="library" aria-labelledby="library-title">
@@ -19,6 +24,7 @@
     <form id="create">
       <label for="title">作品名</label>
       <input id="title" maxlength="120" required>
+      <p class="floor-spec">日本式フロア · 30m × 30m</p>
       <label for="performers">人数</label>
       <input id="performers" type="number" value="8" min="1" max="4000" required>
       <button type="submit">新規作成</button>

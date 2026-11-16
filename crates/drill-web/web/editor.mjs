@@ -97,6 +97,11 @@ try {
 }
 
 const template = JSON.parse(app.snapshot(true));
+const fieldTools = byId("field-tools");
+fieldTools.hidden = false;
+for (const button of fieldTools.querySelectorAll("button")) {
+  button.addEventListener("click", () => app.adjust_field_view(Number(button.dataset.view)));
+}
 const toggle = byId("library-toggle");
 toggle.disabled = false;
 toggle.addEventListener("click", () => {

@@ -104,6 +104,12 @@ impl WebHandle {
         serde_json::to_string(&document).map_err(|error| JsValue::from_str(&error.to_string()))
     }
 
+    pub fn adjust_field_view(&self, direction: i8) {
+        if let Some(mut app) = self.runner.app_mut::<PhoneApp>() {
+            app.adjust_field_view(direction);
+        }
+    }
+
     pub fn add_set(&self, counts: u16) -> Result<(), JsValue> {
         let mut app = self
             .runner

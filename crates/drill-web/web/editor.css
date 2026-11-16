@@ -83,3 +83,17 @@ dialog h1 {
   text-align: start;
   overflow-wrap: anywhere;
 }
+
+#field-tools:not([hidden]) {
+  display: inline-flex;
+  gap: .25rem;
+}
+
+#field-tools button {
+  min-width: 44px;
+}
+
+.floor-spec {
+  margin: .1rem 0 .35rem;
+  color: #40564f;
+}
