@@ -3,7 +3,7 @@
 Generated from committed `Cargo.lock` and Cargo package metadata. Do not edit manually.
 Regenerate with `pwsh ./scripts/generate-third-party-licenses.ps1`.
 
-Cargo.lock SHA-256: `fbc9737803d52f519b2457bb376ad1d9369dc929e3a48ec88ce0c61b418343d0`
+Cargo.lock SHA-256: `f6d7f8dd22a3da165fd087509fbcc5230990911f32814b4b88323e9eff7a1df3`
 
 | Package | Version | SPDX license expression | Source |
 |---|---:|---|---|
@@ -31,7 +31,7 @@ Cargo.lock SHA-256: `fbc9737803d52f519b2457bb376ad1d9369dc929e3a48ec88ce0c61b418
 | ash | 0.38.0+1.3.281 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | async-broadcast | 0.7.2 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | async-channel | 2.5.0 | Apache-2.0 OR MIT | registry+https://github.com/rust-lang/crates.io-index |
-| async-executor | 1.14.0 | Apache-2.0 OR MIT | registry+https://github.com/rust-lang/crates.io-index |
+| async-executor | 1.14.1 | Apache-2.0 OR MIT | registry+https://github.com/rust-lang/crates.io-index |
 | async-io | 2.6.0 | Apache-2.0 OR MIT | registry+https://github.com/rust-lang/crates.io-index |
 | async-lock | 3.4.2 | Apache-2.0 OR MIT | registry+https://github.com/rust-lang/crates.io-index |
 | async-process | 2.5.0 | Apache-2.0 OR MIT | registry+https://github.com/rust-lang/crates.io-index |
@@ -68,7 +68,7 @@ Cargo.lock SHA-256: `fbc9737803d52f519b2457bb376ad1d9369dc929e3a48ec88ce0c61b418
 | cfg-if | 1.0.4 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | cgl | 0.3.2 | MIT / Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | chacha20 | 0.10.2 | MIT OR Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
-| clipboard-win | 5.4.1 | BSL-1.0 | registry+https://github.com/rust-lang/crates.io-index |
+| clipboard-win | 5.4.3 | BSL-1.0 | registry+https://github.com/rust-lang/crates.io-index |
 | codespan-reporting | 0.13.1 | Apache-2.0 | registry+https://github.com/rust-lang/crates.io-index |
 | color | 0.3.3 | Apache-2.0 OR MIT | registry+https://github.com/rust-lang/crates.io-index |
 | combine | 4.6.7 | MIT | registry+https://github.com/rust-lang/crates.io-index |

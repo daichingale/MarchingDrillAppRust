@@ -240,7 +240,7 @@ impl MetronomeState {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SimpleGuide {
+pub(crate) enum SimpleGuide {
     Place,
     Move,
     NextSet,
@@ -403,7 +403,7 @@ enum ChromeMotion {
 /// on the accent itself fails contrast; this stays in the same blue family.
 pub(crate) const SIMPLE_BLUE: Color32 = Color32::from_rgb(20, 96, 200);
 const SIMPLE_ORANGE: Color32 = Color32::from_rgb(196, 112, 24);
-const SIMPLE_INK: Color32 = Color32::from_rgb(28, 32, 40);
+pub(crate) const SIMPLE_INK: Color32 = Color32::from_rgb(28, 32, 40);
 const SIMPLE_CARD: Color32 = Color32::WHITE;
 const SIMPLE_MOTION_SECS: f32 = 0.26;
 const SIMPLE_OK: Color32 = Color32::from_rgb(46, 158, 92);
@@ -461,6 +461,73 @@ enum DockAction {
     Redo,
     Open,
     More,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SheetKind {
+    Memo,
+    Place,
+    Show,
+    Walk,
+}
+
+/// Advisor-facing actions that used to be a wall of text buttons.
+/// The menu calls these so none of them disappear.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PlainAction {
+    Everyone,
+    Line,
+    File,
+    Circle,
+    Block,
+    SwapSides,
+    SwapEnds,
+    Turn,
+    Arc,
+    Spread,
+    Tighten,
+    Center,
+    DressFront,
+    Diagonal,
+    DressBack,
+    EvenGaps,
+    Chevron,
+    Renumber,
+    AddBeside,
+    SwapPair,
+    Restore,
+    ClearMove,
+    ReturnScene,
+    PrevPerson,
+    NextPerson,
+    NudgeForward,
+    NudgeBack,
+    NudgeLeft,
+    NudgeRight,
+    FocusMove,
+    FewerCounts,
+    MoreCounts,
+    TempoDown,
+    TempoUp,
+    DeleteScene,
+    StepBack,
+    StepForward,
+    SceneStart,
+    Slow,
+    SceneLoop,
+    SelectMovers,
+    SelectHolders,
+    FocusPerson,
+    PathSheet,
+    Away,
+    Memo,
+    PlaceSheet,
+    ShowSheet,
+    WalkSheet,
+    ShiftEarlier,
+    ShiftLater,
+    ImportSong,
+    DismissHint,
 }
 
 pub(crate) struct PictogramTile<'a> {
@@ -1268,6 +1335,7 @@ impl DrillApp {
 
     /// Screenshot harness only. Seeds a frame when `DRILLFORGE_QA_SIMPLE` is
     /// `empty`, `placed`, `play`, `glossary`, `selected`, `recent`, `full`,
+    /// `chrome`, `chrome-full`,
     /// `move`, `save`, `done`, `line`, `step`, `circle`, `nudge`, `walk`,
     /// `shows`, `hints`, `memo`, `numbers`, `shape`, `block`, `count`,
     /// `places`, `pair`, `order`, `sheet`, `recover`, `ghosts`, `mirror`,
@@ -1297,6 +1365,23 @@ impl DrillApp {
         }
         self.place_performer_at(Point { x: 12.0, y: 16.0 }, true);
         self.place_performer_at(Point { x: 20.0, y: 16.0 }, true);
+        if stage == "chrome" || stage == "chrome-full" {
+            self.onboarding.simple_pictogram_done = true;
+            self.simple_mode.hint_closed = true;
+            self.show_guidance = false;
+            self.onboarding.coach_dismissed = true;
+            self.duplicate_current_set();
+            self.navigate_to_set(0);
+            self.nav_glide.settle();
+            if stage == "chrome-full" {
+                self.set_simple_mode(false);
+                self.simple_mode.return_hint = false;
+                self.full_inspector_collapsed = true;
+                self.full_timeline_expanded = false;
+                self.clear_selection();
+            }
+            return;
+        }
         if stage == "glossary" {
             self.glossary.open();
         }
@@ -1836,6 +1921,7 @@ impl DrillApp {
         self.note_simple_chrome_motion(ui.ctx());
         self.simple_tick_pictogram(ui);
         self.simple_sync_history_notes();
+        self.show_desktop_chrome(ui);
         self.simple_paint_field(ui);
         self.simple_paint_floating_layer(ui);
         self.simple_paint_overlays(ui);
@@ -2008,7 +2094,7 @@ impl DrillApp {
         }
     }
 
-    fn simple_active_hint(&self) -> Option<SimpleGuide> {
+    pub(crate) fn simple_active_hint(&self) -> Option<SimpleGuide> {
         if self.onboarding.simple_pictogram_done || self.simple_mode.hint_closed {
             return None;
         }
@@ -2103,7 +2189,7 @@ impl DrillApp {
         }
     }
 
-    fn simple_can_remove(&self) -> bool {
+    pub(crate) fn simple_can_remove(&self) -> bool {
         !self.selected.is_empty() && self.is_editable_set_start()
     }
 
@@ -2259,7 +2345,7 @@ impl DrillApp {
 
     /// Eye pictogram beside the set dots. Same overlay row, so the field
     /// stays full-window. The hit target is at least 48px on both sides.
-    fn simple_previous_toggle(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn simple_previous_toggle(&mut self, ui: &mut egui::Ui) {
         let label = i18n::registered(self.locale, "simple-mode.330");
         let width = simple_previous_toggle_width(label);
         let enabled = simple_previous_toggle_enabled(self.current_set);
@@ -2336,8 +2422,7 @@ impl DrillApp {
         }
     }
 
-    #[allow(dead_code)]
-    fn simple_scene_name_row(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn simple_scene_name_row(&mut self, ui: &mut egui::Ui) {
         if self.playing || self.document.performers.is_empty() || !self.is_editable_set_start() {
             return;
         }
@@ -2443,7 +2528,7 @@ impl DrillApp {
         self.simple_mark(revision, "simple-mode.203");
     }
 
-    fn simple_scene_chip(&mut self, ui: &mut egui::Ui, index: usize) {
+    pub(crate) fn simple_scene_chip(&mut self, ui: &mut egui::Ui, index: usize) {
         let current = index == self.current_set;
         let stored = self
             .document
@@ -2552,6 +2637,7 @@ impl DrillApp {
         );
     }
 
+    #[allow(dead_code)]
     fn simple_action_bar(&mut self, ui: &mut egui::Ui) {
         let hint = self.simple_active_hint();
         let spotlight = hint.unwrap_or_else(|| self.simple_guide());
@@ -3842,6 +3928,203 @@ impl DrillApp {
         self.simple_mark(revision, "simple-mode.129");
     }
 
+    pub(crate) fn simple_clear_hint_targets(&mut self) {
+        self.simple_mode.action_place = None;
+        self.simple_mode.action_move = None;
+        self.simple_mode.action_next = None;
+        self.simple_mode.action_play = None;
+    }
+
+    pub(crate) fn simple_note_hint_target(&mut self, guide: SimpleGuide, rect: egui::Rect) {
+        match guide {
+            SimpleGuide::Place => self.simple_mode.action_place = Some(rect),
+            SimpleGuide::Move => self.simple_mode.action_move = Some(rect),
+            SimpleGuide::NextSet => self.simple_mode.action_next = Some(rect),
+            SimpleGuide::Play => self.simple_mode.action_play = Some(rect),
+        }
+    }
+
+    /// Starts or stops playback the way the big play tile used to.
+    pub(crate) fn simple_press_play(&mut self, ctx: &egui::Context) {
+        if self.playing {
+            self.toggle_playback(ctx);
+        } else {
+            self.simple_start_play(ctx);
+            self.simple_mark_hint(SimpleGuide::Play);
+        }
+    }
+
+    pub(crate) fn simple_press_place(&mut self) {
+        self.simple_add_person();
+        self.simple_mark_hint(SimpleGuide::Place);
+    }
+
+    pub(crate) fn simple_press_add_scene(&mut self) {
+        if !self.is_editable_set_start() || self.document.performers.is_empty() {
+            return;
+        }
+        self.simple_mode.finished_playback = false;
+        self.simple_mode.hold_count = false;
+        let revision = self.history.revision();
+        self.duplicate_current_set();
+        self.simple_mark(revision, "simple-mode.129");
+        self.simple_mark_hint(SimpleGuide::NextSet);
+    }
+
+    pub(crate) fn plain_action_enabled(&self, action: PlainAction) -> bool {
+        let playing = self.playing;
+        let editable = self.is_editable_set_start();
+        let people = !self.document.performers.is_empty();
+        let many = self.document.performers.len() >= 2;
+        let shape = editable && !playing && many;
+        match action {
+            PlainAction::Everyone => people,
+            PlainAction::Line
+            | PlainAction::File
+            | PlainAction::Circle
+            | PlainAction::Block
+            | PlainAction::SwapSides
+            | PlainAction::SwapEnds
+            | PlainAction::Turn
+            | PlainAction::Arc
+            | PlainAction::Spread
+            | PlainAction::Tighten
+            | PlainAction::Center
+            | PlainAction::DressFront
+            | PlainAction::Diagonal
+            | PlainAction::DressBack
+            | PlainAction::Chevron
+            | PlainAction::Renumber => shape,
+            PlainAction::EvenGaps => shape && self.simple_even_ready(),
+            PlainAction::AddBeside => editable && !playing && people,
+            PlainAction::SwapPair => editable && !playing && self.selected.len() == 2,
+            PlainAction::Restore => self.simple_can_restore_selected(),
+            PlainAction::ClearMove => editable && !playing && self.simple_can_clear_move(),
+            PlainAction::ReturnScene => editable && self.simple_return_ready(),
+            PlainAction::PrevPerson | PlainAction::NextPerson => many,
+            PlainAction::NudgeForward
+            | PlainAction::NudgeBack
+            | PlainAction::NudgeLeft
+            | PlainAction::NudgeRight => editable && !playing && !self.selected.is_empty(),
+            PlainAction::FocusMove => !playing && people && self.selected.is_empty(),
+            PlainAction::FewerCounts | PlainAction::MoreCounts | PlainAction::DeleteScene => {
+                editable
+                    && !playing
+                    && (action != PlainAction::DeleteScene || self.document.sets.len() > 1)
+            }
+            PlainAction::TempoDown | PlainAction::TempoUp => editable && !playing,
+            PlainAction::StepBack | PlainAction::StepForward | PlainAction::SceneStart => {
+                !playing && self.show_has_motion()
+            }
+            PlainAction::Slow | PlainAction::SceneLoop => true,
+            PlainAction::SelectMovers => {
+                !playing && !simple_mover_indices(&self.document, self.current_set).is_empty()
+            }
+            PlainAction::SelectHolders => {
+                !playing && !simple_holder_indices(&self.document, self.current_set).is_empty()
+            }
+            PlainAction::FocusPerson | PlainAction::PathSheet | PlainAction::Away => {
+                self.simple_single_selected().is_some()
+            }
+            PlainAction::Memo
+            | PlainAction::PlaceSheet
+            | PlainAction::ShowSheet
+            | PlainAction::WalkSheet
+            | PlainAction::ImportSong
+            | PlainAction::DismissHint => true,
+            PlainAction::ShiftEarlier => editable && !playing && self.current_set > 0,
+            PlainAction::ShiftLater => {
+                editable && !playing && self.current_set + 1 < self.document.sets.len()
+            }
+        }
+    }
+
+    pub(crate) fn run_plain_action(&mut self, action: PlainAction) {
+        if !self.plain_action_enabled(action) {
+            return;
+        }
+        match action {
+            PlainAction::Everyone => self.simple_toggle_everyone(),
+            PlainAction::Line => self.simple_line_up(),
+            PlainAction::File => self.simple_file_up(),
+            PlainAction::Circle => self.simple_circle_up(),
+            PlainAction::Block => self.simple_block_up(),
+            PlainAction::SwapSides => self.simple_swap_sides(),
+            PlainAction::SwapEnds => self.simple_swap_ends(),
+            PlainAction::Turn => self.simple_turn_right(),
+            PlainAction::Arc => self.simple_arc_up(),
+            PlainAction::Spread => self.simple_change_spacing(true),
+            PlainAction::Tighten => self.simple_change_spacing(false),
+            PlainAction::Center => self.simple_center_up(),
+            PlainAction::DressFront => self.simple_dress_front(),
+            PlainAction::Diagonal => self.simple_diagonal_up(),
+            PlainAction::DressBack => self.simple_dress_back(),
+            PlainAction::EvenGaps => self.simple_even_gaps(),
+            PlainAction::Chevron => self.simple_chevron_up(),
+            PlainAction::Renumber => self.simple_renumber(),
+            PlainAction::AddBeside => self.simple_add_beside(),
+            PlainAction::SwapPair => self.simple_swap_pair(),
+            PlainAction::Restore => self.simple_restore_selected(),
+            PlainAction::ClearMove => self.simple_clear_move(),
+            PlainAction::ReturnScene => self.simple_return_scene(),
+            PlainAction::PrevPerson => self.simple_cycle_person(false),
+            PlainAction::NextPerson => self.simple_cycle_person(true),
+            PlainAction::NudgeForward => self.simple_nudge(0, -1),
+            PlainAction::NudgeBack => self.simple_nudge(0, 1),
+            PlainAction::NudgeLeft => self.simple_nudge(-1, 0),
+            PlainAction::NudgeRight => self.simple_nudge(1, 0),
+            PlainAction::FocusMove => {
+                self.replace_selection(std::iter::once(0).collect());
+            }
+            PlainAction::FewerCounts => self.simple_step_counts(-8),
+            PlainAction::MoreCounts => self.simple_step_counts(8),
+            PlainAction::TempoDown => self.simple_step_tempo(-SIMPLE_TEMPO_STEP),
+            PlainAction::TempoUp => self.simple_step_tempo(SIMPLE_TEMPO_STEP),
+            PlainAction::DeleteScene => {
+                let revision = self.history.revision();
+                self.delete_current_set();
+                self.simple_mark(revision, "simple-mode.101");
+            }
+            PlainAction::StepBack => self.simple_step_beat(-1),
+            PlainAction::StepForward => self.simple_step_beat(1),
+            PlainAction::SceneStart => {
+                self.simple_mode.hold_count = false;
+                self.navigate_to_set(self.current_set);
+            }
+            PlainAction::Slow => self.simple_toggle_slow(),
+            PlainAction::SceneLoop => self.simple_toggle_scene_loop(),
+            PlainAction::SelectMovers => self.simple_select_movers(),
+            PlainAction::SelectHolders => self.simple_select_holders(),
+            PlainAction::FocusPerson => self.simple_toggle_focus(),
+            PlainAction::PathSheet => self.simple_open_path_sheet(),
+            PlainAction::Away => self.simple_toggle_away(),
+            PlainAction::Memo => self.simple_toggle_sheet(SheetKind::Memo),
+            PlainAction::PlaceSheet => self.simple_toggle_sheet(SheetKind::Place),
+            PlainAction::ShowSheet => self.simple_toggle_sheet(SheetKind::Show),
+            PlainAction::WalkSheet => self.simple_toggle_sheet(SheetKind::Walk),
+            PlainAction::ShiftEarlier => self.simple_shift_scene(false),
+            PlainAction::ShiftLater => self.simple_shift_scene(true),
+            PlainAction::ImportSong => self.simple_pick_and_import_song(),
+            PlainAction::DismissHint => self.simple_mode.hint_closed = true,
+        }
+    }
+
+    fn simple_toggle_sheet(&mut self, kind: SheetKind) {
+        let open = match kind {
+            SheetKind::Memo => !self.simple_mode.memo_open,
+            SheetKind::Place => !self.simple_mode.place_sheet_open,
+            SheetKind::Show => !self.simple_mode.show_sheet_open,
+            SheetKind::Walk => !self.simple_mode.walk_sheet_open,
+        };
+        self.simple_close_readouts();
+        match kind {
+            SheetKind::Memo => self.simple_mode.memo_open = open,
+            SheetKind::Place => self.simple_mode.place_sheet_open = open,
+            SheetKind::Show => self.simple_mode.show_sheet_open = open,
+            SheetKind::Walk => self.simple_mode.walk_sheet_open = open,
+        }
+    }
+
     /// Watch one person, or mark someone sitting out. Neither writes the file.
     #[allow(dead_code)]
     fn simple_watch_row(&mut self, ui: &mut egui::Ui) {
@@ -3961,7 +4244,6 @@ impl DrillApp {
         }
     }
 
-    #[allow(dead_code)]
     fn simple_open_path_sheet(&mut self) {
         let Some(index) = self.simple_single_selected() else {
             return;
@@ -5748,7 +6030,7 @@ impl DrillApp {
         }
     }
 
-    fn simple_toolbar_open(&self) -> bool {
+    pub(crate) fn simple_toolbar_open(&self) -> bool {
         !self.onboarding.simple_toolbar_collapsed || self.simple_active_hint().is_some()
     }
 
@@ -5758,31 +6040,16 @@ impl DrillApp {
         };
         let ctx = ui.ctx().clone();
         let mut block = None;
-        let fade = if self.drag_before.is_some() {
-            0.22
-        } else {
-            1.0
-        };
-        self.simple_overlay_members(&ctx, field, &mut block);
-        self.simple_overlay_chrome(&ctx, field, &mut block);
         self.simple_overlay_recovery(&ctx, field, &mut block);
-        // A modal owns the bottom of the window. Hide the floating strips so
-        // they cannot cover the reset row, the key chart, or a sheet.
+        // Menus and the icon row live above the field. What remains on the
+        // field is a warning, the song pill, and the sideline labels.
         if !self.simple_modal_open() {
             self.simple_overlay_symmetry(&ctx, field, &mut block);
-            let mut toolbar_top = field.bottom() - 8.0;
-            if self.simple_toolbar_open() {
-                if let Some(rect) = self.simple_overlay_toolbar(&ctx, field, fade, &mut block) {
-                    toolbar_top = rect.top();
-                }
-            } else if let Some(rect) = self.simple_overlay_toolbar_toggle(&ctx, field, &mut block) {
-                toolbar_top = rect.top();
+            let ceiling = field.bottom() - 8.0;
+            if self.document.audio.is_some() {
+                self.simple_overlay_song(&ctx, field, field.top() + 8.0, true, &mut block);
             }
-            let sets_anchor = toolbar_top - 8.0;
-            let sets_rect = self.simple_overlay_sets(&ctx, field, sets_anchor, &mut block);
-            let song_anchor = sets_rect.map(|rect| rect.top()).unwrap_or(toolbar_top);
-            self.simple_overlay_song(&ctx, field, song_anchor, &mut block);
-            self.simple_overlay_front_labels(&ctx, field, sets_anchor, sets_rect, &mut block);
+            self.simple_overlay_front_labels(&ctx, field, ceiling, None, &mut block);
         }
         self.simple_mode.overlay_block = block;
     }
@@ -5833,6 +6100,7 @@ impl DrillApp {
         }
     }
 
+    #[allow(dead_code)]
     fn simple_overlay_members(
         &mut self,
         ctx: &egui::Context,
@@ -5883,6 +6151,7 @@ impl DrillApp {
         overlay_union(block, response.response.rect);
     }
 
+    #[allow(dead_code)]
     fn simple_overlay_sets(
         &mut self,
         ctx: &egui::Context,
@@ -5919,6 +6188,7 @@ impl DrillApp {
         Some(response.response.rect)
     }
 
+    #[allow(dead_code)]
     fn simple_overlay_chrome(
         &mut self,
         ctx: &egui::Context,
@@ -6089,6 +6359,7 @@ impl DrillApp {
         overlay_union(block, response.response.rect);
     }
 
+    #[allow(dead_code)]
     fn simple_overlay_toolbar(
         &mut self,
         ctx: &egui::Context,
@@ -6118,6 +6389,7 @@ impl DrillApp {
         Some(response.response.rect)
     }
 
+    #[allow(dead_code)]
     fn simple_overlay_toolbar_toggle(
         &mut self,
         ctx: &egui::Context,
@@ -6270,7 +6542,7 @@ impl DrillApp {
         });
     }
 
-    fn simple_delete_hold_progress(&mut self, holding: bool) -> f32 {
+    pub(crate) fn simple_delete_hold_progress(&mut self, holding: bool) -> f32 {
         if !holding {
             self.simple_mode.delete_hold = None;
             return 0.0;
@@ -6282,7 +6554,7 @@ impl DrillApp {
         (started.elapsed().as_secs_f32() / SIMPLE_DELETE_HOLD_SECS).clamp(0.0, 1.0)
     }
 
-    fn simple_commit_held_delete(&mut self) {
+    pub(crate) fn simple_commit_held_delete(&mut self) {
         if !self.simple_can_remove() {
             self.simple_mode.delete_hold = None;
             self.simple_fail();
@@ -6505,16 +6777,22 @@ impl DrillApp {
         &mut self,
         ctx: &egui::Context,
         field: egui::Rect,
-        toolbar_top: f32,
+        anchor_y: f32,
+        at_top: bool,
         block: &mut Option<egui::Rect>,
     ) {
         if self.document.audio.is_none() {
             return;
         }
-        let pos = Pos2::new(field.center().x, toolbar_top - 8.0);
+        let pivot = if at_top {
+            egui::Align2::CENTER_TOP
+        } else {
+            egui::Align2::CENTER_BOTTOM
+        };
+        let pos = Pos2::new(field.center().x, anchor_y);
         let response = egui::Area::new(egui::Id::new("simple-overlay-song"))
             .order(egui::Order::Foreground)
-            .pivot(egui::Align2::CENTER_BOTTOM)
+            .pivot(pivot)
             .fixed_pos(pos)
             .sense(Sense::click())
             .show(ctx, |ui| {
@@ -7366,7 +7644,7 @@ impl DrillApp {
         self.simple_mode.previous_key = Some(new_key);
     }
 
-    fn simple_open_shows(&mut self) {
+    pub(crate) fn simple_open_shows(&mut self) {
         if self.dirty && self.write_simple_draft() {
             self.dirty = false;
             self.simple_mode.draft_saved = true;
@@ -7677,11 +7955,8 @@ impl DrillApp {
         };
         let (response, painter) = ui.allocate_painter(available, sense);
         let rect = response.rect;
-        self.field_viewport.set_content(simple_visible_local(
-            rect,
-            self.simple_toolbar_open(),
-            !self.document.sets.is_empty(),
-        ));
+        self.field_viewport
+            .set_content(simple_visible_local(rect, self.document.audio.is_some()));
         self.maybe_frame_clustered_cast(rect.size());
         let mut block_pointer = false;
         if interactive {
@@ -8417,24 +8692,13 @@ fn front_chip_origin(field: egui::Rect, anchor: Pos2, size: egui::Vec2, ceiling:
     min
 }
 
-/// Canvas-local box the simple-mode floor is fitted into. The dock, the set
-/// dots, and the audience chip sit outside it.
-fn simple_visible_local(canvas: egui::Rect, toolbar_open: bool, has_sets: bool) -> egui::Rect {
-    let top = 52.0;
+/// Canvas-local box the simple-mode floor is fitted into. The menu and the
+/// icon row sit above this canvas. The audience chip, and the song pill when
+/// a track is loaded, stay outside the fitted picture.
+fn simple_visible_local(canvas: egui::Rect, song: bool) -> egui::Rect {
+    let top = if song { 72.0 } else { 12.0 };
     let side = 12.0;
-    let tile = if toolbar_open {
-        SIMPLE_TILE + SIMPLE_LABEL + 8.0
-    } else {
-        SIMPLE_TILE.max(SIMPLE_HIT)
-    };
-    let dock = 14.0 + 16.0 + tile;
-    let sets = if has_sets {
-        8.0 + 8.0 + PREVIOUS_TOGGLE_HEIGHT
-    } else {
-        0.0
-    };
-    let front = 14.0 + 36.0 + 8.0;
-    let bottom = dock + sets + front;
+    let bottom = 72.0;
     let min = egui::pos2(side, top);
     let max = egui::pos2(
         (canvas.width() - side).max(side + 48.0),
@@ -10714,6 +10978,20 @@ mod tests {
         assert_eq!(loaded.performers.len(), 3);
         assert!(app.history.undo(&mut app.document));
         assert_eq!(app.document.sets[0].positions, before);
+    }
+
+    #[test]
+    fn the_arrange_menu_lines_people_up_in_one_undo() {
+        let mut app = empty_simple_app();
+        app.place_performer_at(Point { x: 4.0, y: 8.0 }, true);
+        app.place_performer_at(Point { x: 30.0, y: 20.0 }, true);
+        app.replace_selection([0_usize, 1].into_iter().collect());
+        assert!(app.plain_action_enabled(PlainAction::Line));
+        app.run_plain_action(PlainAction::Line);
+        let positions = &app.document.sets[0].positions;
+        assert!((positions[0].y - positions[1].y).abs() < 0.01);
+        assert!(positions[0].x < positions[1].x);
+        assert!(app.history.can_undo());
     }
 
     #[test]
@@ -13377,12 +13655,14 @@ mod tests {
             clear.y >= 500.0,
             "chip should sit under the sideline when the dock is clear: {clear:?}"
         );
-        let open = simple_visible_local(field, true, true);
+        let open = simple_visible_local(field, false);
         assert!(
-            open.bottom() < 620.0,
-            "fit still reaches the dock: {open:?}"
+            open.bottom() > 700.0,
+            "the field should keep the height the old button rows took: {open:?}"
         );
-        assert!(open.top() >= 40.0, "{open:?}");
+        assert!(open.top() <= 16.0, "{open:?}");
+        let with_song = simple_visible_local(field, true);
+        assert!(with_song.top() >= 64.0, "{with_song:?}");
     }
 
     #[test]
