@@ -990,7 +990,7 @@ impl super::DrillApp {
         }
     }
 
-    fn key_step_count(&mut self, delta: i32) {
+    pub(crate) fn key_step_count(&mut self, delta: i32) {
         if self.playing || delta == 0 {
             return;
         }

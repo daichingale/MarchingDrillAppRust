@@ -1606,6 +1606,9 @@ impl eframe::App for DrillApp {
                     });
                 });
         }
+        if !self.focus_field && !self.full_legacy_chrome {
+            self.show_desktop_chrome(ui);
+        }
         ui.horizontal_top(|ui| {
             if self.show_inspector && !self.focus_field && self.full_legacy_chrome {
                 // The inspector used to sit in this horizontal row and grow
@@ -1644,7 +1647,7 @@ impl eframe::App for DrillApp {
                 } else if self.selected.is_empty() {
                     (
                         egui::Align2::CENTER_TOP,
-                        Pos2::new(screen.center().x, 108.0),
+                        Pos2::new(screen.center().x, self.desktop_chrome_px + 12.0),
                     )
                 } else {
                     (
@@ -3002,12 +3005,18 @@ impl DrillApp {
         });
         ui.menu_button(text(self.locale, Text::Edit), |ui| {
             self.command_menu(ui, CommandMenu::Edit);
+            ui.separator();
+            self.edit_plain_menu(ui);
         });
-        ui.menu_button(super::i18n::registered(self.locale, "commands.135"), |ui| {
-            self.command_menu(ui, CommandMenu::Arrange)
+        ui.menu_button(tr(self.locale, "並べる", "Arrange"), |ui| {
+            self.command_menu(ui, CommandMenu::Arrange);
+            ui.separator();
+            self.arrange_plain_menu(ui);
         });
-        ui.menu_button(super::i18n::registered(self.locale, "app-ui.019"), |ui| {
+        ui.menu_button(tr(self.locale, "場面", "Scenes"), |ui| {
             self.command_menu(ui, CommandMenu::Set);
+            ui.separator();
+            self.scene_plain_menu(ui);
         });
         ui.menu_button(text(self.locale, Text::Playback), |ui| {
             if ui
@@ -3043,6 +3052,7 @@ impl DrillApp {
                 ui.close();
             }
             ui.checkbox(&mut self.loop_playback, text(self.locale, Text::Loop));
+            self.playback_plain_menu(ui);
         });
         ui.menu_button(text(self.locale, Text::View), |ui| {
             if ui
@@ -3168,8 +3178,9 @@ impl DrillApp {
                     }
                 }
             });
+            self.view_plain_menu(ui);
         });
-        ui.menu_button(super::i18n::registered(self.locale, "app-ui.020"), |ui| {
+        ui.menu_button(text(self.locale, Text::ExportTitle), |ui| {
             self.command_menu(ui, CommandMenu::Workspace);
             ui.separator();
             if ui
@@ -3186,6 +3197,7 @@ impl DrillApp {
                 self.subset_snapshot_state.open = true;
                 ui.close();
             }
+            self.handout_plain_menu(ui);
         });
         ui.menu_button(text(self.locale, Text::Help), |ui| {
             ui.menu_button(text(self.locale, Text::Language), |ui| {

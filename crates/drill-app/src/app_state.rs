@@ -16,6 +16,8 @@ mod command_palette;
 mod commands;
 #[path = "controller.rs"]
 mod controller;
+#[path = "desktop_chrome.rs"]
+mod desktop_chrome;
 #[path = "egui_backend.rs"]
 mod egui_backend;
 #[path = "export_state.rs"]
@@ -1271,6 +1273,9 @@ pub(crate) struct DrillApp {
     /// Session-only. Hides the full-editor tool strip without adding a row
     /// over the field. Not stored in the drill file.
     full_toolbar_collapsed: bool,
+    /// Height of the menu, icon row, and scene tabs painted this frame.
+    /// Floating panels stay below it. Zero until the first chrome frame.
+    desktop_chrome_px: f32,
     /// The older stacked rows (toolbar, selection bar, guidance, timeline).
     /// Off so the field owns the window and the chrome floats on top of it.
     full_legacy_chrome: bool,
@@ -1452,6 +1457,7 @@ impl Default for DrillApp {
             cross_markers: false,
             show_next_places: false,
             full_toolbar_collapsed: false,
+            desktop_chrome_px: 0.0,
             full_legacy_chrome: false,
             full_inspector_collapsed: true,
             full_timeline_expanded: false,
@@ -5249,7 +5255,7 @@ impl DrillApp {
             && (center.y - grid.height * 0.5).abs() < 0.35
     }
 
-    fn fit_whole_floor(&mut self) {
+    pub(crate) fn fit_whole_floor(&mut self) {
         self.hold_whole_field = true;
         let grid = self.document.grid.clone();
         self.field_viewport.reset(&grid);

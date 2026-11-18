@@ -62,13 +62,14 @@ fn paper(margin: i8) -> egui::Frame {
 
 impl DrillApp {
     pub(super) fn show_full_chrome(&mut self, ui: &mut egui::Ui) {
-        self.show_full_tool_dock(ui);
-        self.show_full_status_cluster(ui);
+        // The menu bar and icon row are laid out above the field. These two
+        // used to float over the picture as a second stack of labeled tiles.
         self.show_full_context_bar(ui);
         self.show_full_inspector(ui);
         self.show_full_timeline(ui);
     }
 
+    #[allow(dead_code)]
     fn full_project_label(&self) -> String {
         if let Some(path) = &self.current_path
             && let Some(name) = path.file_stem().and_then(|name| name.to_str())
@@ -112,8 +113,8 @@ impl DrillApp {
         clicked && enabled
     }
 
-    /// One band: the menus fold into ☰ so they no longer sit on a second row
-    /// above the tool tiles. The field keeps the height that row used to take.
+    /// Kept for the legacy floating dock. The desktop bar replaced it.
+    #[allow(dead_code)]
     fn show_full_tool_dock(&mut self, ui: &mut egui::Ui) {
         let screen = ui.ctx().viewport_rect();
         egui::Area::new("full-tool-dock".into())
@@ -137,6 +138,7 @@ impl DrillApp {
             });
     }
 
+    #[allow(dead_code)]
     fn show_full_status_cluster(&mut self, ui: &mut egui::Ui) {
         let screen = ui.ctx().viewport_rect();
         egui::Area::new("full-status-cluster".into())
@@ -195,6 +197,7 @@ impl DrillApp {
             });
     }
 
+    #[allow(dead_code)]
     fn full_tool_tiles(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         for (tool, icon, action) in [
@@ -455,10 +458,24 @@ impl DrillApp {
     /// While the return-to-edit chip is up, the band it occupies is left out too.
     pub(super) fn full_visible_field(&self, screen: egui::Rect) -> egui::Rect {
         let hint = !self.is_editable_set_start();
-        let top = if hint && self.selected.is_empty() {
-            160.0
+        let top = if self.full_legacy_chrome || self.focus_field {
+            if hint && self.selected.is_empty() {
+                160.0
+            } else {
+                104.0
+            }
         } else {
-            104.0
+            let chrome = if self.desktop_chrome_px > 1.0 {
+                self.desktop_chrome_px
+            } else {
+                148.0
+            };
+            chrome
+                + if hint && self.selected.is_empty() {
+                    36.0
+                } else {
+                    4.0
+                }
         };
         let mut bottom = if self.full_timeline_expanded {
             340.0
