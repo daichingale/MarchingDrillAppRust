@@ -3008,12 +3008,12 @@ impl DrillApp {
             ui.separator();
             self.edit_plain_menu(ui);
         });
-        ui.menu_button(tr(self.locale, "並べる", "Arrange"), |ui| {
+        ui.menu_button(i18n::registered(self.locale, "desktop-chrome.017"), |ui| {
             self.command_menu(ui, CommandMenu::Arrange);
             ui.separator();
             self.arrange_plain_menu(ui);
         });
-        ui.menu_button(tr(self.locale, "場面", "Scenes"), |ui| {
+        ui.menu_button(i18n::registered(self.locale, "desktop-chrome.018"), |ui| {
             self.command_menu(ui, CommandMenu::Set);
             ui.separator();
             self.scene_plain_menu(ui);

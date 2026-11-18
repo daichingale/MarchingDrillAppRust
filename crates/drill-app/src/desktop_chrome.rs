@@ -71,7 +71,7 @@ impl DrillApp {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
             ui.label(
-                egui::RichText::new(tr(self.locale, "場面", "Scenes"))
+                egui::RichText::new(i18n::registered(self.locale, "desktop-chrome.001"))
                     .size(13.0)
                     .color(if self.simple_mode.enabled {
                         SIMPLE_INK
@@ -153,7 +153,7 @@ impl DrillApp {
             self.icon_gap(ui);
         }
 
-        let undo_label = i18n::registered(self.locale, "simple-mode.087");
+        let undo_label = i18n::registered(self.locale, "desktop-chrome.019");
         let undo_tip = self.key_tip(&ctx, undo_label, Action::Command(UiCommand::Undo));
         if self.tool_icon(
             ui,
@@ -166,7 +166,7 @@ impl DrillApp {
         ) {
             self.execute_command(UiCommand::Undo, &ctx);
         }
-        let redo_label = i18n::registered(self.locale, "simple-mode.090");
+        let redo_label = i18n::registered(self.locale, "desktop-chrome.020");
         let redo_tip = self.key_tip(&ctx, redo_label, Action::Command(UiCommand::Redo));
         if self.tool_icon(
             ui,
@@ -181,7 +181,7 @@ impl DrillApp {
         }
         self.icon_gap(ui);
 
-        let open_label = i18n::registered(self.locale, "simple-mode.080");
+        let open_label = i18n::registered(self.locale, "desktop-chrome.021");
         let open_tip = self.key_tip(&ctx, open_label, Action::Command(UiCommand::OpenDocument));
         if self.tool_icon(
             ui,
@@ -217,12 +217,12 @@ impl DrillApp {
         let (play_icon, play_label) = if playing {
             (
                 PhoneIcon::Stop,
-                i18n::registered(self.locale, "simple-mode.311"),
+                i18n::registered(self.locale, "desktop-chrome.022"),
             )
         } else {
             (
                 PhoneIcon::Play,
-                i18n::registered(self.locale, "simple-mode.309"),
+                i18n::registered(self.locale, "desktop-chrome.023"),
             )
         };
         let play_tip = self.key_tip(&ctx, play_label, Action::Command(UiCommand::PlayPause));
@@ -246,12 +246,12 @@ impl DrillApp {
             }
         }
 
-        let back_label = i18n::registered(self.locale, "simple-mode.133");
+        let back_label = i18n::registered(self.locale, "desktop-chrome.024");
         let back_tip = self.key_tip(&ctx, back_label, Action::PreviousCount);
         if self.tool_icon(
             ui,
             PhoneIcon::ChevronDown,
-            tr(self.locale, "前拍", "Prev"),
+            i18n::registered(self.locale, "desktop-chrome.002"),
             &back_tip,
             !playing,
             false,
@@ -259,12 +259,12 @@ impl DrillApp {
         ) {
             self.key_step_count(-1);
         }
-        let next_count = i18n::registered(self.locale, "simple-mode.134");
+        let next_count = i18n::registered(self.locale, "desktop-chrome.025");
         let next_count_tip = self.key_tip(&ctx, next_count, Action::NextCount);
         if self.tool_icon(
             ui,
             PhoneIcon::Next,
-            tr(self.locale, "次拍", "Next"),
+            i18n::registered(self.locale, "desktop-chrome.003"),
             &next_count_tip,
             !playing,
             false,
@@ -289,14 +289,14 @@ impl DrillApp {
         }
         self.icon_gap(ui);
 
-        let scene_label = i18n::registered(self.locale, "simple-mode.129");
+        let scene_label = i18n::registered(self.locale, "desktop-chrome.026");
         let scene_tip = self.key_tip(&ctx, scene_label, Action::Command(UiCommand::DuplicateSet));
         let can_scene =
             !playing && !self.document.performers.is_empty() && self.is_editable_set_start();
         let (scene_rect, scene_click) = self.tool_icon_rect(
             ui,
             PhoneIcon::SheetsNext,
-            tr(self.locale, "場面", "Scene"),
+            i18n::registered(self.locale, "desktop-chrome.004"),
             &scene_tip,
             can_scene,
             false,
@@ -314,7 +314,7 @@ impl DrillApp {
         }
 
         let add_label = if simple {
-            i18n::registered(self.locale, "simple-mode.303")
+            i18n::registered(self.locale, "desktop-chrome.027")
         } else {
             text(self.locale, Text::Add)
         };
@@ -363,7 +363,7 @@ impl DrillApp {
         }
         self.icon_gap(ui);
 
-        let zoom_out = i18n::registered(self.locale, "simple-mode.112");
+        let zoom_out = i18n::registered(self.locale, "desktop-chrome.028");
         let zoom_out_tip = self.key_tip(&ctx, zoom_out, Action::ZoomOut);
         if self.tool_icon(
             ui,
@@ -376,7 +376,7 @@ impl DrillApp {
         ) {
             self.field_viewport.set_zoom(self.field_viewport.zoom * 0.8);
         }
-        let zoom_in = i18n::registered(self.locale, "simple-mode.111");
+        let zoom_in = i18n::registered(self.locale, "desktop-chrome.029");
         let zoom_in_tip = self.key_tip(&ctx, zoom_in, Action::ZoomIn);
         if self.tool_icon(
             ui,
@@ -395,7 +395,7 @@ impl DrillApp {
         if self.tool_icon(
             ui,
             PhoneIcon::Chart,
-            tr(self.locale, "全体", "Fit"),
+            i18n::registered(self.locale, "desktop-chrome.005"),
             &fit_tip,
             true,
             false,
@@ -412,9 +412,9 @@ impl DrillApp {
     fn simple_trash_icon(&mut self, ui: &mut egui::Ui) {
         let enabled = self.simple_can_remove();
         let label = if self.selected.len() == 1 {
-            i18n::registered(self.locale, "simple-mode.097")
+            i18n::registered(self.locale, "desktop-chrome.030")
         } else {
-            i18n::registered(self.locale, "simple-mode.098")
+            i18n::registered(self.locale, "desktop-chrome.031")
         };
         let tip = self.key_tip(
             ui.ctx(),
@@ -425,7 +425,7 @@ impl DrillApp {
             ui.allocate_exact_size(egui::vec2(ICON_W, ICON_H), Sense::click_and_drag());
         let holding = enabled && response.is_pointer_button_down_on();
         let progress = self.simple_delete_hold_progress(holding);
-        let caption = tr(self.locale, "消す", "Delete");
+        let caption = i18n::registered(self.locale, "desktop-chrome.006");
         self.paint_tool_icon(
             ui,
             rect,
@@ -637,7 +637,7 @@ impl DrillApp {
     }
 
     pub(crate) fn edit_plain_menu(&mut self, ui: &mut egui::Ui) {
-        self.menu_heading(ui, tr(self.locale, "人", "People"));
+        self.menu_heading(ui, i18n::registered(self.locale, "desktop-chrome.007"));
         self.plain_item(
             ui,
             "simple-mode.130",
@@ -688,7 +688,7 @@ impl DrillApp {
             None,
         );
         ui.separator();
-        self.menu_heading(ui, tr(self.locale, "一歩動かす", "One step"));
+        self.menu_heading(ui, i18n::registered(self.locale, "desktop-chrome.008"));
         self.plain_item(
             ui,
             "simple-mode.154",
@@ -735,7 +735,7 @@ impl DrillApp {
     }
 
     pub(crate) fn arrange_plain_menu(&mut self, ui: &mut egui::Ui) {
-        self.menu_heading(ui, tr(self.locale, "隊形", "Formation"));
+        self.menu_heading(ui, i18n::registered(self.locale, "desktop-chrome.009"));
         self.plain_item(
             ui,
             "simple-mode.132",
@@ -786,7 +786,7 @@ impl DrillApp {
             None,
         );
         ui.separator();
-        self.menu_heading(ui, tr(self.locale, "向きと間隔", "Facing and spacing"));
+        self.menu_heading(ui, i18n::registered(self.locale, "desktop-chrome.010"));
         self.plain_item(
             ui,
             "simple-mode.152",
@@ -851,55 +851,52 @@ impl DrillApp {
             None,
         );
         ui.separator();
-        ui.menu_button(
-            tr(self.locale, "今の範囲に合わせる", "Fit the current box"),
-            |ui| {
-                self.bounds_item(ui, "workspace-inspector.080", BoundShape::Horizontal);
-                self.bounds_item(ui, "workspace-inspector.081", BoundShape::Vertical);
-                self.bounds_item(ui, "workspace-inspector.082", BoundShape::Diagonal);
-                self.bounds_item(ui, "workspace-inspector.083", BoundShape::Arc);
-                self.bounds_item(ui, "workspace-inspector.084", BoundShape::Circle);
-                self.bounds_item(ui, "workspace-inspector.085", BoundShape::Block);
-                self.bounds_item(ui, "workspace-inspector.086", BoundShape::Spiral);
-                ui.separator();
-                self.menu_heading(ui, tr(self.locale, "スナップ", "Snap"));
-                self.fit_item(ui, "workspace-inspector.038", true);
-                self.fit_item(ui, "workspace-inspector.039", false);
-                if ui
-                    .add_enabled(
-                        !self.selected.is_empty() && self.is_editable_set_start(),
-                        egui::Button::new(text(self.locale, Text::OnGrid)),
-                    )
-                    .clicked()
-                {
-                    self.snap_selected_to_grid();
-                    ui.close();
-                }
-                if ui
-                    .add_enabled(
-                        !self.selected.is_empty() && self.is_editable_set_start(),
-                        egui::Button::new(text(self.locale, Text::FlipCenterLine)),
-                    )
-                    .clicked()
-                {
-                    self.mirror_selection_across_field();
-                    ui.close();
-                }
-            },
-        );
-        ui.menu_button(tr(self.locale, "文字の形", "Letter shape"), |ui| {
-            ui.label(i18n::registered(self.locale, "workspace-inspector.028"));
+        ui.menu_button(i18n::registered(self.locale, "desktop-chrome.011"), |ui| {
+            self.bounds_item(ui, "workspace-inspector.080", BoundShape::Horizontal);
+            self.bounds_item(ui, "workspace-inspector.081", BoundShape::Vertical);
+            self.bounds_item(ui, "workspace-inspector.082", BoundShape::Diagonal);
+            self.bounds_item(ui, "workspace-inspector.083", BoundShape::Arc);
+            self.bounds_item(ui, "workspace-inspector.084", BoundShape::Circle);
+            self.bounds_item(ui, "workspace-inspector.085", BoundShape::Block);
+            self.bounds_item(ui, "workspace-inspector.086", BoundShape::Spiral);
+            ui.separator();
+            self.menu_heading(ui, i18n::registered(self.locale, "desktop-chrome.012"));
+            self.fit_item(ui, "workspace-inspector.038", true);
+            self.fit_item(ui, "workspace-inspector.039", false);
+            if ui
+                .add_enabled(
+                    !self.selected.is_empty() && self.is_editable_set_start(),
+                    egui::Button::new(text(self.locale, Text::OnGrid)),
+                )
+                .clicked()
+            {
+                self.snap_selected_to_grid();
+                ui.close();
+            }
+            if ui
+                .add_enabled(
+                    !self.selected.is_empty() && self.is_editable_set_start(),
+                    egui::Button::new(text(self.locale, Text::FlipCenterLine)),
+                )
+                .clicked()
+            {
+                self.mirror_selection_across_field();
+                ui.close();
+            }
+        });
+        ui.menu_button(i18n::registered(self.locale, "desktop-chrome.013"), |ui| {
+            ui.label(i18n::registered(self.locale, "desktop-chrome.032"));
             ui.add(
                 egui::TextEdit::singleline(&mut self.formation_text)
                     .char_limit(32)
                     .desired_width(180.0)
-                    .hint_text(i18n::registered(self.locale, "workspace-inspector.029")),
+                    .hint_text(i18n::registered(self.locale, "desktop-chrome.033")),
             );
             let ready = !self.formation_text.trim().is_empty() && !self.selected.is_empty();
             if ui
                 .add_enabled(
                     ready,
-                    egui::Button::new(i18n::registered(self.locale, "workspace-inspector.030")),
+                    egui::Button::new(i18n::registered(self.locale, "desktop-chrome.034")),
                 )
                 .clicked()
             {
@@ -911,7 +908,7 @@ impl DrillApp {
             }
         });
         if ui
-            .button(tr(self.locale, "くわしい隊形ツール", "More shape tools"))
+            .button(i18n::registered(self.locale, "desktop-chrome.014"))
             .clicked()
         {
             if self.simple_mode.enabled {
@@ -964,7 +961,7 @@ impl DrillApp {
         ui.label(
             egui::RichText::new(format!(
                 "{counts}{}",
-                i18n::registered(self.locale, "simple-mode.100")
+                i18n::registered(self.locale, "desktop-chrome.035")
             ))
             .size(13.0),
         );
@@ -987,7 +984,7 @@ impl DrillApp {
     }
 
     fn scene_add_item(&mut self, ui: &mut egui::Ui) {
-        let label = i18n::registered(self.locale, "simple-mode.129");
+        let label = i18n::registered(self.locale, "desktop-chrome.036");
         let shortcut = self
             .keybindings
             .map
@@ -1047,7 +1044,7 @@ impl DrillApp {
             None,
         );
         ui.separator();
-        self.menu_heading(ui, i18n::registered(self.locale, "simple-mode.222"));
+        self.menu_heading(ui, i18n::registered(self.locale, "desktop-chrome.037"));
         self.plain_item(
             ui,
             "simple-mode.220",
@@ -1088,7 +1085,7 @@ impl DrillApp {
 
     pub(crate) fn handout_plain_menu(&mut self, ui: &mut egui::Ui) {
         ui.separator();
-        self.menu_heading(ui, tr(self.locale, "配るもの", "Handouts"));
+        self.menu_heading(ui, i18n::registered(self.locale, "desktop-chrome.015"));
         self.plain_item(
             ui,
             "simple-mode.177",
@@ -1175,14 +1172,14 @@ impl DrillApp {
             let mut enabled = gpu.enabled();
             if ui
                 .checkbox(&mut enabled, "GPU")
-                .on_hover_text(i18n::registered(self.locale, "app-ui.030"))
+                .on_hover_text(i18n::registered(self.locale, "desktop-chrome.038"))
                 .changed()
             {
                 gpu.set_enabled(enabled);
             }
         }
         if !self.collab.is_live() {
-            ui.menu_button(tr(self.locale, "カメラ", "Camera"), |ui| {
+            ui.menu_button(i18n::registered(self.locale, "desktop-chrome.016"), |ui| {
                 for (id, kind) in [
                     ("app-ui.033", CameraPreset::Audience),
                     ("app-ui.034", CameraPreset::PressBox),
